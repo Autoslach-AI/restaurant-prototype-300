@@ -1,0 +1,6 @@
+{
+  "name": "CommerceWA - Plateforme & Agent Commercial WhatsApp",
+  "description": "Plateforme de commande multi-tenant avec agent commercial WhatsApp automatisé, gestion de commandes et relances automatiques.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
