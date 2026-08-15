@@ -124,17 +124,69 @@ export async function fetchAttendanceRecords(businessId: string, startDate?: str
   }
 }
 
+export async function upsertAttendanceRecord(record: {
+  business_id: string;
+  staff_id: string;
+  date: string;
+  status: 'present' | 'absent' | 'late';
+  reason?: string | null;
+}): Promise<AttendanceRecord | null> {
+  const store = getStore();
+  const localSaved = store.upsertAttendanceRecord(record);
+
+  const rawUrl = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim();
+  const rawKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY?.trim();
+  const isValidUrl = Boolean(rawUrl && (rawUrl.startsWith('http://') || rawUrl.startsWith('https://')));
+  const hasCredentials = isValidUrl && Boolean(rawKey);
+
+  if (!hasCredentials) {
+    return localSaved;
+  }
+
+  try {
+    const client = getSupabase();
+    const { data, error } = await (client as any)
+      .from('attendance')
+      .upsert(
+        {
+          business_id: record.business_id,
+          staff_id: record.staff_id,
+          date: record.date,
+          status: record.status,
+          reason: record.reason || null,
+        },
+        { onConflict: 'business_id,staff_id,date' }
+      )
+      .select()
+      .single();
+
+    if (error) {
+      console.warn('Supabase upsert attendance error:', error.message);
+      return localSaved;
+    }
+    if (data) {
+      store.upsertAttendanceRecord(data as AttendanceRecord);
+      return data as AttendanceRecord;
+    }
+    return localSaved;
+  } catch (err) {
+    console.warn('Supabase upsert attendance exception:', err);
+    return localSaved;
+  }
+}
+
 export async function updateStaffProfile(
   staffId: string,
-  authUid: string | undefined,
+  auth_uid: string | undefined,
   data: { name: string; email: string; phone?: string }
 ): Promise<{ success: boolean; error?: string }> {
   const store = getStore();
   store.updateStaff(staffId, data);
 
-  const hasCredentials =
-    Boolean(process.env.NEXT_PUBLIC_SUPABASE_URL?.trim()) &&
-    Boolean(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY?.trim());
+  const rawUrl = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim();
+  const rawKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY?.trim();
+  const isValidUrl = Boolean(rawUrl && (rawUrl.startsWith('http://') || rawUrl.startsWith('https://')));
+  const hasCredentials = isValidUrl && Boolean(rawKey);
 
   if (!hasCredentials) {
     return { success: true };
@@ -148,17 +200,18 @@ export async function updateStaffProfile(
       phone: data.phone || null,
     });
 
-    if (authUid) {
-      query = query.eq('auth_uid', authUid);
+    if (auth_uid && !auth_uid.startsWith('auth-')) {
+      query = query.or(`auth_uid.eq.${auth_uid},id.eq.${staffId}`);
     } else {
       query = query.eq('id', staffId);
     }
 
-    const { error } = await query;
+    const { data: updatedRows, error } = await query.select();
     if (error) {
       console.warn('Supabase update staff error:', error.message);
       return { success: false, error: error.message };
     }
+    console.log('Supabase staff updated successfully:', updatedRows);
     return { success: true };
   } catch (err: any) {
     console.warn('Supabase update staff exception:', err);
