@@ -83,6 +83,9 @@ export interface Staff {
   salary?: number | string;
   revoked?: boolean;
   revocation_reason?: string;
+  last_login_at?: string;
+  is_active?: boolean;
+  joined_at?: string;
 }
 
 export interface DeliveryZone {

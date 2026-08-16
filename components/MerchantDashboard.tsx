@@ -70,7 +70,7 @@ import {
   Upload,
   Loader2,
 } from 'lucide-react';
-import { uploadStaffAvatar, fetchAttendanceRecords, upsertAttendanceRecord, updateStaffProfile } from '@/lib/supabase';
+import { uploadStaffAvatar, fetchAttendanceRecords, upsertAttendanceRecord, updateStaffProfile, supabase } from '@/lib/supabase';
 import {
   Business,
   Category,
@@ -821,6 +821,82 @@ export default function MerchantDashboard({
       setPersonalInfoError(err?.message || 'Une erreur inattendue est survenue.');
     } finally {
       setPersonalInfoSaving(false);
+    }
+  };
+
+  // Security / Password State
+  const [securityCurrentPassword, setSecurityCurrentPassword] = useState('');
+  const [securityNewPassword, setSecurityNewPassword] = useState('');
+  const [securityConfirmPassword, setSecurityConfirmPassword] = useState('');
+  const [showCurrentPassword, setShowCurrentPassword] = useState(false);
+  const [showNewPassword, setShowNewPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
+  const [securitySaving, setSecuritySaving] = useState(false);
+  const [securityError, setSecurityError] = useState<string | null>(null);
+  const [securitySuccess, setSecuritySuccess] = useState<string | null>(null);
+
+  const formatLastLogin = (isoString?: string | null) => {
+    if (!isoString) return 'Non disponible';
+    try {
+      const date = new Date(isoString);
+      if (isNaN(date.getTime())) return 'Non disponible';
+      return new Intl.DateTimeFormat('fr-FR', {
+        day: 'numeric',
+        month: 'long',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+      }).format(date);
+    } catch {
+      return 'Non disponible';
+    }
+  };
+
+  const handleUpdatePassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSecurityError(null);
+    setSecuritySuccess(null);
+
+    const currentPass = securityCurrentPassword.trim();
+    const newPassVal = securityNewPassword.trim();
+    const confirmPassVal = securityConfirmPassword.trim();
+
+    if (!currentPass) {
+      setSecurityError('Veuillez renseigner votre mot de passe actuel pour confirmer votre identité.');
+      return;
+    }
+    if (!newPassVal) {
+      setSecurityError('Veuillez saisir un nouveau mot de passe.');
+      return;
+    }
+    if (newPassVal.length < 8) {
+      setSecurityError('Le nouveau mot de passe doit contenir au moins 8 caractères.');
+      return;
+    }
+    if (newPassVal !== confirmPassVal) {
+      setSecurityError('La confirmation ne correspond pas au nouveau mot de passe.');
+      return;
+    }
+
+    setSecuritySaving(true);
+    try {
+      const { data, error } = await supabase.auth.updateUser({
+        password: newPassVal,
+      });
+
+      if (error) {
+        setSecurityError(error.message || 'Erreur lors de la mise à jour du mot de passe.');
+      } else {
+        setSecuritySuccess('Votre mot de passe a été mis à jour avec succès.');
+        setSecurityCurrentPassword('');
+        setSecurityNewPassword('');
+        setSecurityConfirmPassword('');
+        setTimeout(() => setSecuritySuccess(null), 5000);
+      }
+    } catch (err: any) {
+      setSecurityError(err?.message || 'Une erreur inattendue est survenue.');
+    } finally {
+      setSecuritySaving(false);
     }
   };
 
@@ -5984,16 +6060,174 @@ export default function MerchantDashboard({
                       </div>
                     )}
                   </div>
+                ) : activeProfileSection === 'security' ? (
+                  /* Section Sécurité Réelle & Conforme */
+                  <div className="space-y-6">
+                    {/* Dernière connexion (lecture seule) */}
+                    <div className="p-4 sm:p-5 rounded-2xl bg-[#FAF7F2]/70 border border-slate-200/80 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                      <div className="flex items-center space-x-3.5">
+                        <div className="w-10 h-10 rounded-xl bg-white text-[#1B4B4A] border border-[#1B4B4A]/10 flex items-center justify-center shrink-0 shadow-2xs">
+                          <Clock className="w-5 h-5" />
+                        </div>
+                        <div>
+                          <div className="text-[11px] font-bold uppercase tracking-wider text-slate-400">Dernière connexion</div>
+                          <div className="text-xs text-slate-500 mt-0.5">Horodatage de la dernière session enregistrée</div>
+                        </div>
+                      </div>
+                      <div className="sm:text-right pl-13 sm:pl-0">
+                        <span className="inline-flex items-center px-3 py-1 rounded-full text-xs font-extrabold bg-white border border-slate-200 text-slate-800 shadow-2xs">
+                          {formatLastLogin(activeStaff.last_login_at)}
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Bloc Formulaire Changement de mot de passe */}
+                    <div className="bg-white rounded-2xl border border-slate-200/80 p-5 sm:p-6 space-y-5">
+                      <div className="flex items-center space-x-3 pb-3 border-b border-slate-100">
+                        <div className="w-8 h-8 rounded-lg bg-[#1B4B4A]/10 text-[#1B4B4A] flex items-center justify-center shrink-0">
+                          <Key className="w-4 h-4" />
+                        </div>
+                        <div>
+                          <h4 className="text-sm font-extrabold text-slate-900">Changer le mot de passe</h4>
+                          <p className="text-xs text-slate-500">Mettez à jour vos identifiants d&apos;accès sécurisé</p>
+                        </div>
+                      </div>
+
+                      {/* Message d'information */}
+                      <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200/80 text-slate-600 text-xs flex items-start space-x-2.5">
+                        <Info className="w-4 h-4 text-[#1B4B4A] shrink-0 mt-0.5" />
+                        <span>Le mot de passe actuel confirme votre identité. Le nouveau mot de passe doit comporter au moins 8 caractères.</span>
+                      </div>
+
+                      {/* Message de succès */}
+                      {securitySuccess && (
+                        <div className="p-3.5 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-medium flex items-center space-x-2.5 animate-in fade-in">
+                          <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                          <span>{securitySuccess}</span>
+                        </div>
+                      )}
+
+                      {/* Message d'erreur */}
+                      {securityError && (
+                        <div className="p-3.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs font-medium flex items-center space-x-2.5 animate-in fade-in">
+                          <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+                          <span>{securityError}</span>
+                        </div>
+                      )}
+
+                      <form onSubmit={handleUpdatePassword} className="space-y-4">
+                        {/* 1. Mot de passe actuel */}
+                        <div>
+                          <label className="block text-xs font-bold text-slate-700 mb-1.5">
+                            Mot de passe actuel <span className="text-rose-500">*</span>
+                          </label>
+                          <div className="relative">
+                            <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
+                              <Lock className="w-4 h-4" />
+                            </div>
+                            <input
+                              type={showCurrentPassword ? 'text' : 'password'}
+                              value={securityCurrentPassword}
+                              onChange={(e) => setSecurityCurrentPassword(e.target.value)}
+                              placeholder="••••••••"
+                              disabled={securitySaving}
+                              className="w-full pl-10 pr-10 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold text-slate-900 placeholder:text-slate-400 focus:bg-white focus:outline-none focus:border-[#1B4B4A] focus:ring-2 focus:ring-[#1B4B4A]/20 transition-all disabled:opacity-50"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => setShowCurrentPassword(!showCurrentPassword)}
+                              className="absolute inset-y-0 right-0 pr-3.5 flex items-center text-slate-400 hover:text-slate-600 cursor-pointer"
+                            >
+                              {showCurrentPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* 2. Nouveau mot de passe */}
+                        <div>
+                          <label className="block text-xs font-bold text-slate-700 mb-1.5">
+                            Nouveau mot de passe <span className="text-rose-500">*</span>
+                          </label>
+                          <div className="relative">
+                            <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
+                              <Lock className="w-4 h-4" />
+                            </div>
+                            <input
+                              type={showNewPassword ? 'text' : 'password'}
+                              value={securityNewPassword}
+                              onChange={(e) => setSecurityNewPassword(e.target.value)}
+                              placeholder="Minimum 8 caractères"
+                              disabled={securitySaving}
+                              className="w-full pl-10 pr-10 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold text-slate-900 placeholder:text-slate-400 focus:bg-white focus:outline-none focus:border-[#1B4B4A] focus:ring-2 focus:ring-[#1B4B4A]/20 transition-all disabled:opacity-50"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => setShowNewPassword(!showNewPassword)}
+                              className="absolute inset-y-0 right-0 pr-3.5 flex items-center text-slate-400 hover:text-slate-600 cursor-pointer"
+                            >
+                              {showNewPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* 3. Confirmer le nouveau mot de passe */}
+                        <div>
+                          <label className="block text-xs font-bold text-slate-700 mb-1.5">
+                            Confirmer le nouveau mot de passe <span className="text-rose-500">*</span>
+                          </label>
+                          <div className="relative">
+                            <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
+                              <Lock className="w-4 h-4" />
+                            </div>
+                            <input
+                              type={showConfirmPassword ? 'text' : 'password'}
+                              value={securityConfirmPassword}
+                              onChange={(e) => setSecurityConfirmPassword(e.target.value)}
+                              placeholder="Répétez le nouveau mot de passe"
+                              disabled={securitySaving}
+                              className="w-full pl-10 pr-10 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold text-slate-900 placeholder:text-slate-400 focus:bg-white focus:outline-none focus:border-[#1B4B4A] focus:ring-2 focus:ring-[#1B4B4A]/20 transition-all disabled:opacity-50"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+                              className="absolute inset-y-0 right-0 pr-3.5 flex items-center text-slate-400 hover:text-slate-600 cursor-pointer"
+                            >
+                              {showConfirmPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Bouton de soumission */}
+                        <div className="pt-2 flex justify-end">
+                          <button
+                            type="submit"
+                            disabled={securitySaving}
+                            className="inline-flex items-center space-x-2 px-5 py-2.5 rounded-xl bg-[#1B4B4A] hover:bg-[#153a39] text-white text-xs font-extrabold transition-all shadow-xs cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                          >
+                            {securitySaving ? (
+                              <>
+                                <Loader2 className="w-4 h-4 animate-spin" />
+                                <span>Mise à jour en cours...</span>
+                              </>
+                            ) : (
+                              <>
+                                <Check className="w-4 h-4" />
+                                <span>Mettre à jour le mot de passe</span>
+                              </>
+                            )}
+                          </button>
+                        </div>
+                      </form>
+                    </div>
+                  </div>
                 ) : (
-                  /* Contenu pour les autres sections (Sécurité, Notifications, Facturation) */
+                  /* Contenu pour les autres sections (Notifications, Facturation) */
                   <div className="bg-[#FAF7F2] rounded-2xl border border-slate-200/80 p-8 text-center flex flex-col items-center justify-center min-h-[260px]">
                     <div className="w-12 h-12 rounded-2xl bg-white border border-slate-200/80 flex items-center justify-center text-[#1B4B4A] mb-3 shadow-2xs">
-                      {activeProfileSection === 'security' && <Lock className="w-6 h-6" />}
                       {activeProfileSection === 'notifications' && <Bell className="w-6 h-6" />}
                       {activeProfileSection === 'billing' && <CreditCard className="w-6 h-6" />}
                     </div>
                     <h4 className="text-sm font-extrabold text-slate-800 mb-1">
-                      Section {activeProfileSection === 'security' && 'Sécurité'}
                       {activeProfileSection === 'notifications' && 'Préférences de Notification'}
                       {activeProfileSection === 'billing' && 'Abonnement & Facturation'} — Structure validée
                     </h4>
