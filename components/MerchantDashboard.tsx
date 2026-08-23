@@ -69,8 +69,37 @@ import {
   Camera,
   Upload,
   Loader2,
+  MoreVertical,
+  CheckCheck,
+  Download,
+  File,
+  Bookmark,
+  ExternalLink,
+  CheckSquare,
+  Square,
 } from 'lucide-react';
-import { uploadStaffAvatar, fetchAttendanceRecords, upsertAttendanceRecord, updateStaffProfile, supabase } from '@/lib/supabase';
+import {
+  uploadStaffAvatar,
+  uploadProductImage,
+  fetchAttendanceRecords,
+  upsertAttendanceRecord,
+  updateStaffProfile,
+  updateStaffNotificationPreferences,
+  insertStaffMember,
+  revokeStaffMember,
+  reactivateStaffMember,
+  deleteStaffMember,
+  fetchCustomersForBusiness,
+  fetchMessagesForCustomer,
+  sendMessage,
+  uploadCustomerMedia,
+  markMessageAsRead,
+  deleteMessage,
+  markCustomerAsFavorite,
+  insertCustomer,
+  uploadCustomerAvatar,
+  supabase,
+} from '@/lib/supabase';
 import {
   Business,
   Category,
@@ -84,12 +113,15 @@ import {
   AgentChatMessageAttachment,
   AttendanceRecord,
   AttendanceStatus,
+  Customer,
+  CustomerMessage,
 } from '@/lib/types';
 import { getStore } from '@/lib/store';
 import PeriodFilter from '@/components/ui/period-filter';
 import ConversionDetailSection from '@/components/ui/conversion-detail-section';
 import FinanceSection from '@/components/FinanceSection';
 import { ImageCropperModal } from '@/components/ImageCropperModal';
+import { MediaViewer, MediaViewerItem } from '@/components/MediaViewer';
 import {
   ResponsiveContainer,
   ComposedChart,
@@ -367,8 +399,29 @@ export default function MerchantDashboard({
   // Conversion filter
   const [conversionPeriod, setConversionPeriod] = useState<'week' | 'month' | 'year' | 'all'>('month');
   const [customerSearch, setCustomerSearch] = useState('');
-  const [customerFilter, setCustomerFilter] = useState<'all' | 'recurrent' | 'inactive'>('all');
+  const [customerFilter, setCustomerFilter] = useState<'all' | 'unread' | 'favorites' | 'recurrent' | 'inactive'>('all');
   const [selectedCustomerId, setSelectedCustomerId] = useState<string | null>(null);
+  const [customerChatInput, setCustomerChatInput] = useState('');
+  const [customerPendingAttachment, setCustomerPendingAttachment] = useState<{
+    file: File;
+    previewUrl: string;
+    mediaType: 'image' | 'video' | 'audio' | 'document' | 'other';
+    name: string;
+    size: number;
+  } | null>(null);
+  const [customerChatSending, setCustomerChatSending] = useState(false);
+  const [customerChatMediaUploading, setCustomerChatMediaUploading] = useState(false);
+  const [customerChatError, setCustomerChatError] = useState<string | null>(null);
+  const [customerMessagesLoading, setCustomerMessagesLoading] = useState(false);
+  const [activeMediaViewer, setActiveMediaViewer] = useState<MediaViewerItem | null>(null);
+  const [isCustomerMessageSelectMode, setIsCustomerMessageSelectMode] = useState(false);
+  const [selectedCustomerMessageIds, setSelectedCustomerMessageIds] = useState<string[]>([]);
+  const [customerMessageDeleting, setCustomerMessageDeleting] = useState(false);
+  const [showDeleteMessagesConfirmModal, setShowDeleteMessagesConfirmModal] = useState(false);
+  const [customerMessageDeleteError, setCustomerMessageDeleteError] = useState<string | null>(null);
+  const customerFileInputRef = useRef<HTMLInputElement | null>(null);
+  const customerMessagesEndRef = useRef<HTMLDivElement | null>(null);
+  const longPressTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   // Team page state
   const [teamSearch, setTeamSearch] = useState('');
@@ -397,10 +450,25 @@ export default function MerchantDashboard({
   // Product modal
   const [isProductModalOpen, setIsProductModalOpen] = useState(false);
   const [editingProduct, setEditingProduct] = useState<Partial<Product> | null>(null);
+  const [productImageUploading, setProductImageUploading] = useState(false);
+  const [productImageError, setProductImageError] = useState<string | null>(null);
 
   // Category modal
   const [isCategoryModalOpen, setIsCategoryModalOpen] = useState(false);
   const [newCatName, setNewCatName] = useState('');
+
+  // Customer Creation Modal
+  const [isCustomerModalOpen, setIsCustomerModalOpen] = useState(false);
+  const [isCustomerActionsMenuOpen, setIsCustomerActionsMenuOpen] = useState(false);
+  const [activeCustomerRowMenuId, setActiveCustomerRowMenuId] = useState<string | null>(null);
+  const [newCustomerPhotoUrl, setNewCustomerPhotoUrl] = useState('');
+  const [newCustomerPhotoUploading, setNewCustomerPhotoUploading] = useState(false);
+  const [newCustomerName, setNewCustomerName] = useState('');
+  const [newCustomerPhone, setNewCustomerPhone] = useState('');
+  const [newCustomerChannel, setNewCustomerChannel] = useState<'whatsapp' | 'app'>('whatsapp');
+  const [newCustomerNotes, setNewCustomerNotes] = useState('');
+  const [customerSaving, setCustomerSaving] = useState(false);
+  const [customerModalError, setCustomerModalError] = useState<string | null>(null);
 
   // Staff Invite / Edit Modal
   const [isInviteModalOpen, setIsInviteModalOpen] = useState(false);
@@ -409,6 +477,10 @@ export default function MerchantDashboard({
   const [staffTab, setStaffTab] = useState<'active' | 'revoked'>('active');
   const [revokingStaffMember, setRevokingStaffMember] = useState<Staff | null>(null);
   const [revocationReasonInput, setRevocationReasonInput] = useState('');
+  const [revokingLoading, setRevokingLoading] = useState(false);
+  const [reactivatingStaffId, setReactivatingStaffId] = useState<string | null>(null);
+  const [deletingStaffMemberState, setDeletingStaffMemberState] = useState<Staff | null>(null);
+  const [deletingLoading, setDeletingLoading] = useState(false);
   const [viewingReasonStaff, setViewingReasonStaff] = useState<Staff | null>(null);
   const [invitePhotoUrl, setInvitePhotoUrl] = useState('');
   const [invitePhotoUploading, setInvitePhotoUploading] = useState(false);
@@ -426,6 +498,8 @@ export default function MerchantDashboard({
     staff: false,
     finance: false,
   });
+  const [inviteSaving, setInviteSaving] = useState(false);
+  const [inviteError, setInviteError] = useState<string | null>(null);
 
   // Staff Edit Modal
   const [editingStaff, setEditingStaff] = useState<Staff | null>(null);
@@ -723,10 +797,10 @@ export default function MerchantDashboard({
   const [activeProfileSection, setActiveProfileSection] = useState<'personal' | 'security' | 'notifications' | 'billing'>('personal');
   const [profileAvatarUploading, setProfileAvatarUploading] = useState(false);
   const [isProfileAvatarZoomOpen, setIsProfileAvatarZoomOpen] = useState(false);
-  // Shared Image Cropper state for Profile & Staff Invite
+  // Shared Image Cropper state for Profile, Staff Invite & Customer Create
   const [cropModalOpen, setCropModalOpen] = useState(false);
   const [cropImageSrc, setCropImageSrc] = useState<string | null>(null);
-  const [cropTarget, setCropTarget] = useState<'profile' | 'staff_invite'>('profile');
+  const [cropTarget, setCropTarget] = useState<'profile' | 'staff_invite' | 'customer_create'>('profile');
   const [cropSaving, setCropSaving] = useState(false);
 
   // Split Name helper
@@ -902,8 +976,45 @@ export default function MerchantDashboard({
 
   const [profileName, setProfileName] = useState(activeStaff.name);
   const [profileEmail, setProfileEmail] = useState(activeStaff.email);
-  const [notifyWhatsApp, setNotifyWhatsApp] = useState(true);
-  const [notifyEmail, setNotifyEmail] = useState(true);
+  const [notifyWhatsApp, setNotifyWhatsApp] = useState<boolean>(() => {
+    return activeStaff.notification_preferences?.whatsapp ?? true;
+  });
+  const [notifyEmail, setNotifyEmail] = useState<boolean>(() => {
+    return activeStaff.notification_preferences?.email ?? true;
+  });
+  const [notifySavingType, setNotifySavingType] = useState<'email' | 'whatsapp' | null>(null);
+  const [notifySavedFeedback, setNotifySavedFeedback] = useState<'email' | 'whatsapp' | null>(null);
+  const [notifyError, setNotifyError] = useState<string | null>(null);
+
+  const handleToggleNotification = async (channel: 'email' | 'whatsapp', targetValue: boolean) => {
+    setNotifyError(null);
+    setNotifySavingType(channel);
+
+    const newEmail = channel === 'email' ? targetValue : notifyEmail;
+    const newWhatsApp = channel === 'whatsapp' ? targetValue : notifyWhatsApp;
+
+    if (channel === 'email') setNotifyEmail(targetValue);
+    if (channel === 'whatsapp') setNotifyWhatsApp(targetValue);
+
+    const res = await updateStaffNotificationPreferences(activeStaff.id, activeStaff.auth_uid, {
+      email: newEmail,
+      whatsapp: newWhatsApp,
+    });
+
+    setNotifySavingType(null);
+    if (res.success) {
+      setNotifySavedFeedback(channel);
+      setTimeout(() => {
+        setNotifySavedFeedback((current) => (current === channel ? null : current));
+      }, 2500);
+    } else {
+      // Revert in case of error
+      if (channel === 'email') setNotifyEmail(!targetValue);
+      if (channel === 'whatsapp') setNotifyWhatsApp(!targetValue);
+      setNotifyError(res.error || 'Erreur lors de la mise à jour des préférences');
+    }
+  };
+
   const [oldPass, setOldPass] = useState('');
   const [newPass, setNewPass] = useState('');
 
@@ -1253,10 +1364,28 @@ export default function MerchantDashboard({
 
   const ratingDiffVsPrev30 = recent30Avg - prev30Avg;
 
+  const unreadCustomersCount = businessCustomers.filter((c) => {
+    const custMsgs = store.getCustomerMessages(c.id);
+    return custMsgs.some((m) => !m.is_read && m.sender === 'customer');
+  }).length;
+
+  const favoriteCustomersCount = businessCustomers.filter((c) => c.is_favorite).length;
+
   const filteredCustomers = businessCustomers.filter((c) => {
     const custOrders = businessOrders.filter(
       (o) => o.customer_id === c.id || o.customer_phone === c.phone
     );
+
+    const custMsgs = store.getCustomerMessages(c.id);
+    const hasUnread = custMsgs.some((m) => !m.is_read && m.sender === 'customer');
+
+    if (customerFilter === 'unread' && !hasUnread) {
+      return false;
+    }
+
+    if (customerFilter === 'favorites' && !c.is_favorite) {
+      return false;
+    }
 
     if (customerFilter === 'recurrent' && custOrders.length <= 1) {
       return false;
@@ -1271,8 +1400,242 @@ export default function MerchantDashboard({
 
     if (!customerSearch.trim()) return true;
     const q = customerSearch.toLowerCase();
-    return c.name.toLowerCase().includes(q) || c.phone.includes(q);
+    return c.name.toLowerCase().includes(q) || (c.phone && c.phone.includes(q));
   });
+
+  const effectiveActiveCustomer =
+    businessCustomers.find((c) => c.id === selectedCustomerId) ||
+    filteredCustomers[0] ||
+    null;
+
+  // Load customer messages when active customer changes or Customers tab opens
+  useEffect(() => {
+    if (activeTab !== 'customers' || !effectiveActiveCustomer?.id) return;
+    let isCancelled = false;
+
+    setCustomerMessagesLoading(true);
+    fetchMessagesForCustomer(effectiveActiveCustomer.id)
+      .then((msgs) => {
+        if (isCancelled) return;
+        setCustomerMessagesLoading(false);
+        // Mark any unread messages from customer as read
+        msgs.forEach((m) => {
+          if (!m.is_read && m.sender === 'customer') {
+            markMessageAsRead(m.id);
+          }
+        });
+      })
+      .catch((err) => {
+        if (isCancelled) return;
+        setCustomerMessagesLoading(false);
+        console.warn('Error fetching customer messages:', err);
+      });
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [activeTab, effectiveActiveCustomer?.id]);
+
+  // Auto-scroll customer messages
+  useEffect(() => {
+    if (activeTab === 'customers' && effectiveActiveCustomer?.id) {
+      customerMessagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [activeTab, effectiveActiveCustomer?.id, store.customerMessages[effectiveActiveCustomer?.id || '']?.length]);
+
+  const handleCustomerFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (customerPendingAttachment?.previewUrl) {
+      URL.revokeObjectURL(customerPendingAttachment.previewUrl);
+    }
+
+    const mime = file.type || '';
+    let mediaType: 'image' | 'video' | 'audio' | 'document' | 'other' = 'other';
+    if (mime.startsWith('image/')) mediaType = 'image';
+    else if (mime.startsWith('video/')) mediaType = 'video';
+    else if (mime.startsWith('audio/')) mediaType = 'audio';
+    else if (
+      mime.includes('pdf') ||
+      mime.includes('word') ||
+      mime.includes('document') ||
+      mime.includes('excel') ||
+      mime.includes('sheet') ||
+      mime.includes('text') ||
+      mime.includes('presentation') ||
+      file.name.match(/\.(pdf|docx?|xlsx?|pptx?|txt|csv)$/i)
+    ) {
+      mediaType = 'document';
+    }
+
+    const previewUrl = URL.createObjectURL(file);
+    setCustomerPendingAttachment({
+      file,
+      previewUrl,
+      mediaType,
+      name: file.name,
+      size: file.size,
+    });
+    setCustomerChatError(null);
+
+    if (customerFileInputRef.current) {
+      customerFileInputRef.current.value = '';
+    }
+  };
+
+  const handleRemoveCustomerPendingAttachment = () => {
+    if (customerPendingAttachment?.previewUrl) {
+      URL.revokeObjectURL(customerPendingAttachment.previewUrl);
+    }
+    setCustomerPendingAttachment(null);
+    if (customerFileInputRef.current) {
+      customerFileInputRef.current.value = '';
+    }
+  };
+
+  const handleSendCustomerMessage = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (!effectiveActiveCustomer?.id || customerChatSending) return;
+
+    const text = customerChatInput.trim();
+    const pending = customerPendingAttachment;
+
+    if (!text && !pending) return;
+
+    setCustomerChatSending(true);
+    setCustomerChatError(null);
+
+    let mediaUrl: string | undefined = undefined;
+    let mediaType: 'image' | 'video' | 'audio' | 'document' | 'other' | undefined = undefined;
+    let mediaName: string | undefined = undefined;
+    let mediaSize: number | undefined = undefined;
+
+    // 1. Si une pièce jointe est en attente, upload vers Supabase Storage
+    if (pending) {
+      setCustomerChatMediaUploading(true);
+      const uploadRes = await uploadCustomerMedia(pending.file, business.id);
+      setCustomerChatMediaUploading(false);
+
+      if (!uploadRes.success || !uploadRes.url) {
+        setCustomerChatSending(false);
+        setCustomerChatError(uploadRes.error || "Échec de l'upload de la pièce jointe");
+        return;
+      }
+
+      mediaUrl = uploadRes.url;
+      mediaType = uploadRes.media_type;
+      mediaName = uploadRes.media_name;
+      mediaSize = uploadRes.media_size;
+    }
+
+    // 2. Envoi du message (avec texte, média, ou les deux combinés)
+    const res = await sendMessage({
+      business_id: business.id,
+      customer_id: effectiveActiveCustomer.id,
+      sender: 'merchant',
+      content: text || undefined,
+      media_url: mediaUrl,
+      media_type: mediaType,
+      media_name: mediaName,
+      media_size: mediaSize,
+    });
+
+    setCustomerChatSending(false);
+    if (res.success) {
+      setCustomerChatInput('');
+      if (pending?.previewUrl) {
+        URL.revokeObjectURL(pending.previewUrl);
+      }
+      setCustomerPendingAttachment(null);
+      customerMessagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    } else {
+      setCustomerChatError(res.error || "Échec de l'envoi du message");
+    }
+  };
+
+  const handleToggleCustomerFavorite = async (customerId: string, currentFav?: boolean) => {
+    const nextFav = !currentFav;
+    await markCustomerAsFavorite(customerId, nextFav);
+  };
+
+  // Reset message selection when customer changes
+  useEffect(() => {
+    setIsCustomerMessageSelectMode(false);
+    setSelectedCustomerMessageIds([]);
+    setCustomerMessageDeleteError(null);
+    if (longPressTimerRef.current) {
+      clearTimeout(longPressTimerRef.current);
+      longPressTimerRef.current = null;
+    }
+  }, [effectiveActiveCustomer?.id]);
+
+  const handleMessagePointerDown = (messageId: string) => {
+    if (isCustomerMessageSelectMode) return;
+    if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current);
+    longPressTimerRef.current = setTimeout(() => {
+      setIsCustomerMessageSelectMode(true);
+      setSelectedCustomerMessageIds([messageId]);
+    }, 450);
+  };
+
+  const handleMessagePointerUpOrLeave = () => {
+    if (longPressTimerRef.current) {
+      clearTimeout(longPressTimerRef.current);
+      longPressTimerRef.current = null;
+    }
+  };
+
+  const handleToggleMessageSelection = (messageId: string) => {
+    setSelectedCustomerMessageIds((prev) =>
+      prev.includes(messageId) ? prev.filter((id) => id !== messageId) : [...prev, messageId]
+    );
+  };
+
+  const handleSelectAllMessages = (allIds: string[]) => {
+    if (selectedCustomerMessageIds.length === allIds.length) {
+      setSelectedCustomerMessageIds([]);
+    } else {
+      setSelectedCustomerMessageIds(allIds);
+    }
+  };
+
+  const handleExitMessageSelectMode = () => {
+    setIsCustomerMessageSelectMode(false);
+    setSelectedCustomerMessageIds([]);
+    setCustomerMessageDeleteError(null);
+  };
+
+  const handleConfirmDeleteSelectedMessages = async () => {
+    if (selectedCustomerMessageIds.length === 0 || customerMessageDeleting) return;
+
+    setCustomerMessageDeleting(true);
+    setCustomerMessageDeleteError(null);
+
+    const idsToDelete = [...selectedCustomerMessageIds];
+    const errors: string[] = [];
+
+    for (const msgId of idsToDelete) {
+      const res = await deleteMessage(msgId);
+      if (!res.success) {
+        errors.push(res.error || `Échec suppression #${msgId}`);
+      } else {
+        setSelectedCustomerMessageIds((prev) => prev.filter((id) => id !== msgId));
+      }
+    }
+
+    setCustomerMessageDeleting(false);
+    setShowDeleteMessagesConfirmModal(false);
+
+    if (errors.length > 0) {
+      setCustomerMessageDeleteError(
+        `Certains messages n'ont pas pu être supprimés (${errors.length}/${idsToDelete.length}) : ${errors[0]}`
+      );
+    } else {
+      setIsCustomerMessageSelectMode(false);
+      setSelectedCustomerMessageIds([]);
+    }
+  };
 
   // Analytics Metrics
   const totalRevenue = businessOrders
@@ -1511,9 +1874,11 @@ export default function MerchantDashboard({
     }
   };
 
-  const handleInviteStaffSubmit = (e: React.FormEvent) => {
+  const handleInviteStaffSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!inviteName.trim() || !inviteEmail.trim()) return;
+
+    setInviteError(null);
 
     if (editingStaffId) {
       store.updateStaff(editingStaffId, {
@@ -1526,36 +1891,67 @@ export default function MerchantDashboard({
         avatar_url: invitePhotoUrl || undefined,
         photo_url: invitePhotoUrl || undefined,
       });
-    } else {
-      store.inviteStaff({
-        name: inviteName.trim(),
-        email: inviteEmail.trim(),
-        phone: invitePhone.trim() || '+221 77 000 00 00',
-        role_title: inviteRoleTitle.trim() || 'Collaborateur',
-        salary: Number(inviteSalary) || 250000,
-        permissions: invitePerms,
-        avatar_url: invitePhotoUrl || undefined,
-        photo_url: invitePhotoUrl || undefined,
-      });
-    }
 
-    setEditingStaffId(null);
-    setInviteName('');
-    setInviteEmail('');
-    setInvitePhone('');
-    setInviteRoleTitle('');
-    setInviteSalary(250000);
-    setInvitePerms({
-      orders: true,
-      products: true,
-      customers: true,
-      agent: false,
-      settings: false,
-      staff: false,
-      finance: false,
-    });
-    setInvitePhotoUrl('');
-    setIsInviteModalOpen(false);
+      setEditingStaffId(null);
+      setInviteName('');
+      setInviteEmail('');
+      setInvitePhone('');
+      setInviteRoleTitle('');
+      setInviteSalary(250000);
+      setInvitePerms({
+        orders: true,
+        products: true,
+        customers: true,
+        agent: false,
+        settings: false,
+        staff: false,
+        finance: false,
+      });
+      setInvitePhotoUrl('');
+      setIsInviteModalOpen(false);
+    } else {
+      setInviteSaving(true);
+      try {
+        const res = await insertStaffMember({
+          business_id: business.id,
+          invited_by: activeStaff.id || null,
+          name: inviteName.trim(),
+          email: inviteEmail.trim(),
+          phone: invitePhone.trim() || undefined,
+          role_title: inviteRoleTitle.trim() || 'Collaborateur',
+          salary: inviteSalary ? Number(inviteSalary) : undefined,
+          permissions: invitePerms,
+          avatar_url: invitePhotoUrl || undefined,
+        });
+
+        if (!res.success) {
+          setInviteError(res.error || "Une erreur est survenue lors de l'ajout du membre.");
+          return;
+        }
+
+        setEditingStaffId(null);
+        setInviteName('');
+        setInviteEmail('');
+        setInvitePhone('');
+        setInviteRoleTitle('');
+        setInviteSalary(250000);
+        setInvitePerms({
+          orders: true,
+          products: true,
+          customers: true,
+          agent: false,
+          settings: false,
+          staff: false,
+          finance: false,
+        });
+        setInvitePhotoUrl('');
+        setIsInviteModalOpen(false);
+      } catch (err: any) {
+        setInviteError(err?.message || "Une erreur inattendue est survenue.");
+      } finally {
+        setInviteSaving(false);
+      }
+    }
   };
 
   const handleEditStaffSubmit = (e: React.FormEvent) => {
@@ -1570,6 +1966,96 @@ export default function MerchantDashboard({
     });
 
     setEditingStaff(null);
+  };
+
+  const handleCreateCustomerSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newCustomerName.trim() || !newCustomerPhone.trim()) {
+      setCustomerModalError('Veuillez renseigner le nom et le numéro de téléphone.');
+      return;
+    }
+
+    setCustomerSaving(true);
+    setCustomerModalError(null);
+
+    try {
+      const res = await insertCustomer({
+        business_id: business.id,
+        name: newCustomerName.trim(),
+        phone: newCustomerPhone.trim(),
+        channel_preference: newCustomerChannel,
+        notes: newCustomerNotes.trim() || undefined,
+        avatar_url: newCustomerPhotoUrl || undefined,
+      });
+
+      if (!res.success) {
+        setCustomerModalError(res.error || "Une erreur est survenue lors de l'enregistrement du client.");
+        return;
+      }
+
+      // Reset form and close modal
+      setNewCustomerName('');
+      setNewCustomerPhone('');
+      setNewCustomerChannel('whatsapp');
+      setNewCustomerNotes('');
+      setNewCustomerPhotoUrl('');
+      setCustomerModalError(null);
+      setIsCustomerModalOpen(false);
+    } catch (err: any) {
+      setCustomerModalError(err?.message || 'Erreur inattendue lors de la création du client.');
+    } finally {
+      setCustomerSaving(false);
+    }
+  };
+
+  const handleRevokeStaffSubmit = async () => {
+    if (!revokingStaffMember || !revocationReasonInput.trim()) return;
+    setRevokingLoading(true);
+    try {
+      const res = await revokeStaffMember(revokingStaffMember.id, revocationReasonInput.trim());
+      if (!res.success) {
+        alert(res.error || "Une erreur est survenue lors de la révocation.");
+        return;
+      }
+      setRevokingStaffMember(null);
+      setRevocationReasonInput('');
+    } catch (err: any) {
+      alert(err?.message || "Erreur de communication avec la base de données.");
+    } finally {
+      setRevokingLoading(false);
+    }
+  };
+
+  const handleReactivateStaff = async (staffId: string) => {
+    setReactivatingStaffId(staffId);
+    try {
+      const res = await reactivateStaffMember(staffId);
+      if (!res.success) {
+        alert(res.error || "Une erreur est survenue lors de la réactivation.");
+        return;
+      }
+    } catch (err: any) {
+      alert(err?.message || "Erreur de communication avec la base de données.");
+    } finally {
+      setReactivatingStaffId(null);
+    }
+  };
+
+  const handleDeleteStaffConfirm = async () => {
+    if (!deletingStaffMemberState) return;
+    setDeletingLoading(true);
+    try {
+      const res = await deleteStaffMember(deletingStaffMemberState.id);
+      if (!res.success) {
+        alert(res.error || "Une erreur est survenue lors de la suppression.");
+        return;
+      }
+      setDeletingStaffMemberState(null);
+    } catch (err: any) {
+      alert(err?.message || "Erreur de communication avec la base de données.");
+    } finally {
+      setDeletingLoading(false);
+    }
   };
 
   const handleSaveProfile = (e: React.FormEvent) => {
@@ -3171,139 +3657,212 @@ export default function MerchantDashboard({
 
             {/* Categories List */}
             <div className="flex items-center space-x-2 overflow-x-auto pb-1">
-              {businessCategories.map((cat) => (
-                <div
-                  key={cat.id}
-                  className="px-4 py-2 bg-white border border-slate-200/80 rounded-2xl flex items-center space-x-2 text-xs font-bold text-slate-700 shrink-0 shadow-2xs"
-                >
-                  <span>{cat.name}</span>
-                  <button
-                    onClick={() => {
-                      if (confirm(`Supprimer la catégorie "${cat.name}" ?`)) onDeleteCategory(cat.id);
-                    }}
-                    className="text-slate-400 hover:text-rose-600 ml-1 p-1"
-                  >
-                    <Trash2 className="w-3.5 h-3.5" />
-                  </button>
+              {businessCategories.length === 0 ? (
+                <div className="px-3 py-1.5 bg-slate-50 border border-dashed border-slate-200 rounded-xl text-xs text-slate-400 font-medium">
+                  Aucune catégorie créée. Cliquez sur &quot;Nouvelle Catégorie&quot;.
                 </div>
-              ))}
+              ) : (
+                businessCategories.map((cat) => (
+                  <div
+                    key={cat.id}
+                    className="px-4 py-2 bg-white border border-slate-200/80 rounded-2xl flex items-center space-x-2 text-xs font-bold text-slate-700 shrink-0 shadow-2xs"
+                  >
+                    <span>{cat.name}</span>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onDeleteCategory(cat.id);
+                      }}
+                      className="text-slate-400 hover:text-rose-600 ml-1 p-1 cursor-pointer"
+                      title="Supprimer la catégorie"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                ))
+              )}
             </div>
 
             {/* Products Grid */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
-              {businessProducts.map((prod) => {
-                const cat = businessCategories.find((c) => c.id === prod.category_id);
-                return (
-                  <div key={prod.id} className="bg-white border border-slate-200/80 rounded-3xl overflow-hidden flex flex-col justify-between shadow-2xs hover:shadow-xs transition-shadow">
-                    <div>
-                      <div className="relative h-44 bg-slate-100 overflow-hidden">
-                        <Image
-                          src={prod.image_url}
-                          alt={prod.name}
-                          fill
-                          sizes="(max-width: 640px) 100vw, (max-width: 1024px) 50vw, 33vw"
-                          unoptimized
-                          referrerPolicy="no-referrer"
-                          className="object-cover"
-                        />
-                        <div className="absolute top-3 right-3 flex items-center space-x-2">
-                          <span
-                            className={`px-2.5 py-1 rounded-full text-[10px] font-extrabold uppercase shadow-2xs ${
-                              prod.available
-                                ? 'bg-emerald-600 text-white'
-                                : 'bg-rose-600 text-white'
-                            }`}
-                          >
-                            {prod.available ? 'Disponible' : 'Épuisé'}
+            {businessProducts.length === 0 ? (
+              <div className="bg-white border border-dashed border-slate-200 rounded-3xl p-12 text-center flex flex-col items-center justify-center">
+                <div className="w-14 h-14 rounded-2xl bg-slate-50 border border-slate-100 flex items-center justify-center text-slate-400 mb-3">
+                  <Package className="w-7 h-7" />
+                </div>
+                <h4 className="text-base font-extrabold text-slate-900">Aucun produit</h4>
+                <p className="text-xs text-slate-500 max-w-sm mt-1 mb-4">
+                  Votre catalogue est vide. Créez une catégorie puis ajoutez votre premier produit pour qu&apos;il soit disponible sur la boutique.
+                </p>
+                <button
+                  onClick={() => {
+                    setEditingProduct({ category_id: businessCategories[0]?.id || '' });
+                    setIsProductModalOpen(true);
+                  }}
+                  className="px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs rounded-xl flex items-center space-x-2 transition-all shadow-sm shadow-emerald-500/10 cursor-pointer"
+                >
+                  <Plus className="w-4 h-4" />
+                  <span>Ajouter un Produit</span>
+                </button>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+                {businessProducts.map((prod) => {
+                  const cat = businessCategories.find((c) => c.id === prod.category_id);
+                  return (
+                    <div key={prod.id} className="bg-white border border-slate-200/80 rounded-3xl overflow-hidden flex flex-col justify-between shadow-2xs hover:shadow-xs transition-shadow">
+                      <div>
+                        <div className="relative h-44 bg-slate-100 overflow-hidden">
+                          <Image
+                            src={prod.image_url}
+                            alt={prod.name}
+                            fill
+                            sizes="(max-width: 640px) 100vw, (max-width: 1024px) 50vw, 33vw"
+                            unoptimized
+                            referrerPolicy="no-referrer"
+                            className="object-cover"
+                          />
+                          <div className="absolute top-3 right-3 flex items-center space-x-2">
+                            <span
+                              className={`px-2.5 py-1 rounded-full text-[10px] font-extrabold uppercase shadow-2xs ${
+                                prod.available
+                                  ? 'bg-emerald-600 text-white'
+                                  : 'bg-rose-600 text-white'
+                              }`}
+                            >
+                              {prod.available ? 'Disponible' : 'Épuisé'}
+                            </span>
+                          </div>
+                        </div>
+
+                        <div className="p-5">
+                          <span className="text-[10px] font-extrabold text-slate-400 uppercase tracking-wider block">
+                            {cat?.name || 'Catégorie'}
                           </span>
+                          <h3 className="font-extrabold text-slate-900 text-base mt-1">{prod.name}</h3>
+                          <p className="text-xs text-slate-500 mt-1 line-clamp-2">{prod.description}</p>
                         </div>
                       </div>
 
-                      <div className="p-5">
-                        <span className="text-[10px] font-extrabold text-slate-400 uppercase tracking-wider block">
-                          {cat?.name || 'Catégorie'}
-                        </span>
-                        <h3 className="font-extrabold text-slate-900 text-base mt-1">{prod.name}</h3>
-                        <p className="text-xs text-slate-500 mt-1 line-clamp-2">{prod.description}</p>
+                      <div className="p-5 pt-0 border-t border-slate-100 mt-2 flex items-center justify-between">
+                        <div className="mt-3">
+                          <span className="text-lg font-black text-emerald-700 block">
+                            {prod.price.toLocaleString()} {business.currency}
+                          </span>
+                          <span className="text-[10px] text-slate-400 block">
+                            Stock : {prod.stock_qty === null ? 'Illimité' : `${prod.stock_qty} unités`}
+                          </span>
+                        </div>
+
+                        <div className="flex items-center space-x-2 mt-3">
+                          <button
+                            onClick={() => {
+                              setEditingProduct(prod);
+                              setIsProductModalOpen(true);
+                            }}
+                            className="p-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl border border-slate-200 transition-colors cursor-pointer"
+                            title="Modifier"
+                          >
+                            <Edit2 className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onDeleteProduct(prod.id);
+                            }}
+                            className="p-2 bg-rose-50 hover:bg-rose-100 text-rose-700 rounded-xl border border-rose-200 transition-colors cursor-pointer"
+                            title="Supprimer le produit"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
                       </div>
                     </div>
-
-                    <div className="p-5 pt-0 border-t border-slate-100 mt-2 flex items-center justify-between">
-                      <div className="mt-3">
-                        <span className="text-lg font-black text-emerald-700 block">
-                          {prod.price.toLocaleString()} {business.currency}
-                        </span>
-                        <span className="text-[10px] text-slate-400 block">
-                          Stock : {prod.stock_qty === null ? 'Illimité' : `${prod.stock_qty} unités`}
-                        </span>
-                      </div>
-
-                      <div className="flex items-center space-x-2 mt-3">
-                        <button
-                          onClick={() => {
-                            setEditingProduct(prod);
-                            setIsProductModalOpen(true);
-                          }}
-                          className="p-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl border border-slate-200 transition-colors"
-                          title="Modifier"
-                        >
-                          <Edit2 className="w-3.5 h-3.5" />
-                        </button>
-                        <button
-                          onClick={() => {
-                            if (confirm(`Supprimer le produit "${prod.name}" ?`)) onDeleteProduct(prod.id);
-                          }}
-                          className="p-2 bg-rose-50 hover:bg-rose-100 text-rose-700 rounded-xl border border-rose-200 transition-colors"
-                          title="Supprimer"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
         )}
 
         {/* TAB 4: CLIENTS - Messaging / Chat UI */}
         {hasPermission('customers') && activeTab === 'customers' && (
           <div className="bg-white rounded-3xl border border-slate-200/80 shadow-2xs overflow-hidden flex flex-col md:flex-row min-h-[680px] h-[calc(100vh-220px)]">
+            {/* Hidden File Input for Customer Media Upload */}
+            <input
+              type="file"
+              ref={customerFileInputRef}
+              onChange={handleCustomerFileSelect}
+              className="hidden"
+              accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.txt,.csv,.ppt,.pptx,audio/*,video/*"
+            />
+
             {/* LEFT COLUMN: Customer Conversations List */}
             <div className="w-full md:w-80 lg:w-96 border-b md:border-b-0 md:border-r border-slate-200/80 flex flex-col bg-white shrink-0">
               {/* Header & Search Bar */}
               <div className="p-4 border-b border-slate-100 space-y-3 bg-white">
                 <div className="flex items-center justify-between">
                   <h3 className="font-extrabold text-slate-900 text-base tracking-tight flex items-center gap-2">
-                    <span>Chats</span>
+                    <span>Clients & Messagerie</span>
                     <span className="px-2 py-0.5 bg-emerald-100 text-emerald-800 border border-emerald-200/80 rounded-full text-[10px] font-black">
                       {filteredCustomers.length}
                     </span>
                   </h3>
-                  <div className="flex items-center space-x-1.5 text-slate-500">
-                    <button className="p-1.5 opacity-40 hover:opacity-60 rounded-xl transition-all cursor-not-allowed text-slate-600" title="Nouveau groupe (Disponible en Phase 2)">
-                      <Users className="w-4 h-4" />
-                    </button>
-                    <button className="p-1.5 opacity-40 hover:opacity-60 rounded-xl transition-all cursor-not-allowed text-slate-600" title="Nouveau message (Disponible en Phase 2)">
-                      <SquarePen className="w-4 h-4" />
-                    </button>
-                    <button className="p-1.5 hover:bg-slate-100 rounded-xl transition-colors cursor-pointer text-slate-600" title="Filtrer">
-                      <ListFilter className="w-4 h-4" />
-                    </button>
+                  <div className="flex items-center space-x-1 text-slate-500">
+                    <span className="text-[10px] text-slate-400 font-medium">Supabase live</span>
                   </div>
                 </div>
 
-                {/* Search Input */}
-                <div className="relative">
-                  <Search className="w-4 h-4 absolute left-3.5 top-2.5 text-slate-400" />
-                  <input
-                    type="text"
-                    placeholder="Search or start new chat..."
-                    value={customerSearch}
-                    onChange={(e) => setCustomerSearch(e.target.value)}
-                    className="w-full bg-slate-50 hover:bg-slate-100/80 focus:bg-white border border-slate-200/80 rounded-2xl pl-10 pr-4 py-2 text-xs text-slate-900 placeholder:text-slate-400 focus:outline-none focus:border-emerald-500 transition-all font-medium"
-                  />
+                {/* Search Input & Actions Menu */}
+                <div className="flex items-center space-x-2">
+                  <div className="relative flex-1 min-w-0">
+                    <Search className="w-4 h-4 absolute left-3.5 top-2.5 text-slate-400" />
+                    <input
+                      type="text"
+                      placeholder="Rechercher par nom ou numéro..."
+                      value={customerSearch}
+                      onChange={(e) => setCustomerSearch(e.target.value)}
+                      className="w-full bg-slate-50 hover:bg-slate-100/80 focus:bg-white border border-slate-200/80 rounded-2xl pl-10 pr-4 py-2 text-xs text-slate-900 placeholder:text-slate-400 focus:outline-none focus:border-emerald-500 transition-all font-medium"
+                    />
+                  </div>
+
+                  {/* 3-dots Menu for Customer Actions */}
+                  <div className="relative shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => setIsCustomerActionsMenuOpen(!isCustomerActionsMenuOpen)}
+                      className="p-2 text-slate-500 hover:text-slate-900 bg-slate-50 hover:bg-slate-100 border border-slate-200/80 rounded-2xl transition-all cursor-pointer shadow-2xs"
+                      title="Options clients"
+                    >
+                      <MoreVertical className="w-4 h-4" />
+                    </button>
+
+                    {isCustomerActionsMenuOpen && (
+                      <>
+                        <div
+                          className="fixed inset-0 z-20"
+                          onClick={() => setIsCustomerActionsMenuOpen(false)}
+                        />
+                        <div className="absolute right-0 mt-2 w-48 bg-white border border-slate-200/80 rounded-2xl shadow-xl z-30 py-1.5 overflow-hidden animate-in fade-in zoom-in-95 duration-100">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setIsCustomerActionsMenuOpen(false);
+                              setNewCustomerName('');
+                              setNewCustomerPhone('');
+                              setNewCustomerChannel('whatsapp');
+                              setNewCustomerNotes('');
+                              setCustomerModalError(null);
+                              setIsCustomerModalOpen(true);
+                            }}
+                            className="w-full px-3.5 py-2.5 text-left text-xs font-bold text-slate-700 hover:text-slate-900 hover:bg-slate-50 flex items-center space-x-2.5 transition-colors cursor-pointer"
+                          >
+                            <UserPlus className="w-4 h-4 text-emerald-600" />
+                            <span>Nouveau client</span>
+                          </button>
+                        </div>
+                      </>
+                    )}
+                  </div>
                 </div>
 
                 {/* Filter Chips */}
@@ -3319,59 +3878,66 @@ export default function MerchantDashboard({
                     Tous ({businessCustomers.length})
                   </button>
                   <button
-                    disabled
-                    title="Disponible en Phase 2"
-                    className="px-2.5 py-1 rounded-xl text-[11px] font-extrabold transition-all whitespace-nowrap text-slate-400 opacity-60 cursor-not-allowed"
+                    onClick={() => setCustomerFilter('unread')}
+                    className={`px-2.5 py-1 rounded-xl text-[11px] font-extrabold transition-all cursor-pointer whitespace-nowrap flex items-center gap-1.5 ${
+                      customerFilter === 'unread'
+                        ? 'bg-slate-900 text-white shadow-2xs font-black'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
                   >
-                    Non lus (0)
+                    <span>Non lus</span>
+                    {unreadCustomersCount > 0 && (
+                      <span className="px-1.5 py-0.2 bg-emerald-500 text-white text-[9px] font-black rounded-full">
+                        {unreadCustomersCount}
+                      </span>
+                    )}
                   </button>
                   <button
-                    disabled
-                    title="Disponible en Phase 2"
-                    className="px-2.5 py-1 rounded-xl text-[11px] font-extrabold transition-all whitespace-nowrap text-slate-400 opacity-60 cursor-not-allowed"
+                    onClick={() => setCustomerFilter('favorites')}
+                    className={`px-2.5 py-1 rounded-xl text-[11px] font-extrabold transition-all cursor-pointer whitespace-nowrap flex items-center gap-1.5 ${
+                      customerFilter === 'favorites'
+                        ? 'bg-slate-900 text-white shadow-2xs font-black'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
                   >
-                    Favoris (0)
-                  </button>
-                  <button
-                    disabled
-                    title="Disponible en Phase 2"
-                    className="px-2.5 py-1 rounded-xl text-[11px] font-extrabold transition-all whitespace-nowrap text-slate-400 opacity-60 cursor-not-allowed"
-                  >
-                    Groupes (0)
+                    <span>Favoris</span>
+                    {favoriteCustomersCount > 0 && (
+                      <span className="px-1.5 py-0.2 bg-slate-200 text-slate-800 text-[9px] font-bold rounded-full">
+                        {favoriteCustomersCount}
+                      </span>
+                    )}
                   </button>
                 </div>
               </div>
 
               {/* Conversations Scrollable List */}
               <div className="flex-1 overflow-y-auto divide-y divide-slate-100 bg-white">
-                {filteredCustomers.length === 0 ? (
+                {store.customersLoading ? (
+                  <div className="p-8 text-center text-slate-400 text-xs font-medium flex flex-col items-center justify-center gap-2">
+                    <Loader2 className="w-5 h-5 animate-spin text-slate-400" />
+                    <span>Chargement des clients...</span>
+                  </div>
+                ) : filteredCustomers.length === 0 ? (
                   <div className="p-8 text-center text-slate-400 text-xs font-medium">
-                    Aucun client trouvé.
+                    {customerFilter === 'unread'
+                      ? 'Aucun message non lu.'
+                      : customerFilter === 'favorites'
+                      ? 'Aucun client marqué en favori.'
+                      : 'Aucun client trouvé.'}
                   </div>
                 ) : (
                   filteredCustomers.map((cust) => {
-                    const custOrders = businessOrders.filter(
-                      (o) => o.customer_id === cust.id || o.customer_phone === cust.phone
-                    );
-                    const custOrderIds = new Set(custOrders.map((o) => o.id));
-                    const custMessages = businessEvents
-                      .filter(
-                        (e) =>
-                          e.order_id &&
-                          custOrderIds.has(e.order_id) &&
-                          e.event_type !== 'order_confirmed'
-                      )
-                      .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
-
-                    const latestMsg = custMessages[0] || null;
-                    const isSelected = (selectedCustomerId || filteredCustomers[0]?.id) === cust.id;
+                    const custMsgs = store.getCustomerMessages(cust.id);
+                    const unreadCount = custMsgs.filter((m) => !m.is_read && m.sender === 'customer').length;
+                    const latestMsg = custMsgs.length > 0 ? custMsgs[custMsgs.length - 1] : null;
+                    const isSelected = (effectiveActiveCustomer?.id) === cust.id;
 
                     const rawText = latestMsg
-                      ? latestMsg.payload?.message || 'Message'
+                      ? latestMsg.content || (latestMsg.media_name ? `📎 ${latestMsg.media_name}` : 'Média joint')
                       : 'Aucun message';
 
                     const lastActivityText =
-                      rawText.length > 38 ? rawText.slice(0, 38) + '...' : rawText;
+                      rawText.length > 34 ? rawText.slice(0, 34) + '...' : rawText;
 
                     const lastActivityTime = latestMsg
                       ? new Date(latestMsg.created_at).toLocaleTimeString('fr-FR', {
@@ -3384,7 +3950,7 @@ export default function MerchantDashboard({
                       <div
                         key={cust.id}
                         onClick={() => setSelectedCustomerId(cust.id)}
-                        className={`p-3.5 flex items-center space-x-3 cursor-pointer transition-all ${
+                        className={`group p-3.5 flex items-center space-x-3 cursor-pointer transition-all ${
                           isSelected
                             ? 'bg-slate-100/90 border-l-4 border-l-slate-900 font-bold'
                             : 'hover:bg-slate-50/80 bg-white'
@@ -3406,8 +3972,11 @@ export default function MerchantDashboard({
                         {/* Customer Info */}
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center justify-between mb-0.5">
-                            <h4 className="text-sm font-extrabold text-slate-900 truncate">
-                              {cust.name}
+                            <h4 className="text-sm font-extrabold text-slate-900 truncate flex items-center gap-1.5">
+                              <span>{cust.name}</span>
+                              {cust.is_favorite && (
+                                <Bookmark className="w-3.5 h-3.5 fill-slate-700 text-slate-700 shrink-0" />
+                              )}
                             </h4>
                             {lastActivityTime && (
                               <span className="text-[10px] text-slate-400 font-medium shrink-0 ml-2">
@@ -3415,9 +3984,63 @@ export default function MerchantDashboard({
                               </span>
                             )}
                           </div>
-                          <p className="text-xs text-slate-500 font-medium truncate">
-                            {lastActivityText}
-                          </p>
+                          <div className="flex items-center justify-between gap-1">
+                            <p className="text-xs text-slate-500 font-medium truncate">
+                              {lastActivityText}
+                            </p>
+                            {unreadCount > 0 && (
+                              <span className="px-1.5 py-0.2 bg-emerald-600 text-white text-[10px] font-black rounded-full shrink-0">
+                                {unreadCount}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* 3-dots discrete menu on each customer line */}
+                        <div className="relative shrink-0">
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setActiveCustomerRowMenuId(activeCustomerRowMenuId === cust.id ? null : cust.id);
+                            }}
+                            className="p-1.5 text-slate-400 hover:text-slate-700 hover:bg-slate-200/60 rounded-xl transition-all cursor-pointer opacity-70 group-hover:opacity-100"
+                            title="Options du client"
+                          >
+                            <MoreVertical className="w-4 h-4" />
+                          </button>
+
+                          {activeCustomerRowMenuId === cust.id && (
+                            <>
+                              <div
+                                className="fixed inset-0 z-20"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setActiveCustomerRowMenuId(null);
+                                }}
+                              />
+                              <div
+                                className="absolute right-0 mt-1 w-44 bg-white border border-slate-200/80 rounded-2xl shadow-xl z-30 py-1 overflow-hidden"
+                                onClick={(e) => e.stopPropagation()}
+                              >
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setActiveCustomerRowMenuId(null);
+                                    handleToggleCustomerFavorite(cust.id, cust.is_favorite);
+                                  }}
+                                  className="w-full px-3 py-2 text-left text-xs font-bold text-slate-700 hover:text-slate-900 hover:bg-slate-50 flex items-center space-x-2 transition-colors cursor-pointer"
+                                >
+                                  <Bookmark
+                                    className={`w-3.5 h-3.5 ${
+                                      cust.is_favorite ? 'fill-slate-700 text-slate-700' : 'text-slate-400'
+                                    }`}
+                                  />
+                                  <span>{cust.is_favorite ? 'Retirer des favoris' : 'Marquer comme favori'}</span>
+                                </button>
+                              </div>
+                            </>
+                          )}
                         </div>
                       </div>
                     );
@@ -3428,10 +4051,7 @@ export default function MerchantDashboard({
 
             {/* RIGHT COLUMN: Selected Conversation Thread */}
             {(() => {
-              const activeCustomer =
-                businessCustomers.find((c) => c.id === selectedCustomerId) ||
-                filteredCustomers[0] ||
-                null;
+              const activeCustomer = effectiveActiveCustomer;
 
               if (!activeCustomer) {
                 return (
@@ -3442,161 +4062,467 @@ export default function MerchantDashboard({
                 );
               }
 
-              // Check if real conversation messages exist for this customer
-              const custOrders = businessOrders.filter(
-                (o) => o.customer_id === activeCustomer.id || o.customer_phone === activeCustomer.phone
-              );
-              const custOrderIds = new Set(custOrders.map((o) => o.id));
-              const realMessages = businessEvents.filter(
-                (e) =>
-                  e.order_id &&
-                  custOrderIds.has(e.order_id) &&
-                  e.event_type !== 'order_confirmed'
-              );
+              const custMessages = store.getCustomerMessages(activeCustomer.id);
+              const isCustomerOnline = activeCustomer.last_active_at
+                ? nowMs - new Date(activeCustomer.last_active_at).getTime() < 10 * 60 * 1000
+                : false;
 
               return (
-                <div className="flex-1 flex flex-col bg-[#FAF7F2]/50 min-h-[500px]">
-                  {/* Conversation Header */}
-                  <div className="p-4 bg-white border-b border-slate-200/80 flex items-center justify-between shadow-2xs shrink-0">
-                    <div className="flex items-center space-x-3.5 min-w-0">
-                      {activeCustomer.avatar_url ? (
-                        <img
-                          src={activeCustomer.avatar_url}
-                          alt={activeCustomer.name}
-                          className="w-11 h-11 rounded-full object-cover border border-slate-200 shrink-0"
-                        />
-                      ) : (
-                        <div className="w-11 h-11 rounded-full bg-slate-900 text-white flex items-center justify-center font-extrabold text-xs shrink-0 shadow-2xs">
-                          {getInitials(activeCustomer.name)}
+                <div className="flex-1 flex flex-col bg-[#FAF7F2]/50 h-full min-h-0 min-w-0 overflow-hidden">
+                  {/* Conversation Header / Selection Action Bar */}
+                  {isCustomerMessageSelectMode ? (
+                    <div className="p-3.5 sm:p-4 bg-slate-900 text-white border-b border-slate-800 flex items-center justify-between shadow-sm shrink-0 animate-in fade-in duration-150">
+                      <div className="flex items-center space-x-3 min-w-0">
+                        <button
+                          type="button"
+                          onClick={handleExitMessageSelectMode}
+                          className="p-1.5 text-slate-300 hover:text-white hover:bg-slate-800 rounded-xl transition-colors cursor-pointer"
+                          title="Quitter la sélection (Annuler)"
+                        >
+                          <X className="w-5 h-5" />
+                        </button>
+                        <div className="min-w-0">
+                          <h3 className="font-extrabold text-white text-sm truncate">
+                            {selectedCustomerMessageIds.length} message{selectedCustomerMessageIds.length > 1 ? 's' : ''} sélectionné{selectedCustomerMessageIds.length > 1 ? 's' : ''}
+                          </h3>
+                          <p className="text-[11px] text-slate-400 font-medium">
+                            {selectedCustomerMessageIds.length === 0
+                              ? 'Touchez ou cochez des messages'
+                              : 'Prêt à être supprimé'}
+                          </p>
                         </div>
-                      )}
-                      <div className="min-w-0">
-                        <h3 className="font-extrabold text-slate-900 text-base truncate leading-tight">
-                          {activeCustomer.name}
-                        </h3>
-                        <p className="text-xs text-slate-500 font-medium flex items-center gap-1.5 mt-0.5">
-                          <span>Contact Info</span>
-                          <span className="text-slate-300">•</span>
-                          <span className="font-mono">{activeCustomer.phone || 'Non renseigné'}</span>
-                        </p>
+                      </div>
+
+                      <div className="flex items-center space-x-2 shrink-0">
+                        {custMessages.length > 0 && (
+                          <button
+                            type="button"
+                            onClick={() => handleSelectAllMessages(custMessages.map((m) => m.id))}
+                            className="hidden sm:inline-flex px-3 py-1.5 text-xs font-bold text-slate-200 hover:text-white hover:bg-slate-800 rounded-xl border border-slate-700 transition-colors cursor-pointer"
+                          >
+                            {selectedCustomerMessageIds.length === custMessages.length
+                              ? 'Tout désélectionner'
+                              : 'Tout sélectionner'}
+                          </button>
+                        )}
+
+                        <button
+                          type="button"
+                          disabled={selectedCustomerMessageIds.length === 0 || customerMessageDeleting}
+                          onClick={() => setShowDeleteMessagesConfirmModal(true)}
+                          className="inline-flex items-center gap-1.5 px-3.5 py-1.5 bg-rose-600 hover:bg-rose-500 disabled:opacity-40 disabled:cursor-not-allowed text-white text-xs font-bold rounded-xl transition-all shadow-xs cursor-pointer"
+                          title="Supprimer les messages cochés"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                          <span>Supprimer ({selectedCustomerMessageIds.length})</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={handleExitMessageSelectMode}
+                          className="px-2.5 py-1.5 text-xs font-bold text-slate-300 hover:text-white hover:bg-slate-800 rounded-xl transition-colors cursor-pointer"
+                        >
+                          Annuler
+                        </button>
                       </div>
                     </div>
+                  ) : (
+                    <div className="p-4 bg-white border-b border-slate-200/80 flex items-center justify-between shadow-2xs shrink-0">
+                      <div className="flex items-center space-x-3.5 min-w-0">
+                        <div className="relative shrink-0">
+                          {activeCustomer.avatar_url ? (
+                            <img
+                              src={activeCustomer.avatar_url}
+                              alt={activeCustomer.name}
+                              className="w-11 h-11 rounded-full object-cover border border-slate-200 shrink-0"
+                            />
+                          ) : (
+                            <div className="w-11 h-11 rounded-full bg-slate-900 text-white flex items-center justify-center font-extrabold text-xs shrink-0 shadow-2xs">
+                              {getInitials(activeCustomer.name)}
+                            </div>
+                          )}
+                          {isCustomerOnline && (
+                            <span className="absolute bottom-0 right-0 w-3 h-3 bg-emerald-500 rounded-full border-2 border-white" />
+                          )}
+                        </div>
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2">
+                            <h3 className="font-extrabold text-slate-900 text-base truncate leading-tight">
+                              {activeCustomer.name}
+                            </h3>
+                            <button
+                              onClick={() => handleToggleCustomerFavorite(activeCustomer.id, activeCustomer.is_favorite)}
+                              className="p-1 text-slate-400 hover:text-slate-700 transition-colors cursor-pointer"
+                              title={activeCustomer.is_favorite ? 'Retirer des favoris' : 'Marquer comme favori'}
+                            >
+                              <Bookmark
+                                className={`w-4 h-4 ${
+                                  activeCustomer.is_favorite
+                                    ? 'fill-slate-700 text-slate-700'
+                                    : 'text-slate-400 hover:text-slate-600'
+                                }`}
+                              />
+                            </button>
+                          </div>
+                        </div>
+                      </div>
 
-                    {/* Action icons on top right - visually disabled with tooltip */}
-                    <div className="flex items-center space-x-2 shrink-0">
+                      {custMessages.length > 0 && (
+                        <div className="flex items-center space-x-1">
+                          <button
+                            type="button"
+                            onClick={() => setIsCustomerMessageSelectMode(true)}
+                            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-slate-600 hover:text-slate-900 hover:bg-slate-100 rounded-xl border border-slate-200 transition-colors cursor-pointer"
+                            title="Sélectionner des messages pour les supprimer"
+                          >
+                            <CheckSquare className="w-3.5 h-3.5 text-slate-500" />
+                            <span>Sélectionner</span>
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Customer Message Deletion Error Alert */}
+                  {customerMessageDeleteError && (
+                    <div className="mx-4 mt-3 p-3 bg-rose-50 border border-rose-200 text-rose-800 text-xs rounded-xl flex items-center justify-between shadow-2xs shrink-0">
+                      <div className="flex items-center space-x-2 min-w-0">
+                        <Trash2 className="w-4 h-4 text-rose-600 shrink-0" />
+                        <span className="font-medium truncate">{customerMessageDeleteError}</span>
+                      </div>
                       <button
-                        className="p-2 opacity-40 hover:opacity-60 rounded-full transition-all cursor-not-allowed text-slate-700"
-                        title="Appel vidéo (Disponible en Phase 2)"
+                        type="button"
+                        onClick={() => setCustomerMessageDeleteError(null)}
+                        className="p-1 text-rose-600 hover:bg-rose-100 rounded-lg cursor-pointer shrink-0 ml-2"
                       >
-                        <Video className="w-5 h-5" />
-                      </button>
-                      <button
-                        className="p-2 opacity-40 hover:opacity-60 rounded-full transition-all cursor-not-allowed text-slate-700"
-                        title="Appel vocal (Disponible en Phase 2)"
-                      >
-                        <Phone className="w-5 h-5" />
-                      </button>
-                      <button
-                        className="p-2 opacity-40 hover:opacity-60 rounded-full transition-all cursor-not-allowed text-slate-700"
-                        title="Rechercher dans la discussion (Disponible en Phase 2)"
-                      >
-                        <Search className="w-5 h-5" />
+                        <X className="w-3.5 h-3.5" />
                       </button>
                     </div>
-                  </div>
+                  )}
 
                   {/* Messages Thread Body */}
-                  <div className="flex-1 p-6 overflow-y-auto space-y-4 bg-[#FAF7F2]/40">
-                    {realMessages.length === 0 ? (
-                      /* Clean empty state if no real messages exist in database */
+                  <div className="flex-1 min-h-0 p-4 sm:p-6 overflow-y-auto space-y-4 bg-[#FAF7F2]/40 select-none">
+                    {customerMessagesLoading ? (
+                      <div className="flex-1 h-full flex flex-col items-center justify-center p-8 text-center my-auto min-h-[360px]">
+                        <Loader2 className="w-6 h-6 animate-spin text-slate-400 mb-2" />
+                        <p className="text-xs text-slate-400 font-medium">Chargement des messages...</p>
+                      </div>
+                    ) : custMessages.length === 0 ? (
                       <div className="flex-1 h-full flex flex-col items-center justify-center p-8 text-center my-auto min-h-[360px]">
                         <div className="w-12 h-12 rounded-full bg-slate-100 flex items-center justify-center text-slate-400 mb-3 border border-slate-200/80">
-                          <MessageSquareWarning className="w-6 h-6 text-slate-400" />
+                          <MessageSquare className="w-6 h-6 text-slate-400" />
                         </div>
                         <p className="text-sm font-extrabold text-slate-700 mb-1">Aucun message pour le moment.</p>
                         <p className="text-xs text-slate-400 font-medium max-w-xs">
-                          Aucun échange enregistré dans l&apos;historique de ce client.
+                          Envoyez un message ou partagez un document ci-dessous pour démarrer l&apos;échange avec ce client.
                         </p>
                       </div>
                     ) : (
-                      /* Display actual messages if any exist in DB */
                       <div className="space-y-3 max-w-2xl mx-auto">
-                        {realMessages.map((msg) => {
-                          const isSentByMerchant = msg.event_type === 'order_alert_sent' || msg.event_type === 'relance_sent';
+                        {custMessages.map((msg) => {
+                          const isSentByMerchant = msg.sender === 'merchant';
+                          const isSelected = selectedCustomerMessageIds.includes(msg.id);
+
                           return (
                             <div
                               key={msg.id}
-                              className={`flex flex-col ${isSentByMerchant ? 'items-end' : 'items-start'}`}
+                              className={`group flex items-center gap-2.5 transition-all ${
+                                isSentByMerchant ? 'justify-end' : 'justify-start'
+                              }`}
                             >
+                              {/* Left Checkbox (for customer messages in select mode) */}
+                              {isCustomerMessageSelectMode && !isSentByMerchant && (
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleToggleMessageSelection(msg.id);
+                                  }}
+                                  className="p-1 text-slate-400 hover:text-slate-700 transition-colors cursor-pointer shrink-0"
+                                >
+                                  {isSelected ? (
+                                    <CheckSquare className="w-5 h-5 text-[#1B4B4A] fill-[#1B4B4A]/10" />
+                                  ) : (
+                                    <Square className="w-5 h-5 text-slate-300" />
+                                  )}
+                                </button>
+                              )}
+
+                              {/* Message Bubble Container */}
                               <div
-                                className={`p-3.5 rounded-2xl max-w-md text-xs font-medium shadow-2xs ${
+                                onMouseDown={() => handleMessagePointerDown(msg.id)}
+                                onMouseUp={handleMessagePointerUpOrLeave}
+                                onMouseLeave={handleMessagePointerUpOrLeave}
+                                onTouchStart={() => handleMessagePointerDown(msg.id)}
+                                onTouchEnd={handleMessagePointerUpOrLeave}
+                                onTouchCancel={handleMessagePointerUpOrLeave}
+                                onClick={() => {
+                                  if (isCustomerMessageSelectMode) {
+                                    handleToggleMessageSelection(msg.id);
+                                  }
+                                }}
+                                className={`relative p-3.5 rounded-2xl max-w-md text-xs font-medium shadow-2xs transition-all ${
+                                  isCustomerMessageSelectMode ? 'cursor-pointer' : ''
+                                } ${
+                                  isSelected
+                                    ? 'ring-2 ring-[#1B4B4A] ring-offset-2 scale-[1.01]'
+                                    : ''
+                                } ${
                                   isSentByMerchant
                                     ? 'bg-[#1B4B4A] text-white rounded-tr-xs'
                                     : 'bg-white text-slate-800 border border-slate-200/80 rounded-tl-xs'
                                 }`}
                               >
-                                <p>{msg.payload?.message || 'Notification WhatsApp'}</p>
-                                <span
-                                  className={`text-[9px] block mt-1 text-right ${
+                                {/* Media attachment preview */}
+                                {msg.media_url && (
+                                  <div className="mb-2">
+                                    {msg.media_type === 'image' ? (
+                                      <button
+                                        type="button"
+                                        onClick={(e) => {
+                                          if (isCustomerMessageSelectMode) {
+                                            e.stopPropagation();
+                                            handleToggleMessageSelection(msg.id);
+                                            return;
+                                          }
+                                          setActiveMediaViewer({
+                                            url: msg.media_url!,
+                                            mediaType: 'image',
+                                            name: msg.media_name || 'Image',
+                                            size: msg.media_size,
+                                          });
+                                        }}
+                                        className="block w-full text-left overflow-hidden rounded-xl border border-white/20 hover:opacity-95 transition-opacity cursor-pointer"
+                                        title={
+                                          isCustomerMessageSelectMode
+                                            ? 'Cliquer pour sélectionner'
+                                            : 'Cliquer pour afficher en grand'
+                                        }
+                                      >
+                                        <img
+                                          src={msg.media_url}
+                                          alt={msg.media_name || 'Image'}
+                                          className="max-h-60 w-full object-cover rounded-xl"
+                                        />
+                                      </button>
+                                    ) : (
+                                      <button
+                                        type="button"
+                                        onClick={(e) => {
+                                          if (isCustomerMessageSelectMode) {
+                                            e.stopPropagation();
+                                            handleToggleMessageSelection(msg.id);
+                                            return;
+                                          }
+                                          setActiveMediaViewer({
+                                            url: msg.media_url!,
+                                            mediaType: msg.media_type || 'document',
+                                            name: msg.media_name || 'Document joint',
+                                            size: msg.media_size,
+                                          });
+                                        }}
+                                        className={`w-full flex items-center gap-2.5 p-2.5 rounded-xl border transition-all text-left cursor-pointer ${
+                                          isSentByMerchant
+                                            ? 'bg-white/10 hover:bg-white/20 border-white/20 text-white'
+                                            : 'bg-slate-50 hover:bg-slate-100 border-slate-200 text-slate-800'
+                                        }`}
+                                        title={
+                                          isCustomerMessageSelectMode
+                                            ? 'Cliquer pour sélectionner'
+                                            : 'Cliquer pour prévisualiser ou télécharger'
+                                        }
+                                      >
+                                        <File className="w-5 h-5 shrink-0" />
+                                        <div className="flex-1 min-w-0">
+                                          <p className="text-xs font-bold truncate">
+                                            {msg.media_name || 'Document joint'}
+                                          </p>
+                                          {msg.media_size ? (
+                                            <p className={`text-[10px] ${isSentByMerchant ? 'text-emerald-200' : 'text-slate-400'}`}>
+                                              {(msg.media_size / (1024 * 1024)).toFixed(1)} Mo
+                                            </p>
+                                          ) : null}
+                                        </div>
+                                        <ExternalLink className="w-4 h-4 shrink-0 opacity-70" />
+                                      </button>
+                                    )}
+                                  </div>
+                                )}
+
+                                {/* Text content */}
+                                {msg.content && <p className="leading-relaxed whitespace-pre-wrap">{msg.content}</p>}
+
+                                {/* Time and status */}
+                                <div
+                                  className={`text-[9px] flex items-center justify-end gap-1 mt-1.5 ${
                                     isSentByMerchant ? 'text-emerald-200' : 'text-slate-400'
                                   }`}
                                 >
-                                  {new Date(msg.created_at).toLocaleTimeString('fr-FR', {
-                                    hour: '2-digit',
-                                    minute: '2-digit',
-                                  })}
-                                </span>
+                                  <span>
+                                    {new Date(msg.created_at).toLocaleTimeString('fr-FR', {
+                                      hour: '2-digit',
+                                      minute: '2-digit',
+                                    })}
+                                  </span>
+                                  {isSentByMerchant && (
+                                    <CheckCheck className="w-3.5 h-3.5 text-emerald-300" />
+                                  )}
+                                </div>
                               </div>
+
+                              {/* Right Checkbox (for merchant messages in select mode) */}
+                              {isCustomerMessageSelectMode && isSentByMerchant && (
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleToggleMessageSelection(msg.id);
+                                  }}
+                                  className="p-1 text-slate-400 hover:text-slate-700 transition-colors cursor-pointer shrink-0"
+                                >
+                                  {isSelected ? (
+                                    <CheckSquare className="w-5 h-5 text-[#1B4B4A] fill-[#1B4B4A]/10" />
+                                  ) : (
+                                    <Square className="w-5 h-5 text-slate-300" />
+                                  )}
+                                </button>
+                              )}
                             </div>
                           );
                         })}
+                        <div ref={customerMessagesEndRef} />
                       </div>
                     )}
                   </div>
 
-                  {/* Bottom Disabled Message Input Bar */}
+                  {/* Active Message Input Bar */}
                   <div className="p-4 bg-white border-t border-slate-200/80 space-y-2 shrink-0">
-                    <div className="flex items-center space-x-2">
+                    {customerChatError && (
+                      <div className="p-2.5 bg-rose-50 border border-rose-200 text-rose-700 text-xs rounded-xl flex items-center justify-between">
+                        <span className="font-medium">{customerChatError}</span>
+                        <button
+                          onClick={() => setCustomerChatError(null)}
+                          className="p-1 hover:bg-rose-100 rounded-lg text-rose-700"
+                        >
+                          <X className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    )}
+
+                    {/* Pending Attachment Preview Box */}
+                    {customerPendingAttachment && (
+                      <div className="bg-slate-50 border border-slate-200/90 rounded-2xl p-2.5 flex items-center justify-between gap-3 shadow-2xs">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setActiveMediaViewer({
+                              url: customerPendingAttachment.previewUrl,
+                              mediaType: customerPendingAttachment.mediaType,
+                              name: customerPendingAttachment.name,
+                              size: customerPendingAttachment.size,
+                            });
+                          }}
+                          className="flex items-center space-x-3 min-w-0 flex-1 text-left hover:opacity-90 transition-opacity cursor-pointer group"
+                          title="Cliquer pour prévisualiser le fichier"
+                        >
+                          {customerPendingAttachment.mediaType === 'image' ? (
+                            <div className="relative w-12 h-12 rounded-xl overflow-hidden border border-slate-200 bg-slate-100 shrink-0 group-hover:ring-2 group-hover:ring-[#1B4B4A]/20 transition-all">
+                              <img
+                                src={customerPendingAttachment.previewUrl}
+                                alt={customerPendingAttachment.name}
+                                className="w-full h-full object-cover"
+                              />
+                            </div>
+                          ) : customerPendingAttachment.mediaType === 'video' ? (
+                            <div className="w-12 h-12 rounded-xl border border-slate-800 bg-slate-900 text-white flex items-center justify-center shrink-0 group-hover:ring-2 group-hover:ring-[#1B4B4A]/20 transition-all">
+                              <Video className="w-5 h-5" />
+                            </div>
+                          ) : (
+                            <div className="w-12 h-12 rounded-xl border border-emerald-200 bg-emerald-50 text-[#1B4B4A] flex items-center justify-center shrink-0 group-hover:ring-2 group-hover:ring-[#1B4B4A]/20 transition-all">
+                              <FileText className="w-5 h-5" />
+                            </div>
+                          )}
+
+                          <div className="min-w-0 flex-1">
+                            <p className="text-xs font-bold text-slate-900 truncate group-hover:text-[#1B4B4A] transition-colors">
+                              {customerPendingAttachment.name}
+                            </p>
+                            <p className="text-[10px] text-slate-500 font-medium flex items-center gap-1.5 mt-0.5">
+                              <span>
+                                {customerPendingAttachment.size > 1024 * 1024
+                                  ? (customerPendingAttachment.size / (1024 * 1024)).toFixed(1) + ' Mo'
+                                  : Math.max(1, Math.round(customerPendingAttachment.size / 1024)) + ' Ko'}
+                              </span>
+                              <span>•</span>
+                              <span className="text-emerald-700 font-semibold">En attente (cliquer pour voir)</span>
+                            </p>
+                          </div>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={handleRemoveCustomerPendingAttachment}
+                          disabled={customerChatSending || customerChatMediaUploading}
+                          className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-xl transition-all cursor-pointer disabled:opacity-50"
+                          title="Retirer la pièce jointe"
+                        >
+                          <X className="w-4 h-4" />
+                        </button>
+                      </div>
+                    )}
+
+                    <form onSubmit={handleSendCustomerMessage} className="flex items-center space-x-2">
+                      {/* Media Attachment Button */}
                       <button
-                        disabled
-                        className="p-2.5 text-slate-400 opacity-40 hover:opacity-60 rounded-xl cursor-not-allowed"
-                        title="Disponible en Phase 2"
+                        type="button"
+                        onClick={() => customerFileInputRef.current?.click()}
+                        disabled={customerChatMediaUploading || customerChatSending}
+                        className={`p-2.5 rounded-xl transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed ${
+                          customerPendingAttachment
+                            ? 'bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100'
+                            : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+                        }`}
+                        title="Joindre un fichier (Image, PDF, document, max 10 Mo)"
                       >
-                        <Smile className="w-5 h-5" />
+                        {customerChatMediaUploading ? (
+                          <Loader2 className="w-5 h-5 animate-spin text-emerald-600" />
+                        ) : (
+                          <Paperclip className="w-5 h-5" />
+                        )}
                       </button>
-                      <button
-                        disabled
-                        className="p-2.5 text-slate-400 opacity-40 hover:opacity-60 rounded-xl cursor-not-allowed"
-                        title="Disponible en Phase 2"
-                      >
-                        <Paperclip className="w-5 h-5" />
-                      </button>
+
+                      {/* Text Input / Caption */}
                       <input
                         type="text"
-                        placeholder="Écrire un message..."
-                        disabled
-                        readOnly
-                        className="flex-1 bg-slate-50 text-slate-400 placeholder:text-slate-400 border border-slate-200/80 rounded-2xl px-4 py-2.5 text-xs cursor-not-allowed font-medium outline-none"
+                        placeholder={
+                          customerPendingAttachment
+                            ? `Ajouter une légende pour ${activeCustomer.name} (optionnel)...`
+                            : `Écrire un message à ${activeCustomer.name}...`
+                        }
+                        value={customerChatInput}
+                        onChange={(e) => setCustomerChatInput(e.target.value)}
+                        disabled={customerChatSending || customerChatMediaUploading}
+                        className="flex-1 bg-slate-50 hover:bg-slate-100/80 focus:bg-white text-slate-900 placeholder:text-slate-400 border border-slate-200/80 rounded-2xl px-4 py-2.5 text-xs font-medium outline-none focus:border-emerald-500 transition-all"
                       />
+
+                      {/* Send Button */}
                       <button
-                        disabled
-                        className="p-2.5 text-slate-400 opacity-40 hover:opacity-60 rounded-xl cursor-not-allowed"
-                        title="Envoyer (Disponible en Phase 2)"
+                        type="submit"
+                        disabled={
+                          (!customerChatInput.trim() && !customerPendingAttachment) ||
+                          customerChatSending ||
+                          customerChatMediaUploading
+                        }
+                        className="p-2.5 bg-[#1B4B4A] hover:bg-[#153B3A] text-white rounded-xl shadow-2xs transition-all cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed shrink-0"
+                        title="Envoyer le message"
                       >
-                        <Send className="w-5 h-5" />
+                        {customerChatSending || customerChatMediaUploading ? (
+                          <Loader2 className="w-5 h-5 animate-spin" />
+                        ) : (
+                          <Send className="w-5 h-5" />
+                        )}
                       </button>
-                      <button
-                        disabled
-                        className="p-2.5 text-slate-400 opacity-40 hover:opacity-60 rounded-xl cursor-not-allowed"
-                        title="Message vocal (Disponible en Phase 2)"
-                      >
-                        <Mic className="w-5 h-5" />
-                      </button>
-                    </div>
-                    <div className="flex items-center justify-center space-x-1.5 text-[11px] text-slate-400 font-medium pt-1">
-                      <Lock className="w-3 h-3 text-slate-400 shrink-0" />
-                      <span>Messagerie manuelle disponible en Phase 2</span>
-                    </div>
+                    </form>
                   </div>
                 </div>
               );
@@ -5533,25 +6459,55 @@ export default function MerchantDashboard({
                                 </button>
                                 {staffTab === 'active' ? (
                                   staff.role !== 'owner' && (
-                                    <button
-                                      type="button"
-                                      onClick={() => {
-                                        setRevokingStaffMember(staff);
-                                        setRevocationReasonInput('');
-                                      }}
-                                      className="px-3 py-1 bg-rose-50 hover:bg-rose-100 text-rose-700 font-extrabold text-xs rounded-xl border border-rose-200 transition-colors cursor-pointer"
-                                    >
-                                      Révoquer
-                                    </button>
+                                    <>
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          setRevokingStaffMember(staff);
+                                          setRevocationReasonInput('');
+                                        }}
+                                        className="px-3 py-1 bg-rose-50 hover:bg-rose-100 text-rose-700 font-extrabold text-xs rounded-xl border border-rose-200 transition-colors cursor-pointer"
+                                      >
+                                        Révoquer
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => setDeletingStaffMemberState(staff)}
+                                        className="p-1.5 bg-slate-100 hover:bg-rose-50 text-slate-400 hover:text-rose-600 rounded-xl border border-slate-200 hover:border-rose-200 transition-colors cursor-pointer flex items-center justify-center"
+                                        title="Supprimer définitivement ce membre"
+                                      >
+                                        <Trash2 className="w-3.5 h-3.5" />
+                                      </button>
+                                    </>
                                   )
                                 ) : (
-                                  <button
-                                    type="button"
-                                    onClick={() => store.reactivateStaff(staff.id)}
-                                    className="px-3 py-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 font-extrabold text-xs rounded-xl border border-emerald-200 transition-colors cursor-pointer"
-                                  >
-                                    Réactiver
-                                  </button>
+                                  <>
+                                    <button
+                                      type="button"
+                                      disabled={reactivatingStaffId === staff.id}
+                                      onClick={() => handleReactivateStaff(staff.id)}
+                                      className="px-3 py-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 font-extrabold text-xs rounded-xl border border-emerald-200 transition-colors cursor-pointer disabled:opacity-50 flex items-center space-x-1"
+                                    >
+                                      {reactivatingStaffId === staff.id ? (
+                                        <>
+                                          <Loader2 className="w-3 h-3 animate-spin" />
+                                          <span>Réactivation...</span>
+                                        </>
+                                      ) : (
+                                        <span>Réactiver</span>
+                                      )}
+                                    </button>
+                                    {staff.role !== 'owner' && (
+                                      <button
+                                        type="button"
+                                        onClick={() => setDeletingStaffMemberState(staff)}
+                                        className="p-1.5 bg-slate-100 hover:bg-rose-50 text-slate-400 hover:text-rose-600 rounded-xl border border-slate-200 hover:border-rose-200 transition-colors cursor-pointer flex items-center justify-center"
+                                        title="Supprimer définitivement ce membre"
+                                      >
+                                        <Trash2 className="w-3.5 h-3.5" />
+                                      </button>
+                                    )}
+                                  </>
                                 )}
                               </div>
                             </td>
@@ -6096,7 +7052,7 @@ export default function MerchantDashboard({
                       {/* Message d'information */}
                       <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200/80 text-slate-600 text-xs flex items-start space-x-2.5">
                         <Info className="w-4 h-4 text-[#1B4B4A] shrink-0 mt-0.5" />
-                        <span>Le mot de passe actuel confirme votre identité. Le nouveau mot de passe doit comporter au moins 8 caractères.</span>
+                        <span>Cette fonctionnalité sera disponible une fois le système d&apos;authentification finalisé. Revenez bientôt.</span>
                       </div>
 
                       {/* Message de succès */}
@@ -6118,7 +7074,7 @@ export default function MerchantDashboard({
                       <form onSubmit={handleUpdatePassword} className="space-y-4">
                         {/* 1. Mot de passe actuel */}
                         <div>
-                          <label className="block text-xs font-bold text-slate-700 mb-1.5">
+                          <label className="block text-xs font-bold text-slate-700 mb-1.5 opacity-60">
                             Mot de passe actuel <span className="text-rose-500">*</span>
                           </label>
                           <div className="relative">
@@ -6130,13 +7086,14 @@ export default function MerchantDashboard({
                               value={securityCurrentPassword}
                               onChange={(e) => setSecurityCurrentPassword(e.target.value)}
                               placeholder="••••••••"
-                              disabled={securitySaving}
-                              className="w-full pl-10 pr-10 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold text-slate-900 placeholder:text-slate-400 focus:bg-white focus:outline-none focus:border-[#1B4B4A] focus:ring-2 focus:ring-[#1B4B4A]/20 transition-all disabled:opacity-50"
+                              disabled={true}
+                              className="w-full pl-10 pr-10 py-2.5 bg-slate-100 border border-slate-200 rounded-xl text-xs font-semibold text-slate-500 placeholder:text-slate-400 focus:outline-none cursor-not-allowed opacity-75"
                             />
                             <button
                               type="button"
+                              disabled={true}
                               onClick={() => setShowCurrentPassword(!showCurrentPassword)}
-                              className="absolute inset-y-0 right-0 pr-3.5 flex items-center text-slate-400 hover:text-slate-600 cursor-pointer"
+                              className="absolute inset-y-0 right-0 pr-3.5 flex items-center text-slate-400 cursor-not-allowed opacity-50"
                             >
                               {showCurrentPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                             </button>
@@ -6145,7 +7102,7 @@ export default function MerchantDashboard({
 
                         {/* 2. Nouveau mot de passe */}
                         <div>
-                          <label className="block text-xs font-bold text-slate-700 mb-1.5">
+                          <label className="block text-xs font-bold text-slate-700 mb-1.5 opacity-60">
                             Nouveau mot de passe <span className="text-rose-500">*</span>
                           </label>
                           <div className="relative">
@@ -6157,13 +7114,14 @@ export default function MerchantDashboard({
                               value={securityNewPassword}
                               onChange={(e) => setSecurityNewPassword(e.target.value)}
                               placeholder="Minimum 8 caractères"
-                              disabled={securitySaving}
-                              className="w-full pl-10 pr-10 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold text-slate-900 placeholder:text-slate-400 focus:bg-white focus:outline-none focus:border-[#1B4B4A] focus:ring-2 focus:ring-[#1B4B4A]/20 transition-all disabled:opacity-50"
+                              disabled={true}
+                              className="w-full pl-10 pr-10 py-2.5 bg-slate-100 border border-slate-200 rounded-xl text-xs font-semibold text-slate-500 placeholder:text-slate-400 focus:outline-none cursor-not-allowed opacity-75"
                             />
                             <button
                               type="button"
+                              disabled={true}
                               onClick={() => setShowNewPassword(!showNewPassword)}
-                              className="absolute inset-y-0 right-0 pr-3.5 flex items-center text-slate-400 hover:text-slate-600 cursor-pointer"
+                              className="absolute inset-y-0 right-0 pr-3.5 flex items-center text-slate-400 cursor-not-allowed opacity-50"
                             >
                               {showNewPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                             </button>
@@ -6172,7 +7130,7 @@ export default function MerchantDashboard({
 
                         {/* 3. Confirmer le nouveau mot de passe */}
                         <div>
-                          <label className="block text-xs font-bold text-slate-700 mb-1.5">
+                          <label className="block text-xs font-bold text-slate-700 mb-1.5 opacity-60">
                             Confirmer le nouveau mot de passe <span className="text-rose-500">*</span>
                           </label>
                           <div className="relative">
@@ -6184,13 +7142,14 @@ export default function MerchantDashboard({
                               value={securityConfirmPassword}
                               onChange={(e) => setSecurityConfirmPassword(e.target.value)}
                               placeholder="Répétez le nouveau mot de passe"
-                              disabled={securitySaving}
-                              className="w-full pl-10 pr-10 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold text-slate-900 placeholder:text-slate-400 focus:bg-white focus:outline-none focus:border-[#1B4B4A] focus:ring-2 focus:ring-[#1B4B4A]/20 transition-all disabled:opacity-50"
+                              disabled={true}
+                              className="w-full pl-10 pr-10 py-2.5 bg-slate-100 border border-slate-200 rounded-xl text-xs font-semibold text-slate-500 placeholder:text-slate-400 focus:outline-none cursor-not-allowed opacity-75"
                             />
                             <button
                               type="button"
+                              disabled={true}
                               onClick={() => setShowConfirmPassword(!showConfirmPassword)}
-                              className="absolute inset-y-0 right-0 pr-3.5 flex items-center text-slate-400 hover:text-slate-600 cursor-pointer"
+                              className="absolute inset-y-0 right-0 pr-3.5 flex items-center text-slate-400 cursor-not-allowed opacity-50"
                             >
                               {showConfirmPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                             </button>
@@ -6201,39 +7160,209 @@ export default function MerchantDashboard({
                         <div className="pt-2 flex justify-end">
                           <button
                             type="submit"
-                            disabled={securitySaving}
-                            className="inline-flex items-center space-x-2 px-5 py-2.5 rounded-xl bg-[#1B4B4A] hover:bg-[#153a39] text-white text-xs font-extrabold transition-all shadow-xs cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                            disabled={true}
+                            className="inline-flex items-center space-x-2 px-5 py-2.5 rounded-xl bg-[#1B4B4A] text-white text-xs font-extrabold shadow-xs opacity-50 cursor-not-allowed"
                           >
-                            {securitySaving ? (
-                              <>
-                                <Loader2 className="w-4 h-4 animate-spin" />
-                                <span>Mise à jour en cours...</span>
-                              </>
-                            ) : (
-                              <>
-                                <Check className="w-4 h-4" />
-                                <span>Mettre à jour le mot de passe</span>
-                              </>
-                            )}
+                            <Check className="w-4 h-4" />
+                            <span>Mettre à jour le mot de passe</span>
                           </button>
                         </div>
                       </form>
                     </div>
                   </div>
-                ) : (
-                  /* Contenu pour les autres sections (Notifications, Facturation) */
-                  <div className="bg-[#FAF7F2] rounded-2xl border border-slate-200/80 p-8 text-center flex flex-col items-center justify-center min-h-[260px]">
-                    <div className="w-12 h-12 rounded-2xl bg-white border border-slate-200/80 flex items-center justify-center text-[#1B4B4A] mb-3 shadow-2xs">
-                      {activeProfileSection === 'notifications' && <Bell className="w-6 h-6" />}
-                      {activeProfileSection === 'billing' && <CreditCard className="w-6 h-6" />}
+                ) : activeProfileSection === 'notifications' ? (
+                  /* Section Préférences de Notification avec 2 Toggles */
+                  <div className="space-y-6">
+                    {/* Alerte d'erreur éventuelle */}
+                    {notifyError && (
+                      <div className="p-3.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs font-medium flex items-center space-x-2.5 animate-in fade-in">
+                        <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+                        <span>{notifyError}</span>
+                      </div>
+                    )}
+
+                    <div className="bg-white rounded-2xl border border-slate-200/80 p-5 sm:p-6 space-y-6">
+                      <div className="flex items-center space-x-3 pb-3 border-b border-slate-100">
+                        <div className="w-8 h-8 rounded-lg bg-[#1B4B4A]/10 text-[#1B4B4A] flex items-center justify-center shrink-0">
+                          <Bell className="w-4 h-4" />
+                        </div>
+                        <div>
+                          <h4 className="text-sm font-extrabold text-slate-900">Canaux de notification</h4>
+                          <p className="text-xs text-slate-500">Choisissez les alertes que vous souhaitez recevoir pour vos commandes et activités</p>
+                        </div>
+                      </div>
+
+                      <div className="space-y-4">
+                        {/* Toggle 1: Email */}
+                        <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200/80 flex items-center justify-between transition-all hover:bg-slate-50/80">
+                          <div className="flex items-center space-x-3.5 pr-4">
+                            <div className="w-10 h-10 rounded-xl bg-white border border-slate-200 text-slate-700 flex items-center justify-center shrink-0 shadow-2xs">
+                              <Mail className="w-5 h-5 text-[#1B4B4A]" />
+                            </div>
+                            <div>
+                              <div className="text-xs font-extrabold text-slate-900 flex items-center space-x-2">
+                                <span>Notifications par Email</span>
+                                {notifySavedFeedback === 'email' && (
+                                  <span className="inline-flex items-center space-x-1 text-[11px] text-emerald-600 font-bold bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200 animate-in fade-in">
+                                    <Check className="w-3 h-3" />
+                                    <span>Enregistré</span>
+                                  </span>
+                                )}
+                              </div>
+                              <p className="text-[11px] text-slate-500 mt-0.5">
+                                Recevez les résumés quotidiens, rapports financiers et confirmations importantes par email.
+                              </p>
+                            </div>
+                          </div>
+
+                          <div className="shrink-0 flex items-center space-x-2">
+                            {notifySavingType === 'email' && (
+                              <Loader2 className="w-4 h-4 text-[#1B4B4A] animate-spin" />
+                            )}
+                            <button
+                              type="button"
+                              role="switch"
+                              aria-checked={notifyEmail}
+                              disabled={notifySavingType === 'email'}
+                              onClick={() => handleToggleNotification('email', !notifyEmail)}
+                              className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-[#1B4B4A]/20 ${
+                                notifyEmail ? 'bg-[#1B4B4A]' : 'bg-slate-300'
+                              } ${notifySavingType === 'email' ? 'opacity-50 cursor-wait' : ''}`}
+                            >
+                              <span
+                                className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-md ring-0 transition duration-200 ease-in-out ${
+                                  notifyEmail ? 'translate-x-5' : 'translate-x-0'
+                                }`}
+                              />
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Toggle 2: WhatsApp */}
+                        <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200/80 flex items-center justify-between transition-all hover:bg-slate-50/80">
+                          <div className="flex items-center space-x-3.5 pr-4">
+                            <div className="w-10 h-10 rounded-xl bg-white border border-slate-200 text-emerald-600 flex items-center justify-center shrink-0 shadow-2xs">
+                              <MessageSquare className="w-5 h-5 text-emerald-600" />
+                            </div>
+                            <div>
+                              <div className="text-xs font-extrabold text-slate-900 flex items-center space-x-2">
+                                <span>Notifications WhatsApp</span>
+                                {notifySavedFeedback === 'whatsapp' && (
+                                  <span className="inline-flex items-center space-x-1 text-[11px] text-emerald-600 font-bold bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200 animate-in fade-in">
+                                    <Check className="w-3 h-3" />
+                                    <span>Enregistré</span>
+                                  </span>
+                                )}
+                              </div>
+                              <p className="text-[11px] text-slate-500 mt-0.5">
+                                Alertes instantanées pour les nouvelles commandes entrantes et les assignations de livraison.
+                              </p>
+                            </div>
+                          </div>
+
+                          <div className="shrink-0 flex items-center space-x-2">
+                            {notifySavingType === 'whatsapp' && (
+                              <Loader2 className="w-4 h-4 text-[#1B4B4A] animate-spin" />
+                            )}
+                            <button
+                              type="button"
+                              role="switch"
+                              aria-checked={notifyWhatsApp}
+                              disabled={notifySavingType === 'whatsapp'}
+                              onClick={() => handleToggleNotification('whatsapp', !notifyWhatsApp)}
+                              className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-[#1B4B4A]/20 ${
+                                notifyWhatsApp ? 'bg-emerald-600' : 'bg-slate-300'
+                              } ${notifySavingType === 'whatsapp' ? 'opacity-50 cursor-wait' : ''}`}
+                            >
+                              <span
+                                className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-md ring-0 transition duration-200 ease-in-out ${
+                                  notifyWhatsApp ? 'translate-x-5' : 'translate-x-0'
+                                }`}
+                              />
+                            </button>
+                          </div>
+                        </div>
+                      </div>
                     </div>
-                    <h4 className="text-sm font-extrabold text-slate-800 mb-1">
-                      {activeProfileSection === 'notifications' && 'Préférences de Notification'}
-                      {activeProfileSection === 'billing' && 'Abonnement & Facturation'} — Structure validée
-                    </h4>
-                    <p className="text-xs text-slate-500 max-w-md">
-                      Navigation interne opérationnelle. Prêt pour l&apos;intégration des formulaires et champs détaillés lors de l&apos;étape suivante.
-                    </p>
+                  </div>
+                ) : (
+                  /* Section Abonnement & Facturation */
+                  <div className="space-y-6">
+                    {/* Bloc 1 : Forfait actuel */}
+                    <div className="bg-white rounded-2xl border border-slate-200/80 p-5 sm:p-6 space-y-5">
+                      <div className="flex items-center space-x-3 pb-3 border-b border-slate-100">
+                        <div className="w-8 h-8 rounded-lg bg-[#1B4B4A]/10 text-[#1B4B4A] flex items-center justify-center shrink-0">
+                          <CreditCard className="w-4 h-4" />
+                        </div>
+                        <div>
+                          <h4 className="text-sm font-extrabold text-slate-900">Forfait actuel</h4>
+                          <p className="text-xs text-slate-500">Détails de votre offre de service et maintenance</p>
+                        </div>
+                      </div>
+
+                      {/* Carte du forfait */}
+                      <div className="p-4 sm:p-5 rounded-2xl bg-slate-50 border border-slate-200/80 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                        <div className="flex items-start space-x-3.5">
+                          <div className="w-10 h-10 rounded-xl bg-[#1B4B4A] text-white flex items-center justify-center shrink-0 shadow-2xs mt-0.5">
+                            <Sparkles className="w-5 h-5" />
+                          </div>
+                          <div>
+                            <div className="flex items-center space-x-2.5">
+                              <span className="text-sm font-extrabold text-slate-900">Forfait Business</span>
+                              <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-[11px] font-extrabold bg-[#1B4B4A]/10 text-[#1B4B4A] border border-[#1B4B4A]/20">
+                                Actif
+                              </span>
+                            </div>
+                            <p className="text-xs text-slate-500 mt-1">
+                              Maintenance mensuelle — facturation gérée directement avec Autoslash AI.
+                            </p>
+                          </div>
+                        </div>
+
+                        <div className="shrink-0 flex sm:self-center">
+                          <button
+                            type="button"
+                            disabled={true}
+                            title="Fonctionnalité disponible prochainement"
+                            className="w-full sm:w-auto px-4 py-2 bg-slate-200 text-slate-500 font-bold text-xs rounded-xl cursor-not-allowed opacity-75 transition-colors"
+                          >
+                            Changer de forfait
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Note informative */}
+                      <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200/80 text-slate-600 text-xs flex items-start space-x-2.5">
+                        <Info className="w-4 h-4 text-[#1B4B4A] shrink-0 mt-0.5" />
+                        <span>
+                          Le changement de formule et la gestion automatisée des abonnements seront disponibles prochainement dans cette interface.
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Bloc 2 : Historique de facturation */}
+                    <div className="bg-white rounded-2xl border border-slate-200/80 p-5 sm:p-6 space-y-5">
+                      <div className="flex items-center space-x-3 pb-3 border-b border-slate-100">
+                        <div className="w-8 h-8 rounded-lg bg-[#1B4B4A]/10 text-[#1B4B4A] flex items-center justify-center shrink-0">
+                          <FileText className="w-4 h-4" />
+                        </div>
+                        <div>
+                          <h4 className="text-sm font-extrabold text-slate-900">Historique de facturation</h4>
+                          <p className="text-xs text-slate-500">Consultez et téléchargez vos factures de maintenance</p>
+                        </div>
+                      </div>
+
+                      {/* État vide sobre et honnête */}
+                      <div className="py-10 px-4 rounded-2xl bg-slate-50 border border-slate-200/80 text-center flex flex-col items-center justify-center space-y-2">
+                        <div className="w-10 h-10 rounded-xl bg-white border border-slate-200 text-slate-400 flex items-center justify-center shadow-2xs mb-1">
+                          <FileText className="w-5 h-5 text-slate-400" />
+                        </div>
+                        <p className="text-xs font-bold text-slate-700">Aucune facture disponible pour le moment</p>
+                        <p className="text-[11px] text-slate-500 max-w-sm">
+                          Vos factures et reçus de maintenance apparaîtront ici dès leur émission.
+                        </p>
+                      </div>
+                    </div>
                   </div>
                 )}
               </div>
@@ -6377,15 +7506,133 @@ export default function MerchantDashboard({
                 </div>
               </div>
 
-              <div>
-                <label className="font-extrabold text-slate-700 block mb-1">URL de l&apos;image</label>
-                <input
-                  type="url"
-                  value={editingProduct?.image_url || ''}
-                  onChange={(e) => setEditingProduct({ ...editingProduct, image_url: e.target.value })}
-                  className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-slate-900 font-mono text-[11px] focus:outline-none focus:border-emerald-500 shadow-2xs"
-                  placeholder="https://..."
-                />
+              {/* Image Input: File Upload OR Direct URL */}
+              <div className="space-y-2">
+                <label className="font-extrabold text-slate-700 block mb-1">
+                  Photo du produit
+                </label>
+
+                {/* Upload Button + File Input + Direct URL */}
+                <div className="space-y-3 p-3 bg-slate-50 border border-slate-200/80 rounded-2xl">
+                  <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3">
+                    {/* Hidden file input */}
+                    <input
+                      type="file"
+                      id="product-image-upload-input"
+                      accept="image/jpeg,image/png,image/webp,image/gif,image/heic,image/heif,image/*"
+                      className="hidden"
+                      onChange={async (e) => {
+                        const file = e.target.files?.[0];
+                        if (!file) return;
+                        setProductImageError(null);
+
+                        // Client-side 5MB size check
+                        const MAX_SIZE_BYTES = 5 * 1024 * 1024;
+                        if (file.size > MAX_SIZE_BYTES) {
+                          const sizeMb = (file.size / (1024 * 1024)).toFixed(1);
+                          setProductImageError(`L'image est trop volumineuse (${sizeMb} Mo). La taille maximale est de 5 Mo.`);
+                          e.target.value = '';
+                          return;
+                        }
+
+                        setProductImageUploading(true);
+                        try {
+                          const res = await uploadProductImage(file, business.id);
+                          if (res.success && res.url) {
+                            setEditingProduct((prev) => ({ ...(prev || {}), image_url: res.url }));
+                          } else {
+                            setProductImageError(res.error || "Échec de l'upload de l'image.");
+                          }
+                        } catch (err: any) {
+                          setProductImageError(err?.message || "Erreur lors de l'envoi de l'image.");
+                        } finally {
+                          setProductImageUploading(false);
+                          e.target.value = '';
+                        }
+                      }}
+                    />
+
+                    {/* Trigger Button */}
+                    <label
+                      htmlFor="product-image-upload-input"
+                      className={`px-4 py-2.5 rounded-xl font-extrabold text-xs flex items-center space-x-2 transition-all cursor-pointer shadow-2xs border ${
+                        productImageUploading
+                          ? 'bg-slate-200 text-slate-500 border-slate-300 cursor-not-allowed'
+                          : 'bg-white hover:bg-slate-100 text-slate-800 border-slate-300 hover:border-slate-400'
+                      }`}
+                    >
+                      {productImageUploading ? (
+                        <>
+                          <Loader2 className="w-4 h-4 text-emerald-600 animate-spin" />
+                          <span>Upload en cours...</span>
+                        </>
+                      ) : (
+                        <>
+                          <Upload className="w-4 h-4 text-emerald-600" />
+                          <span>Uploader une image</span>
+                        </>
+                      )}
+                    </label>
+
+                    <span className="text-[11px] text-slate-400 font-medium">
+                      Max 5 Mo (JPEG, PNG, WEBP, GIF, HEIC/iPhone)
+                    </span>
+                  </div>
+
+                  {/* Direct Image URL input */}
+                  <div>
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="text-[11px] font-bold text-slate-500">Ou saisir une URL directe :</span>
+                      {editingProduct?.image_url && (
+                        <button
+                          type="button"
+                          onClick={() => setEditingProduct((prev) => ({ ...(prev || {}), image_url: '' }))}
+                          className="text-[10px] font-bold text-rose-600 hover:underline cursor-pointer"
+                        >
+                          Effacer l&apos;image
+                        </button>
+                      )}
+                    </div>
+                    <input
+                      type="url"
+                      value={editingProduct?.image_url || ''}
+                      onChange={(e) => {
+                        setProductImageError(null);
+                        setEditingProduct({ ...editingProduct, image_url: e.target.value });
+                      }}
+                      className="w-full bg-white border border-slate-200 rounded-xl p-2.5 text-slate-900 font-mono text-[11px] focus:outline-none focus:border-emerald-500 shadow-2xs"
+                      placeholder="https://images.unsplash.com/..."
+                    />
+                  </div>
+
+                  {/* Error Message */}
+                  {productImageError && (
+                    <div className="p-2.5 bg-rose-50 border border-rose-200 rounded-xl text-rose-700 text-xs font-semibold flex items-center space-x-1.5">
+                      <AlertCircle className="w-4 h-4 shrink-0 text-rose-600" />
+                      <span>{productImageError}</span>
+                    </div>
+                  )}
+
+                  {/* Image Preview */}
+                  {editingProduct?.image_url && (
+                    <div className="flex items-center space-x-2.5 pt-1">
+                      <div className="relative w-8 h-8 rounded-lg bg-slate-100 border border-slate-200 overflow-hidden shrink-0 shadow-2xs">
+                        <img
+                          src={editingProduct.image_url}
+                          alt="Aperçu produit"
+                          className="w-full h-full object-cover"
+                          onError={(e) => {
+                            (e.target as HTMLElement).style.display = 'none';
+                          }}
+                        />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <span className="text-[11px] font-bold text-emerald-700 block">✓ Image prête</span>
+                        <p className="text-[10px] text-slate-400 font-mono truncate">{editingProduct.image_url}</p>
+                      </div>
+                    </div>
+                  )}
+                </div>
               </div>
 
               <div>
@@ -6636,12 +7883,237 @@ export default function MerchantDashboard({
                 </div>
               </div>
 
+              {inviteError && (
+                <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-rose-800 text-xs font-semibold">
+                  {inviteError}
+                </div>
+              )}
+
               <div className="pt-2 sticky bottom-0 bg-white pb-1 border-t border-slate-100 mt-2">
                 <button
                   type="submit"
-                  className="w-full py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs rounded-xl transition-all shadow-sm cursor-pointer"
+                  disabled={inviteSaving}
+                  className={`w-full py-3 text-white font-extrabold text-xs rounded-xl transition-all shadow-sm flex items-center justify-center space-x-2 ${
+                    inviteSaving
+                      ? 'bg-slate-400 cursor-not-allowed'
+                      : 'bg-emerald-600 hover:bg-emerald-700 cursor-pointer active:scale-95'
+                  }`}
                 >
-                  {editingStaffId ? 'Enregistrer les modifications' : 'Ajouter le membre'}
+                  {inviteSaving ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      <span>Enregistrement en cours...</span>
+                    </>
+                  ) : (
+                    <span>{editingStaffId ? 'Enregistrer les modifications' : 'Ajouter le membre'}</span>
+                  )}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Customer Creation Modal in Settings */}
+      {isCustomerModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-xs">
+          <div className="bg-white rounded-3xl max-w-md w-full p-6 border border-slate-200 shadow-2xl text-slate-800 flex flex-col max-h-[90vh] overflow-hidden">
+            <div className="flex items-center justify-between pb-4 border-b border-slate-100 shrink-0">
+              <div className="flex items-center space-x-2.5">
+                <div className="w-8 h-8 rounded-xl bg-[#1B4B4A]/10 text-[#1B4B4A] flex items-center justify-center">
+                  <UserPlus className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="font-extrabold text-slate-900 text-base">Ajouter un Client</h3>
+                  <p className="text-[11px] text-slate-500">Création manuelle dans le répertoire</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setIsCustomerModalOpen(false);
+                  setNewCustomerPhotoUrl('');
+                  setCustomerModalError(null);
+                }}
+                className="text-slate-400 hover:text-slate-700 p-1 rounded-full transition-colors cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleCreateCustomerSubmit} className="flex-1 overflow-y-auto pr-1 space-y-4 text-xs pt-4">
+              {/* Photo Upload using identical style & behavior as Staff/Profile */}
+              <div className="flex flex-col items-center justify-center pb-2">
+                <div className="relative flex flex-col items-center">
+                  <input
+                    type="file"
+                    accept="image/*"
+                    id="customer-photo-input"
+                    className="hidden"
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      if (!file) return;
+                      const reader = new FileReader();
+                      reader.onload = () => {
+                        if (typeof reader.result === 'string') {
+                          setCropImageSrc(reader.result);
+                          setCropTarget('customer_create');
+                          setCropModalOpen(true);
+                        }
+                      };
+                      reader.readAsDataURL(file);
+                      e.target.value = '';
+                    }}
+                  />
+                  <label
+                    htmlFor="customer-photo-input"
+                    className="relative cursor-pointer flex flex-col items-center justify-center w-20 h-20 rounded-full border-2 border-dashed border-emerald-400 bg-white hover:bg-emerald-50/50 transition-all overflow-hidden shadow-xs group"
+                  >
+                    {newCustomerPhotoUploading ? (
+                      <Loader2 className="w-6 h-6 text-emerald-600 animate-spin" />
+                    ) : newCustomerPhotoUrl ? (
+                      <>
+                        <img
+                          src={newCustomerPhotoUrl}
+                          alt="Aperçu photo"
+                          className="w-full h-full object-cover"
+                        />
+                        <div className="absolute inset-0 bg-black/40 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+                          <Camera className="w-5 h-5 text-white" />
+                        </div>
+                      </>
+                    ) : (
+                      <div className="flex flex-col items-center justify-center text-slate-400 group-hover:text-emerald-600">
+                        {newCustomerName.trim() ? (
+                          <span className="font-extrabold text-emerald-700 text-base uppercase">
+                            {newCustomerName.trim().substring(0, 2)}
+                          </span>
+                        ) : (
+                          <User className="w-7 h-7 text-slate-400 group-hover:text-emerald-600 transition-colors" />
+                        )}
+                        <div className="absolute bottom-0 inset-x-0 bg-slate-900/60 py-0.5 text-[9px] text-white font-bold text-center">
+                          Ajouter
+                        </div>
+                      </div>
+                    )}
+                  </label>
+                  <div className="flex items-center gap-2 mt-1.5">
+                    <span className="text-[11px] text-slate-500 font-medium">
+                      {newCustomerPhotoUrl ? 'Cliquer pour modifier la photo' : 'Photo de profil (optionnel)'}
+                    </span>
+                    {newCustomerPhotoUrl && (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.preventDefault();
+                          setNewCustomerPhotoUrl('');
+                        }}
+                        className="text-[11px] font-bold text-red-600 hover:text-red-700 hover:underline cursor-pointer"
+                      >
+                        Supprimer
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              <div>
+                <label className="font-extrabold text-slate-700 block mb-1">
+                  Nom complet <span className="text-rose-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={newCustomerName}
+                  onChange={(e) => setNewCustomerName(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-slate-900 font-medium focus:outline-none focus:border-emerald-500 shadow-2xs"
+                  placeholder="ex: Aminata Fall, Moussa Diop..."
+                />
+              </div>
+
+              <div>
+                <label className="font-extrabold text-slate-700 block mb-1">
+                  Numéro de téléphone <span className="text-rose-500">*</span>
+                </label>
+                <input
+                  type="tel"
+                  required
+                  value={newCustomerPhone}
+                  onChange={(e) => setNewCustomerPhone(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-slate-900 font-mono focus:outline-none focus:border-emerald-500 shadow-2xs"
+                  placeholder="+221 77 000 00 00"
+                />
+              </div>
+
+              <div>
+                <label className="font-extrabold text-slate-700 block mb-1">
+                  Préférence de canal
+                </label>
+                <div className="grid grid-cols-2 gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setNewCustomerChannel('whatsapp')}
+                    className={`p-3 rounded-xl border flex items-center justify-center space-x-2 font-bold transition-all cursor-pointer ${
+                      newCustomerChannel === 'whatsapp'
+                        ? 'bg-emerald-50 border-emerald-300 text-emerald-800 shadow-2xs'
+                        : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'
+                    }`}
+                  >
+                    <MessageSquare className="w-4 h-4 text-emerald-600" />
+                    <span>WhatsApp</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setNewCustomerChannel('app')}
+                    className={`p-3 rounded-xl border flex items-center justify-center space-x-2 font-bold transition-all cursor-pointer ${
+                      newCustomerChannel === 'app'
+                        ? 'bg-[#1B4B4A]/10 border-[#1B4B4A]/30 text-[#1B4B4A] shadow-2xs'
+                        : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'
+                    }`}
+                  >
+                    <Users className="w-4 h-4 text-[#1B4B4A]" />
+                    <span>Application</span>
+                  </button>
+                </div>
+              </div>
+
+              <div>
+                <label className="font-extrabold text-slate-700 block mb-1">
+                  Notes internes (optionnel)
+                </label>
+                <textarea
+                  rows={2}
+                  value={newCustomerNotes}
+                  onChange={(e) => setNewCustomerNotes(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-slate-900 focus:outline-none focus:border-emerald-500 shadow-2xs"
+                  placeholder="ex: Client VIP, préfère être livré après 19h..."
+                />
+              </div>
+
+              {customerModalError && (
+                <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-rose-800 text-xs font-semibold">
+                  {customerModalError}
+                </div>
+              )}
+
+              <div className="pt-2 sticky bottom-0 bg-white pb-1 border-t border-slate-100 mt-2">
+                <button
+                  type="submit"
+                  disabled={customerSaving || !newCustomerName.trim() || !newCustomerPhone.trim()}
+                  className={`w-full py-3 text-white font-extrabold text-xs rounded-xl transition-all shadow-sm flex items-center justify-center space-x-2 ${
+                    customerSaving || !newCustomerName.trim() || !newCustomerPhone.trim()
+                      ? 'bg-slate-400 cursor-not-allowed opacity-60'
+                      : 'bg-[#1B4B4A] hover:bg-[#153B3A] cursor-pointer active:scale-98'
+                  }`}
+                >
+                  {customerSaving ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      <span>Création du client...</span>
+                    </>
+                  ) : (
+                    <span>Enregistrer le client</span>
+                  )}
                 </button>
               </div>
             </form>
@@ -6704,26 +8176,58 @@ export default function MerchantDashboard({
             <div className="flex items-center justify-end space-x-2 pt-3 border-t border-slate-100">
               <button
                 type="button"
+                disabled={revokingLoading}
                 onClick={() => {
                   setRevokingStaffMember(null);
                   setRevocationReasonInput('');
                 }}
-                className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-xl cursor-pointer"
+                className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-xl cursor-pointer disabled:opacity-50"
               >
                 Annuler
               </button>
               <button
                 type="button"
-                onClick={() => {
-                  if (!revocationReasonInput.trim()) return;
-                  store.revokeStaff(revokingStaffMember.id, revocationReasonInput.trim());
-                  setRevokingStaffMember(null);
-                  setRevocationReasonInput('');
-                }}
-                disabled={!revocationReasonInput.trim()}
-                className="px-4 py-2 bg-rose-600 hover:bg-rose-700 disabled:opacity-50 text-white font-extrabold text-xs rounded-xl shadow-xs cursor-pointer"
+                onClick={handleRevokeStaffSubmit}
+                disabled={!revocationReasonInput.trim() || revokingLoading}
+                className="px-4 py-2 bg-rose-600 hover:bg-rose-700 disabled:opacity-50 text-white font-extrabold text-xs rounded-xl shadow-xs cursor-pointer flex items-center space-x-1.5"
               >
-                Confirmer la révocation
+                {revokingLoading && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                <span>Confirmer la révocation</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Staff Member Modal */}
+      {deletingStaffMemberState && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs">
+          <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl border border-slate-200 space-y-4 text-slate-800">
+            <div className="flex items-center space-x-2 text-rose-600">
+              <Trash2 className="w-5 h-5 shrink-0" />
+              <h3 className="font-extrabold text-slate-900 text-base">Supprimer définitivement le membre</h3>
+            </div>
+            <p className="text-xs text-slate-600 leading-relaxed">
+              Êtes-vous sûr de vouloir supprimer définitivement <span className="font-bold text-slate-900">{deletingStaffMemberState.name}</span> (<span className="text-slate-500">{deletingStaffMemberState.email}</span>) ? Cette action est irréversible et supprimera le membre de la base de données.
+            </p>
+
+            <div className="flex items-center justify-end space-x-2 pt-3 border-t border-slate-100">
+              <button
+                type="button"
+                disabled={deletingLoading}
+                onClick={() => setDeletingStaffMemberState(null)}
+                className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-xl cursor-pointer disabled:opacity-50"
+              >
+                Annuler
+              </button>
+              <button
+                type="button"
+                onClick={handleDeleteStaffConfirm}
+                disabled={deletingLoading}
+                className="px-4 py-2 bg-rose-600 hover:bg-rose-700 disabled:opacity-50 text-white font-extrabold text-xs rounded-xl shadow-xs cursor-pointer flex items-center space-x-1.5"
+              >
+                {deletingLoading && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                <span>Confirmer la suppression</span>
               </button>
             </div>
           </div>
@@ -7549,11 +9053,17 @@ export default function MerchantDashboard({
         )}
       </AnimatePresence>
 
-      {/* Shared Image Cropper Modal for Profile & Staff Invite */}
+      {/* Shared Image Cropper Modal for Profile, Staff Invite & Customer Create */}
       <ImageCropperModal
         isOpen={cropModalOpen}
         imageSrc={cropImageSrc}
-        title={cropTarget === 'profile' ? 'Recadrer ma photo de profil' : 'Recadrer la photo du membre'}
+        title={
+          cropTarget === 'profile'
+            ? 'Recadrer ma photo de profil'
+            : cropTarget === 'staff_invite'
+            ? 'Recadrer la photo du membre'
+            : 'Recadrer la photo du client'
+        }
         isSaving={cropSaving}
         onCancel={() => {
           setCropModalOpen(false);
@@ -7562,11 +9072,16 @@ export default function MerchantDashboard({
         onConfirm={async (croppedBlob) => {
           setCropSaving(true);
           try {
-            const url = await uploadStaffAvatar(croppedBlob, business.id);
-            if (cropTarget === 'profile') {
-              store.updateStaff(activeStaff.id, { photo_url: url, avatar_url: url });
+            if (cropTarget === 'customer_create') {
+              const url = await uploadCustomerAvatar(croppedBlob, business.id);
+              setNewCustomerPhotoUrl(url);
             } else {
-              setInvitePhotoUrl(url);
+              const url = await uploadStaffAvatar(croppedBlob, business.id);
+              if (cropTarget === 'profile') {
+                store.updateStaff(activeStaff.id, { photo_url: url, avatar_url: url });
+              } else {
+                setInvitePhotoUrl(url);
+              }
             }
             setCropModalOpen(false);
             setCropImageSrc(null);
@@ -7576,6 +9091,74 @@ export default function MerchantDashboard({
             setCropSaving(false);
           }
         }}
+      />
+
+      {/* Confirmation Modal for Deleting Selected Customer Messages */}
+      <AnimatePresence>
+        {showDeleteMessagesConfirmModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-xs">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="bg-white rounded-2xl max-w-sm w-full p-6 shadow-xl border border-slate-200/80 space-y-4"
+            >
+              <div className="flex items-center space-x-3">
+                <div className="w-10 h-10 rounded-xl bg-rose-50 border border-rose-100 flex items-center justify-center text-rose-600 shrink-0">
+                  <Trash2 className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-black text-slate-900">
+                    Supprimer {selectedCustomerMessageIds.length} message{selectedCustomerMessageIds.length > 1 ? 's' : ''} ?
+                  </h3>
+                  <p className="text-xs text-slate-500 font-medium">
+                    Cette action est irréversible.
+                  </p>
+                </div>
+              </div>
+
+              <p className="text-xs text-slate-600 leading-relaxed">
+                Voulez-vous vraiment supprimer définitivement {selectedCustomerMessageIds.length > 1 ? 'ces messages sélectionnés' : 'ce message'} de la conversation ?
+              </p>
+
+              <div className="flex items-center justify-end space-x-2 pt-2 border-t border-slate-100">
+                <button
+                  type="button"
+                  disabled={customerMessageDeleting}
+                  onClick={() => setShowDeleteMessagesConfirmModal(false)}
+                  className="px-4 py-2 bg-slate-100 hover:bg-slate-200 disabled:opacity-50 text-slate-700 rounded-xl text-xs font-bold transition-colors cursor-pointer"
+                >
+                  Annuler
+                </button>
+                <button
+                  type="button"
+                  disabled={customerMessageDeleting}
+                  onClick={handleConfirmDeleteSelectedMessages}
+                  className="inline-flex items-center gap-1.5 px-4 py-2 bg-rose-600 hover:bg-rose-700 disabled:opacity-50 text-white rounded-xl text-xs font-bold transition-colors shadow-2xs cursor-pointer"
+                >
+                  {customerMessageDeleting ? (
+                    <>
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      <span>Suppression...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Trash2 className="w-3.5 h-3.5" />
+                      <span>Supprimer</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Reusable Media Viewer Modal for Customer Chat & Previews */}
+      <MediaViewer
+        isOpen={!!activeMediaViewer}
+        onClose={() => setActiveMediaViewer(null)}
+        media={activeMediaViewer}
       />
     </div>
   );

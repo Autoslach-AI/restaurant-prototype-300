@@ -5,6 +5,7 @@ import {
   Category,
   Product,
   Customer,
+  CustomerMessage,
   Order,
   AgentEvent,
   CartItem,
@@ -102,13 +103,18 @@ export class AppStore {
   businesses: Business[];
   activeBusinessId: string;
   categories: Category[];
+  categoriesLoading: boolean = false;
   products: Product[];
+  productsLoading: boolean = false;
   customers: Customer[];
+  customersLoading: boolean = false;
+  customerMessages: Record<string, CustomerMessage[]> = {};
   orders: Order[];
   agentEvents: AgentEvent[];
   cart: CartItem[];
   waMessages: WhatsAppMessage[];
   staff: Staff[];
+  staffLoading: boolean = false;
   activeStaffId: string;
   deliveryZones: DeliveryZone[];
   paymentChannels: PaymentChannel[];
@@ -120,25 +126,26 @@ export class AppStore {
   listeners: Array<() => void> = [];
 
   constructor() {
+    const hasSupabase =
+      Boolean(process.env.NEXT_PUBLIC_SUPABASE_URL?.trim()) &&
+      Boolean(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY?.trim());
+
     this.businesses = loadFromStorage(STORAGE_KEYS.BUSINESSES, INITIAL_BUSINESSES);
     this.activeBusinessId = loadFromStorage(STORAGE_KEYS.ACTIVE_BIZ, INITIAL_BUSINESSES[0].id);
-    this.categories = loadFromStorage(STORAGE_KEYS.CATEGORIES, INITIAL_CATEGORIES);
-    this.products = loadFromStorage(STORAGE_KEYS.PRODUCTS, INITIAL_PRODUCTS);
-    this.customers = loadFromStorage(STORAGE_KEYS.CUSTOMERS, INITIAL_CUSTOMERS);
+    this.categories = hasSupabase ? [] : loadFromStorage(STORAGE_KEYS.CATEGORIES, INITIAL_CATEGORIES);
+    this.categoriesLoading = hasSupabase;
+    this.products = hasSupabase ? [] : loadFromStorage(STORAGE_KEYS.PRODUCTS, INITIAL_PRODUCTS);
+    this.productsLoading = hasSupabase;
+    this.customers = hasSupabase ? [] : loadFromStorage(STORAGE_KEYS.CUSTOMERS, INITIAL_CUSTOMERS);
+    this.customersLoading = hasSupabase;
+    this.customerMessages = loadFromStorage('cwa_customer_messages', {});
     this.orders = loadFromStorage(STORAGE_KEYS.ORDERS, INITIAL_ORDERS);
     this.agentEvents = loadFromStorage(STORAGE_KEYS.EVENTS, INITIAL_AGENT_EVENTS);
     this.cart = [];
     this.waMessages = loadFromStorage(STORAGE_KEYS.WA_MSGS, this.generateInitialWaMessages());
-    const storedStaff = loadFromStorage<Staff[]>(STORAGE_KEYS.STAFF, INITIAL_STAFF);
-    INITIAL_STAFF.forEach((initS) => {
-      if (!storedStaff.some((s) => s.id === initS.id)) {
-        storedStaff.push(initS);
-      }
-    });
-    this.staff = storedStaff;
-    saveToStorage(STORAGE_KEYS.STAFF, this.staff);
-    this.activeStaffId = INITIAL_STAFF[0].id; // Ensure active staff session defaults to owner (Amadou Diop)
-    saveToStorage(STORAGE_KEYS.ACTIVE_STAFF, this.activeStaffId);
+    this.staff = [];
+    this.staffLoading = true;
+    this.activeStaffId = '';
     this.deliveryZones = loadFromStorage(STORAGE_KEYS.DELIVERY_ZONES, INITIAL_DELIVERY_ZONES);
     this.paymentChannels = loadFromStorage(STORAGE_KEYS.PAYMENT_CHANNELS, INITIAL_PAYMENT_CHANNELS);
     this.paymentGateways = loadFromStorage(STORAGE_KEYS.PAYMENT_GATEWAY, INITIAL_PAYMENT_GATEWAYS);
@@ -472,6 +479,40 @@ export class AppStore {
   }
 
   // Product CRUD
+  setProductsList(productsList: Product[]) {
+    this.products = productsList;
+    this.productsLoading = false;
+    this.notify();
+  }
+
+  setProductsLoading(loading: boolean) {
+    this.productsLoading = loading;
+    this.notify();
+  }
+
+  addProductLocally(product: Product) {
+    const idx = this.products.findIndex((p) => p.id === product.id);
+    if (idx > -1) {
+      this.products[idx] = product;
+    } else {
+      this.products.unshift(product);
+    }
+    this.notify();
+  }
+
+  updateProductLocally(productId: string, data: Partial<Product>) {
+    const idx = this.products.findIndex((p) => p.id === productId);
+    if (idx > -1) {
+      this.products[idx] = { ...this.products[idx], ...data };
+      this.notify();
+    }
+  }
+
+  deleteProductLocally(productId: string) {
+    this.products = this.products.filter((p) => p.id !== productId);
+    this.notify();
+  }
+
   saveProduct(productData: Partial<Product> & { name: string; price: number; category_id: string }): Product {
     const activeBiz = this.getActiveBusiness();
     if (productData.id) {
@@ -508,6 +549,40 @@ export class AppStore {
   }
 
   // Category CRUD
+  setCategoriesList(categoriesList: Category[]) {
+    this.categories = categoriesList;
+    this.categoriesLoading = false;
+    this.notify();
+  }
+
+  setCategoriesLoading(loading: boolean) {
+    this.categoriesLoading = loading;
+    this.notify();
+  }
+
+  addCategoryLocally(category: Category) {
+    const idx = this.categories.findIndex((c) => c.id === category.id);
+    if (idx > -1) {
+      this.categories[idx] = category;
+    } else {
+      this.categories.push(category);
+    }
+    this.notify();
+  }
+
+  updateCategoryLocally(categoryId: string, data: Partial<Category>) {
+    const idx = this.categories.findIndex((c) => c.id === categoryId);
+    if (idx > -1) {
+      this.categories[idx] = { ...this.categories[idx], ...data };
+      this.notify();
+    }
+  }
+
+  deleteCategoryLocally(categoryId: string) {
+    this.categories = this.categories.filter((c) => c.id !== categoryId);
+    this.notify();
+  }
+
   saveCategory(name: string, categoryId?: string): Category {
     const activeBiz = this.getActiveBusiness();
     if (categoryId) {
@@ -536,6 +611,88 @@ export class AppStore {
     this.notify();
   }
 
+  // Customer CRUD & Messaging
+  setCustomersList(customersList: Customer[]) {
+    this.customers = customersList;
+    this.customersLoading = false;
+    this.notify();
+  }
+
+  setCustomersLoading(loading: boolean) {
+    this.customersLoading = loading;
+    this.notify();
+  }
+
+  addCustomerLocally(customer: Customer) {
+    const idx = this.customers.findIndex((c) => c.id === customer.id);
+    if (idx > -1) {
+      this.customers[idx] = customer;
+    } else {
+      this.customers.unshift(customer);
+    }
+    this.notify();
+  }
+
+  updateCustomerLocally(customerId: string, data: Partial<Customer>) {
+    const idx = this.customers.findIndex((c) => c.id === customerId);
+    if (idx > -1) {
+      this.customers[idx] = { ...this.customers[idx], ...data };
+      this.notify();
+    }
+  }
+
+  setCustomerMessages(customerId: string, messages: CustomerMessage[]) {
+    this.customerMessages[customerId] = messages;
+    this.notify();
+  }
+
+  getCustomerMessages(customerId: string): CustomerMessage[] {
+    return this.customerMessages[customerId] || [];
+  }
+
+  addCustomerMessage(message: CustomerMessage) {
+    const list = this.customerMessages[message.customer_id] || [];
+    const exists = list.some((m) => m.id === message.id);
+    if (exists) {
+      this.customerMessages[message.customer_id] = list.map((m) =>
+        m.id === message.id ? message : m
+      );
+    } else {
+      this.customerMessages[message.customer_id] = [...list, message];
+    }
+    this.notify();
+  }
+
+  markMessageAsReadLocally(messageId: string) {
+    let changed = false;
+    Object.keys(this.customerMessages).forEach((customerId) => {
+      this.customerMessages[customerId] = this.customerMessages[customerId].map((msg) => {
+        if (msg.id === messageId && !msg.is_read) {
+          changed = true;
+          return { ...msg, is_read: true };
+        }
+        return msg;
+      });
+    });
+    if (changed) {
+      this.notify();
+    }
+  }
+
+  deleteCustomerMessageLocally(messageId: string) {
+    let changed = false;
+    Object.keys(this.customerMessages).forEach((customerId) => {
+      const beforeLen = this.customerMessages[customerId].length;
+      this.customerMessages[customerId] = this.customerMessages[customerId].filter((msg) => msg.id !== messageId);
+      if (this.customerMessages[customerId].length !== beforeLen) {
+        changed = true;
+      }
+    });
+    if (changed) {
+      this.notify();
+    }
+  }
+
   // Update business message templates or config
   updateBusinessConfig(businessId: string, newConfig: Partial<Business['config']>, newDetails?: Partial<Business>) {
     const biz = this.businesses.find((b) => b.id === businessId);
@@ -560,17 +717,54 @@ export class AppStore {
   }
 
   // Staff and Roles Management (Section 8)
+  addStaff(member: Staff) {
+    // Check if already in list
+    const exists = this.staff.some((s) => s.id === member.id);
+    if (exists) {
+      this.staff = this.staff.map((s) => (s.id === member.id ? member : s));
+    } else {
+      this.staff.push(member);
+    }
+    this.notify();
+  }
+
+  setStaffList(staffMembers: Staff[]) {
+    this.staff = staffMembers;
+    this.staffLoading = false;
+    // Set active staff to first available member or owner
+    const activeBiz = this.getActiveBusiness();
+    const bizStaff = this.staff.filter((s) => s.business_id === activeBiz.id);
+    const owner = bizStaff.find((s) => s.role === 'owner');
+    if (owner) {
+      this.activeStaffId = owner.id;
+    } else if (bizStaff.length > 0) {
+      this.activeStaffId = bizStaff[0].id;
+    } else {
+      this.activeStaffId = '';
+    }
+    this.notify();
+  }
+
+  setStaffLoading(loading: boolean) {
+    this.staffLoading = loading;
+    this.notify();
+  }
+
   getActiveStaff(): Staff {
     const activeBiz = this.getActiveBusiness();
     const currentStaff = this.staff.find((s) => s.id === this.activeStaffId && s.business_id === activeBiz.id);
     if (currentStaff) return currentStaff;
 
-    // Fallback to business owner
+    // Fallback to business owner in existing staff
     const owner = this.staff.find((s) => s.business_id === activeBiz.id && s.role === 'owner');
     if (owner) return owner;
 
-    // Default auto-created owner if missing
-    const fallbackOwner: Staff = {
+    // First member if any
+    const firstMember = this.staff.find((s) => s.business_id === activeBiz.id);
+    if (firstMember) return firstMember;
+
+    // Default placeholder object (without mutating this.staff)
+    return {
       id: `staff_owner_${activeBiz.id}`,
       business_id: activeBiz.id,
       auth_uid: `auth_owner_${activeBiz.id}`,
@@ -589,8 +783,6 @@ export class AppStore {
       invited_by: null,
       created_at: new Date().toISOString(),
     };
-    this.staff.push(fallbackOwner);
-    return fallbackOwner;
   }
 
   setActiveStaff(staffId: string) {

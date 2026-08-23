@@ -48,10 +48,27 @@ export interface Customer {
   business_id: string;
   name: string;
   phone: string;
-  whatsapp_id: string;
+  whatsapp_id?: string;
   channel_preference?: 'whatsapp' | 'app';
   created_at: string;
   avatar_url?: string;
+  is_favorite?: boolean;
+  notes?: string;
+  last_active_at?: string;
+}
+
+export interface CustomerMessage {
+  id: string;
+  business_id: string;
+  customer_id: string;
+  sender: 'merchant' | 'customer';
+  content?: string | null;
+  media_url?: string | null;
+  media_type?: string | null;
+  media_name?: string | null;
+  media_size?: number | null;
+  is_read: boolean;
+  created_at: string;
 }
 
 export type StaffRole = 'owner' | 'collaborator';
@@ -64,6 +81,11 @@ export interface StaffPermissions {
   settings: boolean;
   staff: boolean;
   finance: boolean;
+}
+
+export interface StaffNotificationPreferences {
+  email: boolean;
+  whatsapp: boolean;
 }
 
 export interface Staff {
@@ -86,6 +108,7 @@ export interface Staff {
   last_login_at?: string;
   is_active?: boolean;
   joined_at?: string;
+  notification_preferences?: StaffNotificationPreferences;
 }
 
 export interface DeliveryZone {
@@ -240,5 +263,19 @@ export interface AttendanceRecord {
   date: string; // YYYY-MM-DD
   status: AttendanceStatus;
   reason?: string | null;
+  created_at: string;
+}
+
+export type ExpenseCategory = 'loyer' | 'salaires' | 'materiel' | 'achats_stock' | 'autre';
+
+export interface Expense {
+  id: string;
+  business_id: string;
+  category: ExpenseCategory;
+  label: string;
+  amount: number;
+  date: string; // YYYY-MM-DD
+  is_recurring: boolean;
+  created_by: string; // staff id
   created_at: string;
 }

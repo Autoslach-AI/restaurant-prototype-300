@@ -49,7 +49,7 @@ interface ClientStorefrontProps {
     deliveryFee?: number;
     customerLat?: number | null;
     customerLng?: number | null;
-  }) => { order: Order; clientMsg: string; merchantMsg: string };
+  }) => Promise<{ order: Order; clientMsg: string; merchantMsg: string }>;
   onSimulatePayment: (orderId: string) => void;
   onSubmitRating?: (orderId: string, rating: number, comment: string) => void;
 }
@@ -74,6 +74,7 @@ export default function ClientStorefront({
   const [selectedCategoryId, setSelectedCategoryId] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [isCheckoutOpen, setIsCheckoutOpen] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   // Delivery & Pickup States
   const [orderType, setOrderType] = useState<OrderType>('delivery');
@@ -147,28 +148,37 @@ export default function ClientStorefront({
     }
   };
 
-  const handleCheckoutSubmit = (e: React.FormEvent) => {
+  const handleCheckoutSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (cart.length === 0) return;
+    if (cart.length === 0 || isSubmitting) return;
 
-    const result = onCreateOrder({
-      customerName,
-      customerPhone,
-      deliveryAddress: orderType === 'pickup' ? 'À récupérer en magasin' : deliveryAddress,
-      paymentMethod,
-      orderType,
-      deliveryZoneId: orderType === 'delivery' ? (selectedZone?.id || null) : null,
-      deliveryZoneName: orderType === 'delivery' ? (selectedZone?.name || null) : null,
-      deliveryFee: currentDeliveryFee,
-      customerLat: orderType === 'delivery' ? customerLat : null,
-      customerLng: orderType === 'delivery' ? customerLng : null,
-    });
+    setIsSubmitting(true);
+    try {
+      const result = await onCreateOrder({
+        customerName,
+        customerPhone,
+        deliveryAddress: orderType === 'pickup' ? 'À récupérer en magasin' : deliveryAddress,
+        paymentMethod,
+        orderType,
+        deliveryZoneId: orderType === 'delivery' ? (selectedZone?.id || null) : null,
+        deliveryZoneName: orderType === 'delivery' ? (selectedZone?.name || null) : null,
+        deliveryFee: currentDeliveryFee,
+        customerLat: orderType === 'delivery' ? customerLat : null,
+        customerLng: orderType === 'delivery' ? customerLng : null,
+      });
 
-    setLastOrderResult(result);
-    setRatingSubmitted(false);
-    setRatingComment('');
-    setIsCheckoutOpen(false);
-    onCloseCart();
+      if (result && result.order) {
+        setLastOrderResult(result);
+        setRatingSubmitted(false);
+        setRatingComment('');
+        setIsCheckoutOpen(false);
+        onCloseCart();
+      }
+    } catch (err) {
+      console.error('Erreur lors de la soumission de la commande:', err);
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   return (
@@ -183,6 +193,7 @@ export default function ClientStorefront({
                   src={business.logo_url}
                   alt={business.name}
                   fill
+                  unoptimized
                   className="object-cover"
                   referrerPolicy="no-referrer"
                 />
@@ -284,6 +295,7 @@ export default function ClientStorefront({
                         src={product.image_url}
                         alt={product.name}
                         fill
+                        unoptimized
                         className="object-cover group-hover:scale-105 transition-transform duration-300"
                         referrerPolicy="no-referrer"
                       />
@@ -429,6 +441,7 @@ export default function ClientStorefront({
                             src={product.image_url}
                             alt={product.name}
                             fill
+                            unoptimized
                             className="object-cover"
                             referrerPolicy="no-referrer"
                           />
@@ -777,10 +790,15 @@ export default function ClientStorefront({
 
               <button
                 type="submit"
-                className="w-full py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-sm rounded-xl flex items-center justify-center space-x-2 transition-all shadow-md shadow-emerald-600/20"
+                disabled={isSubmitting}
+                className="w-full py-3 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 disabled:cursor-not-allowed text-white font-extrabold text-sm rounded-xl flex items-center justify-center space-x-2 transition-all shadow-md shadow-emerald-600/20"
               >
-                <span>Envoyer ma commande ({grandTotal.toLocaleString('fr-FR')} {business.currency})</span>
-                <Check className="w-4 h-4" />
+                <span>
+                  {isSubmitting
+                    ? 'Traitement en cours...'
+                    : `Envoyer ma commande (${grandTotal.toLocaleString('fr-FR')} ${business.currency})`}
+                </span>
+                {!isSubmitting && <Check className="w-4 h-4" />}
               </button>
             </form>
           </div>
