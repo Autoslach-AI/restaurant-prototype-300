@@ -1769,7 +1769,7 @@ export async function fetchOrdersForBusiness(businessId: string): Promise<Order[
 
   try {
     const client = getSupabase();
-    const { data, error } = await (client as any)
+    const { data: rawOrders, error } = await (client as any)
       .from('platform_orders')
       .select('*')
       .eq('business_id', businessId)
@@ -1780,7 +1780,40 @@ export async function fetchOrdersForBusiness(businessId: string): Promise<Order[
       return [];
     }
 
-    return (data as Order[]) || [];
+    const orders = (rawOrders as Order[]) || [];
+    if (orders.length === 0) {
+      return [];
+    }
+
+    const customerIds = Array.from(new Set(orders.map((o) => o.customer_id).filter(Boolean)));
+    if (customerIds.length === 0) {
+      return orders;
+    }
+
+    const { data: customersData, error: customersError } = await (client as any)
+      .from('platform_customers')
+      .select('id, name, phone, avatar_url')
+      .in('id', customerIds);
+
+    if (customersError) {
+      console.warn('Supabase fetch order customers error:', customersError.message);
+      return orders;
+    }
+
+    const customerMap = new Map<string, { name: string; phone: string; avatar_url?: string }>();
+    for (const c of (customersData || [])) {
+      customerMap.set(c.id, c);
+    }
+
+    return orders.map((order) => {
+      const cust = customerMap.get(order.customer_id);
+      return {
+        ...order,
+        customer_name: cust?.name,
+        customer_phone: cust?.phone,
+        customer_avatar: cust?.avatar_url,
+      };
+    });
   } catch (err: any) {
     console.warn('Supabase fetch orders exception:', err?.message || err);
     return [];
@@ -1837,6 +1870,7 @@ export async function insertOrder(data: {
   payment_method?: string;
   payment_reference?: string | null;
   order_type?: 'delivery' | 'pickup' | string;
+  delivery_address?: string | null;
   delivery_zone_id?: string | null;
   delivery_zone_name?: string | null;
   delivery_fee?: number;
@@ -1870,6 +1904,7 @@ export async function insertOrder(data: {
     payment_method: data.payment_method || null,
     payment_reference: data.payment_reference || null,
     order_type: data.order_type || 'delivery',
+    delivery_address: data.delivery_address || null,
     delivery_zone_id: data.delivery_zone_id || null,
     delivery_zone_name: data.delivery_zone_name || null,
     delivery_fee: data.delivery_fee !== undefined ? Number(data.delivery_fee) : 0,

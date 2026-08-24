@@ -20,6 +20,7 @@ import {
   insertProduct,
   updateProduct,
   deleteProduct,
+  insertCustomer,
   insertOrder,
   updateOrderStatus,
   cancelOrder,
@@ -151,20 +152,33 @@ export default function HomePage() {
     const deliveryFee = isDelivery ? Number(data.deliveryFee || 0) : 0;
     const totalAmount = cartItemsTotal + deliveryFee;
 
-    // 1. Trouver ou préparer le client
+    // 1. Trouver ou créer le client
     let customer = store.customers.find(
       (c) => c.business_id === activeBusiness.id && c.phone === data.customerPhone
     );
     if (!customer) {
-      customer = {
-        id: `cust_${Date.now()}`,
+      const custRes = await insertCustomer({
         business_id: activeBusiness.id,
         name: data.customerName,
         phone: data.customerPhone,
         whatsapp_id: data.customerPhone.replace(/[^0-9]/g, ''),
-        created_at: new Date().toISOString(),
-      };
-      store.customers.push(customer);
+        channel_preference: 'whatsapp',
+      });
+
+      if (!custRes.success || !custRes.customer) {
+        console.error('Erreur lors de la création du client:', custRes.error);
+        alert(`Erreur lors de la création du client : ${custRes.error || 'Échec de la base de données'}`);
+        return {
+          order: null as any,
+          clientMsg: '',
+          merchantMsg: '',
+        };
+      }
+
+      customer = custRes.customer;
+      if (!store.customers.some((c) => c.id === customer!.id)) {
+        store.customers.push(customer);
+      }
     }
 
     const orderItems = store.cart.map((cartItem) => ({
@@ -184,6 +198,7 @@ export default function HomePage() {
       payment_method: data.paymentMethod,
       payment_reference: `${(data.paymentMethod || 'WAVE').toUpperCase()}_PAY_${Math.floor(100000 + Math.random() * 900000)}`,
       order_type: data.orderType || 'delivery',
+      delivery_address: data.deliveryAddress,
       delivery_zone_id: isDelivery ? data.deliveryZoneId || null : null,
       delivery_zone_name: isDelivery ? data.deliveryZoneName || null : null,
       delivery_fee: deliveryFee,
@@ -355,6 +370,7 @@ export default function HomePage() {
           orders={orders}
           agentEvents={agentEvents}
           onUpdateOrderStatus={handleUpdateOrderStatus}
+          onCancelOrder={handleCancelOrder}
           onProcessPayment={(orderId, ref) => store.processPayment(orderId, ref)}
           onTriggerRelance={handleTriggerRelance}
           onSaveProduct={async (p) => {

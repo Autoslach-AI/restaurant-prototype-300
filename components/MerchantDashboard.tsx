@@ -143,6 +143,7 @@ interface MerchantDashboardProps {
   orders: Order[];
   agentEvents: AgentEvent[];
   onUpdateOrderStatus: (orderId: string, status: OrderStatus) => void;
+  onCancelOrder: (orderId: string, reason: string) => Promise<void>;
   onProcessPayment: (orderId: string, reference: string) => void;
   onTriggerRelance: (orderId: string) => void;
   onSaveProduct: (productData: Partial<Product> & { name: string; price: number; category_id: string }) => void;
@@ -162,6 +163,7 @@ export default function MerchantDashboard({
   orders,
   agentEvents,
   onUpdateOrderStatus,
+  onCancelOrder,
   onProcessPayment,
   onTriggerRelance,
   onSaveProduct,
@@ -528,6 +530,7 @@ export default function MerchantDashboard({
   const [isCancelModalOpen, setIsCancelModalOpen] = useState(false);
   const [cancellingOrderId, setCancellingOrderId] = useState<string | null>(null);
   const [cancellationReason, setCancellationReason] = useState<string>('');
+  const [isCancellingOrder, setIsCancellingOrder] = useState(false);
 
   // Business Profile Settings Form
   const [bizName, setBizName] = useState(business.name);
@@ -8565,27 +8568,35 @@ export default function MerchantDashboard({
             <div className="flex items-center justify-end space-x-2 pt-2 border-t border-slate-100">
               <button
                 type="button"
+                disabled={isCancellingOrder}
                 onClick={() => {
                   setIsCancelModalOpen(false);
                   setCancellingOrderId(null);
                 }}
-                className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-xl"
+                className="px-4 py-2 bg-slate-100 hover:bg-slate-200 disabled:opacity-50 text-slate-700 font-bold text-xs rounded-xl"
               >
                 Abandonner
               </button>
               <button
                 type="button"
-                disabled={!cancellationReason.trim()}
-                onClick={() => {
-                  if (cancellingOrderId && cancellationReason.trim()) {
-                    store.cancelOrder(cancellingOrderId, cancellationReason.trim());
-                    setIsCancelModalOpen(false);
-                    setCancellingOrderId(null);
+                disabled={!cancellationReason.trim() || isCancellingOrder}
+                onClick={async () => {
+                  if (cancellingOrderId && cancellationReason.trim() && !isCancellingOrder) {
+                    setIsCancellingOrder(true);
+                    try {
+                      await onCancelOrder(cancellingOrderId, cancellationReason.trim());
+                      setIsCancelModalOpen(false);
+                      setCancellingOrderId(null);
+                    } catch (err) {
+                      console.error("Erreur lors de l'annulation de la commande:", err);
+                    } finally {
+                      setIsCancellingOrder(false);
+                    }
                   }
                 }}
                 className="px-4 py-2 bg-rose-600 hover:bg-rose-700 disabled:opacity-50 text-white font-extrabold text-xs rounded-xl shadow-xs"
               >
-                Confirmer l&apos;annulation
+                {isCancellingOrder ? "Annulation en cours..." : "Confirmer l'annulation"}
               </button>
             </div>
           </div>
