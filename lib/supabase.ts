@@ -1,5 +1,5 @@
 import { createClient } from '@supabase/supabase-js';
-import { AttendanceRecord, Category, Customer, CustomerMessage, Order, OrderItem, OrderStatus, PaymentStatus, Product, Staff, StaffPermissions } from './types';
+import { AgentChatMessage, AgentChatMessageAttachment, AgentConversation, AgentProject, AttendanceRecord, Business, Category, Customer, CustomerMessage, DeliveryZone, Expense, ExpenseCategory, ExpenseCategoryItem, Order, OrderItem, OrderStatus, PaymentStatus, Product, Staff, StaffPermissions } from './types';
 import { getStore } from './store';
 
 let supabaseClient: ReturnType<typeof createClient> | null = null;
@@ -663,7 +663,7 @@ export async function upsertAttendanceRecord(record: {
 export async function updateStaffProfile(
   staffId: string,
   auth_uid: string | undefined,
-  data: { name: string; email: string; phone?: string }
+  data: { name?: string; email?: string; phone?: string; avatar_url?: string; photo_url?: string }
 ): Promise<{ success: boolean; error?: string }> {
   const store = getStore();
   store.updateStaff(staffId, data);
@@ -2201,3 +2201,1404 @@ export async function cancelOrder(
     return { success: false, error: err?.message || 'Erreur de connexion à la base de données' };
   }
 }
+
+/**
+ * ============================================================================
+ * EXPENSES CRUD (platform_expenses)
+ * ============================================================================
+ */
+
+/**
+ * 1. Fetch all expenses for a business from platform_expenses in Supabase,
+ * ordered by date descending.
+ * Optional startDate and endDate filters using .gte('date', startDate) and .lte('date', endDate).
+ * Returns empty array if error or no credentials (never invented mock data).
+ */
+export async function fetchExpensesForBusiness(
+  businessId: string,
+  startDate?: string,
+  endDate?: string
+): Promise<Expense[]> {
+  const hasCredentials =
+    Boolean(process.env.NEXT_PUBLIC_SUPABASE_URL?.trim()) &&
+    Boolean(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY?.trim());
+
+  if (!hasCredentials) {
+    return [];
+  }
+
+  try {
+    const client = getSupabase();
+    let query = (client as any)
+      .from('platform_expenses')
+      .select('*')
+      .eq('business_id', businessId)
+      .order('date', { ascending: false });
+
+    if (startDate) {
+      query = query.gte('date', startDate);
+    }
+    if (endDate) {
+      query = query.lte('date', endDate);
+    }
+
+    const { data, error } = await query;
+
+    if (error) {
+      console.warn('Supabase fetch expenses error:', error.message);
+      return [];
+    }
+
+    return (data as Expense[]) || [];
+  } catch (err: any) {
+    console.warn('Supabase fetch expenses exception:', err?.message || err);
+    return [];
+  }
+}
+
+/**
+ * 2. Insert a new expense into platform_expenses in Supabase.
+ * Generates an id with 'exp_' prefix.
+ * Enforces strict verification that insertedRows.length > 0.
+ */
+export async function insertExpense(data: {
+  business_id: string;
+  category: ExpenseCategory;
+  label: string;
+  amount: number;
+  date: string;
+  is_recurring?: boolean;
+  created_by: string;
+}): Promise<{ success: boolean; expense?: Expense; error?: string }> {
+  const hasCredentials =
+    Boolean(process.env.NEXT_PUBLIC_SUPABASE_URL?.trim()) &&
+    Boolean(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY?.trim());
+
+  if (!hasCredentials) {
+    return { success: false, error: 'Configuration Supabase manquante' };
+  }
+
+  const newId = `exp_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+  const now = new Date().toISOString();
+
+  const recordToInsert: Expense = {
+    id: newId,
+    business_id: data.business_id,
+    category: data.category,
+    label: data.label.trim(),
+    amount: Number(data.amount),
+    date: data.date,
+    is_recurring: Boolean(data.is_recurring),
+    created_by: data.created_by,
+    created_at: now,
+  };
+
+  try {
+    const client = getSupabase();
+    const { data: insertedRows, error } = await (client as any)
+      .from('platform_expenses')
+      .insert(recordToInsert)
+      .select();
+
+    if (error) {
+      console.warn('Supabase insert expense error:', error.message);
+      return { success: false, error: error.message };
+    }
+
+    if (!insertedRows || insertedRows.length === 0) {
+      console.warn('Supabase insert expense: 0 rows returned');
+      return { success: false, error: "L'insertion de la dépense n'a retourné aucun enregistrement." };
+    }
+
+    const insertedExpense = insertedRows[0] as Expense;
+    return { success: true, expense: insertedExpense };
+  } catch (err: any) {
+    console.warn('Supabase insert expense exception:', err?.message || err);
+    return { success: false, error: err?.message || 'Erreur de connexion à la base de données' };
+  }
+}
+
+/**
+ * 3. Update an existing expense in platform_expenses in Supabase.
+ * Enforces strict verification that updatedRows.length > 0.
+ */
+export async function updateExpense(
+  expenseId: string,
+  data: Partial<Omit<Expense, 'id' | 'business_id'>>
+): Promise<{ success: boolean; expense?: Expense; error?: string }> {
+  const hasCredentials =
+    Boolean(process.env.NEXT_PUBLIC_SUPABASE_URL?.trim()) &&
+    Boolean(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY?.trim());
+
+  if (!hasCredentials) {
+    return { success: false, error: 'Configuration Supabase manquante' };
+  }
+
+  try {
+    const client = getSupabase();
+    const updatePayload: Record<string, any> = {};
+
+    if (data.category !== undefined) updatePayload.category = data.category;
+    if (data.label !== undefined) updatePayload.label = data.label.trim();
+    if (data.amount !== undefined) updatePayload.amount = Number(data.amount);
+    if (data.date !== undefined) updatePayload.date = data.date;
+    if (data.is_recurring !== undefined) updatePayload.is_recurring = Boolean(data.is_recurring);
+    if (data.created_by !== undefined) updatePayload.created_by = data.created_by;
+
+    const { data: updatedRows, error } = await (client as any)
+      .from('platform_expenses')
+      .update(updatePayload)
+      .eq('id', expenseId)
+      .select();
+
+    if (error) {
+      console.warn('Supabase update expense error:', error.message);
+      return { success: false, error: error.message };
+    }
+
+    if (!updatedRows || updatedRows.length === 0) {
+      console.warn('Supabase update expense: 0 rows affected');
+      return { success: false, error: 'Dépense introuvable ou mise à jour échouée.' };
+    }
+
+    const updatedExpense = updatedRows[0] as Expense;
+    return { success: true, expense: updatedExpense };
+  } catch (err: any) {
+    console.warn('Supabase update expense exception:', err?.message || err);
+    return { success: false, error: err?.message || 'Erreur de connexion à la base de données' };
+  }
+}
+
+/**
+ * 4. Delete an expense from platform_expenses in Supabase.
+ * Enforces strict verification that deletedRows.length > 0.
+ */
+export async function deleteExpense(
+  expenseId: string
+): Promise<{ success: boolean; error?: string }> {
+  const hasCredentials =
+    Boolean(process.env.NEXT_PUBLIC_SUPABASE_URL?.trim()) &&
+    Boolean(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY?.trim());
+
+  if (!hasCredentials) {
+    return { success: false, error: 'Configuration Supabase manquante' };
+  }
+
+  try {
+    const client = getSupabase();
+    const { data: deletedRows, error } = await (client as any)
+      .from('platform_expenses')
+      .delete()
+      .eq('id', expenseId)
+      .select();
+
+    if (error) {
+      console.warn('Supabase delete expense error:', error.message);
+      return { success: false, error: error.message };
+    }
+
+    if (!deletedRows || deletedRows.length === 0) {
+      console.warn('Supabase delete expense: 0 rows affected');
+      return { success: false, error: 'Dépense introuvable ou déjà supprimée.' };
+    }
+
+    return { success: true };
+  } catch (err: any) {
+    console.warn('Supabase delete expense exception:', err?.message || err);
+    return { success: false, error: err?.message || 'Erreur de connexion lors de la suppression' };
+  }
+}
+
+/**
+ * ============================================================================
+ * EXPENSE CATEGORIES CRUD (platform_expense_categories)
+ * ============================================================================
+ */
+
+/**
+ * 1. Fetch all expense categories for a business from platform_expense_categories in Supabase,
+ * ordered by name ascending.
+ * Returns empty array if error or no credentials.
+ */
+export async function fetchExpenseCategoriesForBusiness(
+  businessId: string
+): Promise<ExpenseCategoryItem[]> {
+  const hasCredentials =
+    Boolean(process.env.NEXT_PUBLIC_SUPABASE_URL?.trim()) &&
+    Boolean(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY?.trim());
+
+  if (!hasCredentials) {
+    return [];
+  }
+
+  try {
+    const client = getSupabase();
+    const { data, error } = await (client as any)
+      .from('platform_expense_categories')
+      .select('*')
+      .eq('business_id', businessId)
+      .order('name', { ascending: true });
+
+    if (error) {
+      console.warn('Supabase fetch expense categories error:', error.message);
+      return [];
+    }
+
+    return (data as ExpenseCategoryItem[]) || [];
+  } catch (err: any) {
+    console.warn('Supabase fetch expense categories exception:', err?.message || err);
+    return [];
+  }
+}
+
+/**
+ * 2. Insert a new expense category into platform_expense_categories in Supabase.
+ * - Generates an id TEXT: `expcat_${crypto.randomUUID() ou Date.now()}`
+ * - Checks if a category with the same trimmed case-insensitive name already exists for this business_id
+ * - Inserts with strict verification insertedRows.length > 0
+ */
+export async function insertExpenseCategory(data: {
+  business_id: string;
+  name: string;
+}): Promise<{ success: boolean; category?: ExpenseCategoryItem; error?: string }> {
+  const trimmedName = data.name.trim();
+  if (!trimmedName) {
+    return { success: false, error: 'Le nom de la catégorie est requis.' };
+  }
+
+  const hasCredentials =
+    Boolean(process.env.NEXT_PUBLIC_SUPABASE_URL?.trim()) &&
+    Boolean(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY?.trim());
+
+  if (!hasCredentials) {
+    return { success: false, error: 'Configuration Supabase manquante' };
+  }
+
+  try {
+    const client = getSupabase();
+
+    // Check for duplicate name (case-insensitive) for this business
+    const { data: existingRows, error: fetchError } = await (client as any)
+      .from('platform_expense_categories')
+      .select('id, name')
+      .eq('business_id', data.business_id);
+
+    if (fetchError) {
+      console.warn('Supabase check expense category duplicate error:', fetchError.message);
+      return { success: false, error: fetchError.message };
+    }
+
+    const isDuplicate = ((existingRows as Array<{ id: string; name: string }>) || []).some(
+      (c) => c.name?.trim().toLowerCase() === trimmedName.toLowerCase()
+    );
+
+    if (isDuplicate) {
+      return { success: false, error: 'Cette catégorie existe déjà.' };
+    }
+
+    const newId = `expcat_${typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : Date.now()}`;
+    const now = new Date().toISOString();
+
+    const recordToInsert: ExpenseCategoryItem = {
+      id: newId,
+      business_id: data.business_id,
+      name: trimmedName,
+      created_at: now,
+    };
+
+    const { data: insertedRows, error: insertError } = await (client as any)
+      .from('platform_expense_categories')
+      .insert(recordToInsert)
+      .select();
+
+    if (insertError) {
+      console.warn('Supabase insert expense category error:', insertError.message);
+      return { success: false, error: insertError.message };
+    }
+
+    if (!insertedRows || insertedRows.length === 0) {
+      console.warn('Supabase insert expense category: 0 rows returned');
+      return { success: false, error: "L'insertion de la catégorie de dépense n'a retourné aucun enregistrement." };
+    }
+
+    const insertedCategory = insertedRows[0] as ExpenseCategoryItem;
+    return { success: true, category: insertedCategory };
+  } catch (err: any) {
+    console.warn('Supabase insert expense category exception:', err?.message || err);
+    return { success: false, error: err?.message || 'Erreur de connexion à la base de données' };
+  }
+}
+
+/**
+ * 3. Delete an expense category from platform_expense_categories in Supabase.
+ * - Enforces strict verification that deletedRows.length > 0
+ * - Does NOT delete existing expenses using this category
+ */
+export async function deleteExpenseCategory(
+  categoryId: string
+): Promise<{ success: boolean; error?: string }> {
+  const hasCredentials =
+    Boolean(process.env.NEXT_PUBLIC_SUPABASE_URL?.trim()) &&
+    Boolean(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY?.trim());
+
+  if (!hasCredentials) {
+    return { success: false, error: 'Configuration Supabase manquante' };
+  }
+
+  try {
+    const client = getSupabase();
+    const { data: deletedRows, error } = await (client as any)
+      .from('platform_expense_categories')
+      .delete()
+      .eq('id', categoryId)
+      .select();
+
+    if (error) {
+      console.warn('Supabase delete expense category error:', error.message);
+      return { success: false, error: error.message };
+    }
+
+    if (!deletedRows || deletedRows.length === 0) {
+      console.warn('Supabase delete expense category: 0 rows affected');
+      return { success: false, error: 'Catégorie de dépense introuvable ou déjà supprimée.' };
+    }
+
+    return { success: true };
+  } catch (err: any) {
+    console.warn('Supabase delete expense category exception:', err?.message || err);
+    return { success: false, error: err?.message || 'Erreur de connexion lors de la suppression' };
+  }
+}
+
+/**
+ * ============================================================================
+ * DELIVERY ZONES CRUD (platform_delivery_zones)
+ * ============================================================================
+ */
+
+/**
+ * 1. Fetch delivery zones for a business from platform_delivery_zones in Supabase,
+ * ordered by name ascending.
+ * Returns empty array if error or no credentials.
+ */
+export async function fetchDeliveryZonesForBusiness(
+  businessId: string
+): Promise<DeliveryZone[]> {
+  const hasCredentials =
+    Boolean(process.env.NEXT_PUBLIC_SUPABASE_URL?.trim()) &&
+    Boolean(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY?.trim());
+
+  if (!hasCredentials) {
+    return [];
+  }
+
+  try {
+    const client = getSupabase();
+    const { data, error } = await (client as any)
+      .from('platform_delivery_zones')
+      .select('*')
+      .eq('business_id', businessId)
+      .order('name', { ascending: true });
+
+    if (error) {
+      console.warn('Supabase fetch delivery zones error:', error.message);
+      return [];
+    }
+
+    return (data as DeliveryZone[]) || [];
+  } catch (err: any) {
+    console.warn('Supabase fetch delivery zones exception:', err?.message || err);
+    return [];
+  }
+}
+
+/**
+ * 2. Insert a new delivery zone into platform_delivery_zones in Supabase.
+ * - Generates an id TEXT: `zone_${typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : Date.now()}`
+ * - Inserts with strict verification insertedRows.length > 0
+ */
+export async function insertDeliveryZone(data: {
+  business_id: string;
+  name: string;
+  fee: number;
+  active?: boolean;
+}): Promise<{ success: boolean; zone?: DeliveryZone; error?: string }> {
+  const trimmedName = data.name?.trim();
+  if (!trimmedName) {
+    return { success: false, error: 'Le nom de la zone de livraison est requis.' };
+  }
+
+  const store = getStore();
+  const newId = `zone_${typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : Date.now()}`;
+  const now = new Date().toISOString();
+
+  const recordToInsert: DeliveryZone = {
+    id: newId,
+    business_id: data.business_id,
+    name: trimmedName,
+    fee: Number(data.fee) || 0,
+    active: data.active !== undefined ? Boolean(data.active) : true,
+  };
+
+  const hasCredentials =
+    Boolean(process.env.NEXT_PUBLIC_SUPABASE_URL?.trim()) &&
+    Boolean(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY?.trim());
+
+  if (!hasCredentials) {
+    store.saveDeliveryZone(recordToInsert);
+    return { success: true, zone: recordToInsert };
+  }
+
+  try {
+    const client = getSupabase();
+    const { data: insertedRows, error } = await (client as any)
+      .from('platform_delivery_zones')
+      .insert({
+        ...recordToInsert,
+        created_at: now,
+        updated_at: now,
+      })
+      .select();
+
+    if (error) {
+      console.warn('Supabase insert delivery zone error:', error.message);
+      return { success: false, error: error.message };
+    }
+
+    if (!insertedRows || insertedRows.length === 0) {
+      console.warn('Supabase insert delivery zone: 0 rows returned');
+      return { success: false, error: "L'insertion de la zone de livraison n'a retourné aucun enregistrement." };
+    }
+
+    const insertedZone = insertedRows[0] as DeliveryZone;
+    store.saveDeliveryZone(insertedZone);
+    return { success: true, zone: insertedZone };
+  } catch (err: any) {
+    console.warn('Supabase insert delivery zone exception:', err?.message || err);
+    return { success: false, error: err?.message || 'Erreur de connexion à la base de données' };
+  }
+}
+
+/**
+ * 3. Update a delivery zone in platform_delivery_zones in Supabase.
+ * - Updates data and updated_at with strict anti-false-success check (updatedRows.length > 0)
+ */
+export async function updateDeliveryZone(
+  zoneId: string,
+  data: Partial<Omit<DeliveryZone, 'id' | 'business_id'>>
+): Promise<{ success: boolean; zone?: DeliveryZone; error?: string }> {
+  const store = getStore();
+  const now = new Date().toISOString();
+
+  const updatePayload: any = {
+    ...data,
+    updated_at: now,
+  };
+  if (data.name !== undefined) {
+    updatePayload.name = data.name.trim();
+  }
+  if (data.fee !== undefined) {
+    updatePayload.fee = Number(data.fee);
+  }
+
+  const hasCredentials =
+    Boolean(process.env.NEXT_PUBLIC_SUPABASE_URL?.trim()) &&
+    Boolean(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY?.trim());
+
+  if (!hasCredentials) {
+    store.saveDeliveryZone({ id: zoneId, ...data } as any);
+    const updated = store.deliveryZones.find((z) => z.id === zoneId);
+    return { success: true, zone: updated };
+  }
+
+  try {
+    const client = getSupabase();
+    const { data: updatedRows, error } = await (client as any)
+      .from('platform_delivery_zones')
+      .update(updatePayload)
+      .eq('id', zoneId)
+      .select();
+
+    if (error) {
+      console.warn('Supabase update delivery zone error:', error.message);
+      return { success: false, error: error.message };
+    }
+
+    if (!updatedRows || updatedRows.length === 0) {
+      console.warn('Supabase update delivery zone: 0 rows affected');
+      return { success: false, error: 'Zone de livraison introuvable ou mise à jour échouée.' };
+    }
+
+    const updatedZone = updatedRows[0] as DeliveryZone;
+    store.saveDeliveryZone(updatedZone);
+    return { success: true, zone: updatedZone };
+  } catch (err: any) {
+    console.warn('Supabase update delivery zone exception:', err?.message || err);
+    return { success: false, error: err?.message || 'Erreur de connexion à la base de données' };
+  }
+}
+
+/**
+ * 4. Toggle active status of a delivery zone in platform_delivery_zones in Supabase.
+ * - Updates active = !currentActive and updated_at with strict verification
+ */
+export async function toggleDeliveryZoneActive(
+  zoneId: string,
+  currentActive: boolean
+): Promise<{ success: boolean; zone?: DeliveryZone; error?: string }> {
+  const store = getStore();
+  const nextActive = !currentActive;
+  const now = new Date().toISOString();
+
+  const hasCredentials =
+    Boolean(process.env.NEXT_PUBLIC_SUPABASE_URL?.trim()) &&
+    Boolean(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY?.trim());
+
+  if (!hasCredentials) {
+    store.toggleDeliveryZoneActive(zoneId);
+    const updated = store.deliveryZones.find((z) => z.id === zoneId);
+    return { success: true, zone: updated };
+  }
+
+  try {
+    const client = getSupabase();
+    const { data: updatedRows, error } = await (client as any)
+      .from('platform_delivery_zones')
+      .update({
+        active: nextActive,
+        updated_at: now,
+      })
+      .eq('id', zoneId)
+      .select();
+
+    if (error) {
+      console.warn('Supabase toggle delivery zone active error:', error.message);
+      return { success: false, error: error.message };
+    }
+
+    if (!updatedRows || updatedRows.length === 0) {
+      console.warn('Supabase toggle delivery zone active: 0 rows affected');
+      return { success: false, error: 'Zone de livraison introuvable ou statut non modifié.' };
+    }
+
+    const updatedZone = updatedRows[0] as DeliveryZone;
+    store.saveDeliveryZone(updatedZone);
+    return { success: true, zone: updatedZone };
+  } catch (err: any) {
+    console.warn('Supabase toggle delivery zone active exception:', err?.message || err);
+    return { success: false, error: err?.message || 'Erreur de connexion à la base de données' };
+  }
+}
+
+/**
+ * 5. Delete a delivery zone from platform_delivery_zones in Supabase.
+ * - Enforces strict verification that deletedRows.length > 0
+ */
+export async function deleteDeliveryZone(
+  zoneId: string
+): Promise<{ success: boolean; error?: string }> {
+  const store = getStore();
+
+  const hasCredentials =
+    Boolean(process.env.NEXT_PUBLIC_SUPABASE_URL?.trim()) &&
+    Boolean(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY?.trim());
+
+  if (!hasCredentials) {
+    store.deleteDeliveryZone(zoneId);
+    return { success: true };
+  }
+
+  try {
+    const client = getSupabase();
+    const { data: deletedRows, error } = await (client as any)
+      .from('platform_delivery_zones')
+      .delete()
+      .eq('id', zoneId)
+      .select();
+
+    if (error) {
+      console.warn('Supabase delete delivery zone error:', error.message);
+      return { success: false, error: error.message };
+    }
+
+    if (!deletedRows || deletedRows.length === 0) {
+      console.warn('Supabase delete delivery zone: 0 rows affected');
+      return { success: false, error: 'Zone de livraison introuvable ou déjà supprimée.' };
+    }
+
+    store.deleteDeliveryZone(zoneId);
+    return { success: true };
+  } catch (err: any) {
+    console.warn('Supabase delete delivery zone exception:', err?.message || err);
+    return { success: false, error: err?.message || 'Erreur de connexion lors de la suppression' };
+  }
+}
+
+/**
+ * ============================================================================
+ * BUSINESS CRUD (platform_businesses)
+ * ============================================================================
+ */
+
+/**
+ * 1. Fetch a business by ID from platform_businesses in Supabase.
+ * Returns null if error, no credentials, or not found (never returns fabricated data).
+ */
+export async function fetchBusinessById(
+  businessId: string
+): Promise<Business | null> {
+  const hasCredentials =
+    Boolean(process.env.NEXT_PUBLIC_SUPABASE_URL?.trim()) &&
+    Boolean(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY?.trim());
+
+  if (!hasCredentials) {
+    return null;
+  }
+
+  try {
+    const client = getSupabase();
+    const { data, error } = await (client as any)
+      .from('platform_businesses')
+      .select('*')
+      .eq('id', businessId)
+      .maybeSingle();
+
+    if (error) {
+      console.warn('Supabase fetch business by id error:', error.message);
+      return null;
+    }
+
+    if (!data) {
+      return null;
+    }
+
+    return data as Business;
+  } catch (err: any) {
+    console.warn('Supabase fetch business by id exception:', err?.message || err);
+    return null;
+  }
+}
+
+/**
+ * 2. Update business configuration/details in platform_businesses in Supabase.
+ * - Enforces strict verification updatedRows.length > 0
+ * - Automatically updates updated_at timestamp
+ */
+export async function updateBusinessConfig(
+  businessId: string,
+  data: Partial<Omit<Business, 'id'>>
+): Promise<{ success: boolean; business?: Business; error?: string }> {
+  const store = getStore();
+  const now = new Date().toISOString();
+
+  const updatePayload: any = {
+    ...data,
+    updated_at: now,
+  };
+
+  const hasCredentials =
+    Boolean(process.env.NEXT_PUBLIC_SUPABASE_URL?.trim()) &&
+    Boolean(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY?.trim());
+
+  if (!hasCredentials) {
+    if (data.config) {
+      store.updateBusinessConfig(businessId, data.config, data);
+    } else {
+      store.updateBusinessConfig(businessId, {}, data);
+    }
+    const updated = store.businesses.find((b) => b.id === businessId);
+    return { success: true, business: updated };
+  }
+
+  try {
+    const client = getSupabase();
+    const { data: updatedRows, error } = await (client as any)
+      .from('platform_businesses')
+      .update(updatePayload)
+      .eq('id', businessId)
+      .select();
+
+    if (error) {
+      console.warn('Supabase update business error:', error.message);
+      return { success: false, error: error.message };
+    }
+
+    if (!updatedRows || updatedRows.length === 0) {
+      console.warn('Supabase update business: 0 rows affected');
+      return { success: false, error: 'Commerce introuvable ou mise à jour échouée.' };
+    }
+
+    const updatedBiz = updatedRows[0] as Business;
+    if (updatedBiz.config) {
+      store.updateBusinessConfig(businessId, updatedBiz.config, updatedBiz);
+    } else {
+      store.updateBusinessConfig(businessId, {}, updatedBiz);
+    }
+    return { success: true, business: updatedBiz };
+  } catch (err: any) {
+    console.warn('Supabase update business exception:', err?.message || err);
+    return { success: false, error: err?.message || 'Erreur de connexion à la base de données' };
+  }
+}
+
+/* ==========================================================================
+   AGENT ASSISTANT — PROJETS, DISCUSSIONS & MESSAGES (PERSISTANCE SUPABASE)
+   ========================================================================== */
+
+/**
+ * 1. Récupère la liste des projets de l'assistant pour un commerce donné.
+ */
+export async function fetchAgentProjectsForBusiness(
+  businessId: string,
+  status?: 'active' | 'trashed'
+): Promise<AgentProject[]> {
+  const hasCredentials =
+    Boolean(process.env.NEXT_PUBLIC_SUPABASE_URL?.trim()) &&
+    Boolean(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY?.trim());
+
+  if (!hasCredentials) {
+    const store = getStore();
+    return store.agentProjects.filter((p) => {
+      if (p.business_id !== businessId) return false;
+      if (status) {
+        return (p.status || 'active') === status;
+      }
+      return true;
+    });
+  }
+
+  try {
+    const client = getSupabase();
+    let query = (client as any)
+      .from('platform_agent_projects')
+      .select('*')
+      .eq('business_id', businessId);
+
+    if (status) {
+      query = query.eq('status', status);
+    }
+
+    const { data, error } = await query.order('created_at', { ascending: true });
+
+    if (error) {
+      console.warn('Supabase fetchAgentProjects error:', error.message);
+      return [];
+    }
+
+    return (data as AgentProject[]) || [];
+  } catch (err: any) {
+    console.warn('Supabase fetchAgentProjects exception:', err?.message || err);
+    return [];
+  }
+}
+
+/**
+ * 2. Crée un nouveau projet pour l'assistant dans platform_agent_projects.
+ */
+export async function insertAgentProject(data: {
+  business_id: string;
+  name: string;
+}): Promise<{ success: boolean; project?: AgentProject; error?: string }> {
+  const store = getStore();
+  const newId = `agproj_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+  const now = new Date().toISOString();
+
+  const recordToInsert: AgentProject = {
+    id: newId,
+    business_id: data.business_id,
+    name: data.name.trim(),
+    status: 'active',
+    created_at: now,
+  };
+
+  const hasCredentials =
+    Boolean(process.env.NEXT_PUBLIC_SUPABASE_URL?.trim()) &&
+    Boolean(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY?.trim());
+
+  if (!hasCredentials) {
+    store.agentProjects.push(recordToInsert);
+    return { success: true, project: recordToInsert };
+  }
+
+  try {
+    const client = getSupabase();
+    const { data: insertedRows, error } = await (client as any)
+      .from('platform_agent_projects')
+      .insert(recordToInsert)
+      .select();
+
+    if (error) {
+      console.warn('Supabase insertAgentProject error:', error.message);
+      return { success: false, error: error.message };
+    }
+
+    if (!insertedRows || insertedRows.length === 0) {
+      console.warn('Supabase insertAgentProject: 0 rows returned');
+      return { success: false, error: "L'insertion du projet n'a retourné aucun enregistrement." };
+    }
+
+    const insertedProject = insertedRows[0] as AgentProject;
+    const existingIndex = store.agentProjects.findIndex((p) => p.id === insertedProject.id);
+    if (existingIndex >= 0) {
+      store.agentProjects[existingIndex] = insertedProject;
+    } else {
+      store.agentProjects.push(insertedProject);
+    }
+
+    return { success: true, project: insertedProject };
+  } catch (err: any) {
+    console.warn('Supabase insertAgentProject exception:', err?.message || err);
+    return { success: false, error: err?.message || 'Erreur de connexion à la base de données' };
+  }
+}
+
+/**
+ * 3. Renomme un projet existant dans platform_agent_projects.
+ */
+export async function updateAgentProject(
+  projectId: string,
+  name: string
+): Promise<{ success: boolean; error?: string }> {
+  const store = getStore();
+  const trimmedName = name.trim();
+
+  const hasCredentials =
+    Boolean(process.env.NEXT_PUBLIC_SUPABASE_URL?.trim()) &&
+    Boolean(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY?.trim());
+
+  if (!hasCredentials) {
+    store.renameAgentProject(projectId, trimmedName);
+    return { success: true };
+  }
+
+  try {
+    const client = getSupabase();
+    const { data: updatedRows, error } = await (client as any)
+      .from('platform_agent_projects')
+      .update({ name: trimmedName })
+      .eq('id', projectId)
+      .select();
+
+    if (error) {
+      console.warn('Supabase updateAgentProject error:', error.message);
+      return { success: false, error: error.message };
+    }
+
+    if (!updatedRows || updatedRows.length === 0) {
+      console.warn('Supabase updateAgentProject: 0 rows affected');
+      return { success: false, error: 'Projet introuvable ou mise à jour échouée.' };
+    }
+
+    store.renameAgentProject(projectId, trimmedName);
+    return { success: true };
+  } catch (err: any) {
+    console.warn('Supabase updateAgentProject exception:', err?.message || err);
+    return { success: false, error: err?.message || 'Erreur de connexion à la base de données' };
+  }
+}
+
+/**
+ * 4. Met un projet en corbeille (soft delete, status = 'trashed') et détache ses conversations.
+ */
+export async function deleteAgentProject(projectId: string): Promise<{ success: boolean; error?: string }> {
+  const store = getStore();
+
+  const hasCredentials =
+    Boolean(process.env.NEXT_PUBLIC_SUPABASE_URL?.trim()) &&
+    Boolean(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY?.trim());
+
+  if (!hasCredentials) {
+    const proj = store.agentProjects.find((p) => p.id === projectId);
+    if (proj) {
+      proj.status = 'trashed';
+    }
+    store.agentConversations.forEach((c) => {
+      if (c.project_id === projectId) {
+        c.project_id = null;
+      }
+    });
+    return { success: true };
+  }
+
+  try {
+    const client = getSupabase();
+
+    // 1. Soft delete du projet
+    const { data: updatedRows, error } = await (client as any)
+      .from('platform_agent_projects')
+      .update({ status: 'trashed' })
+      .eq('id', projectId)
+      .select();
+
+    if (error) {
+      console.warn('Supabase deleteAgentProject error:', error.message);
+      return { success: false, error: error.message };
+    }
+
+    if (!updatedRows || updatedRows.length === 0) {
+      console.warn('Supabase deleteAgentProject: 0 rows affected');
+      return { success: false, error: 'Projet introuvable ou mise en corbeille échouée.' };
+    }
+
+    // 2. Détache les conversations de ce projet en base
+    await (client as any)
+      .from('platform_agent_conversations')
+      .update({ project_id: null })
+      .eq('project_id', projectId);
+
+    const proj = store.agentProjects.find((p) => p.id === projectId);
+    if (proj) {
+      proj.status = 'trashed';
+    }
+    store.agentConversations.forEach((c) => {
+      if (c.project_id === projectId) {
+        c.project_id = null;
+      }
+    });
+
+    return { success: true };
+  } catch (err: any) {
+    console.warn('Supabase deleteAgentProject exception:', err?.message || err);
+    return { success: false, error: err?.message || 'Erreur de connexion à la base de données' };
+  }
+}
+
+/**
+ * 4b. Restaure un projet mis en corbeille (status = 'active').
+ */
+export async function restoreAgentProject(projectId: string): Promise<{ success: boolean; error?: string }> {
+  const store = getStore();
+
+  const hasCredentials =
+    Boolean(process.env.NEXT_PUBLIC_SUPABASE_URL?.trim()) &&
+    Boolean(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY?.trim());
+
+  if (!hasCredentials) {
+    const proj = store.agentProjects.find((p) => p.id === projectId);
+    if (proj) {
+      proj.status = 'active';
+    }
+    return { success: true };
+  }
+
+  try {
+    const client = getSupabase();
+    const { data: updatedRows, error } = await (client as any)
+      .from('platform_agent_projects')
+      .update({ status: 'active' })
+      .eq('id', projectId)
+      .select();
+
+    if (error) {
+      console.warn('Supabase restoreAgentProject error:', error.message);
+      return { success: false, error: error.message };
+    }
+
+    if (!updatedRows || updatedRows.length === 0) {
+      console.warn('Supabase restoreAgentProject: 0 rows affected');
+      return { success: false, error: 'Projet introuvable ou restauration échouée.' };
+    }
+
+    const proj = store.agentProjects.find((p) => p.id === projectId);
+    if (proj) {
+      proj.status = 'active';
+    }
+    return { success: true };
+  } catch (err: any) {
+    console.warn('Supabase restoreAgentProject exception:', err?.message || err);
+    return { success: false, error: err?.message || 'Erreur de connexion à la base de données' };
+  }
+}
+
+/**
+ * 4c. Supprime définitivement un projet de platform_agent_projects (hard delete).
+ */
+export async function deleteAgentProjectPermanently(
+  projectId: string
+): Promise<{ success: boolean; error?: string }> {
+  const store = getStore();
+
+  const hasCredentials =
+    Boolean(process.env.NEXT_PUBLIC_SUPABASE_URL?.trim()) &&
+    Boolean(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY?.trim());
+
+  if (!hasCredentials) {
+    store.deleteAgentProject(projectId);
+    return { success: true };
+  }
+
+  try {
+    const client = getSupabase();
+
+    // 1. Détache toute conversation rattachée
+    await (client as any)
+      .from('platform_agent_conversations')
+      .update({ project_id: null })
+      .eq('project_id', projectId);
+
+    // 2. Suppression physique du projet
+    const { data: deletedRows, error } = await (client as any)
+      .from('platform_agent_projects')
+      .delete()
+      .eq('id', projectId)
+      .select();
+
+    if (error) {
+      console.warn('Supabase deleteAgentProjectPermanently error:', error.message);
+      return { success: false, error: error.message };
+    }
+
+    if (!deletedRows || deletedRows.length === 0) {
+      console.warn('Supabase deleteAgentProjectPermanently: 0 rows affected');
+      return { success: false, error: 'Projet introuvable ou suppression définitive échouée.' };
+    }
+
+    store.deleteAgentProject(projectId);
+    return { success: true };
+  } catch (err: any) {
+    console.warn('Supabase deleteAgentProjectPermanently exception:', err?.message || err);
+    return { success: false, error: err?.message || 'Erreur de connexion à la base de données' };
+  }
+}
+
+/**
+ * 5. Récupère la liste des conversations de l'assistant pour un commerce donné.
+ */
+export async function fetchAgentConversationsForBusiness(businessId: string): Promise<AgentConversation[]> {
+  const hasCredentials =
+    Boolean(process.env.NEXT_PUBLIC_SUPABASE_URL?.trim()) &&
+    Boolean(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY?.trim());
+
+  if (!hasCredentials) {
+    const store = getStore();
+    return store.agentConversations.filter((c) => c.business_id === businessId);
+  }
+
+  try {
+    const client = getSupabase();
+    const { data, error } = await (client as any)
+      .from('platform_agent_conversations')
+      .select('*')
+      .eq('business_id', businessId)
+      .order('updated_at', { ascending: false });
+
+    if (error) {
+      console.warn('Supabase fetchAgentConversations error:', error.message);
+      return [];
+    }
+
+    return (data as AgentConversation[]) || [];
+  } catch (err: any) {
+    console.warn('Supabase fetchAgentConversations exception:', err?.message || err);
+    return [];
+  }
+}
+
+/**
+ * 6. Crée une nouvelle conversation dans platform_agent_conversations.
+ */
+export async function insertAgentConversation(data: {
+  business_id: string;
+  project_id?: string | null;
+  title: string;
+}): Promise<{ success: boolean; conversation?: AgentConversation; error?: string }> {
+  const store = getStore();
+  const newId = `agconv_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+  const now = new Date().toISOString();
+
+  const recordToInsert: AgentConversation = {
+    id: newId,
+    business_id: data.business_id,
+    project_id: data.project_id || null,
+    title: data.title.trim(),
+    status: 'active',
+    created_at: now,
+    updated_at: now,
+  };
+
+  const hasCredentials =
+    Boolean(process.env.NEXT_PUBLIC_SUPABASE_URL?.trim()) &&
+    Boolean(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY?.trim());
+
+  if (!hasCredentials) {
+    store.agentConversations.unshift(recordToInsert);
+    return { success: true, conversation: recordToInsert };
+  }
+
+  try {
+    const client = getSupabase();
+    const { data: insertedRows, error } = await (client as any)
+      .from('platform_agent_conversations')
+      .insert(recordToInsert)
+      .select();
+
+    if (error) {
+      console.warn('Supabase insertAgentConversation error:', error.message);
+      return { success: false, error: error.message };
+    }
+
+    if (!insertedRows || insertedRows.length === 0) {
+      console.warn('Supabase insertAgentConversation: 0 rows returned');
+      return { success: false, error: "L'insertion de la conversation n'a retourné aucun enregistrement." };
+    }
+
+    const insertedConv = insertedRows[0] as AgentConversation;
+    const existingIndex = store.agentConversations.findIndex((c) => c.id === insertedConv.id);
+    if (existingIndex >= 0) {
+      store.agentConversations[existingIndex] = insertedConv;
+    } else {
+      store.agentConversations.unshift(insertedConv);
+    }
+
+    return { success: true, conversation: insertedConv };
+  } catch (err: any) {
+    console.warn('Supabase insertAgentConversation exception:', err?.message || err);
+    return { success: false, error: err?.message || 'Erreur de connexion à la base de données' };
+  }
+}
+
+/**
+ * 7. Met à jour une conversation (titre, projet assigné, statut actif/corbeille) dans platform_agent_conversations.
+ */
+export async function updateAgentConversation(
+  conversationId: string,
+  data: {
+    title?: string;
+    project_id?: string | null;
+    status?: 'active' | 'trashed';
+  }
+): Promise<{ success: boolean; error?: string }> {
+  const store = getStore();
+  const updatePayload: Record<string, unknown> = {
+    updated_at: new Date().toISOString(),
+  };
+
+  if (data.title !== undefined) updatePayload.title = data.title.trim();
+  if (data.project_id !== undefined) updatePayload.project_id = data.project_id;
+  if (data.status !== undefined) updatePayload.status = data.status;
+
+  const hasCredentials =
+    Boolean(process.env.NEXT_PUBLIC_SUPABASE_URL?.trim()) &&
+    Boolean(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY?.trim());
+
+  if (!hasCredentials) {
+    const conv = store.agentConversations.find((c) => c.id === conversationId);
+    if (conv) {
+      if (data.title !== undefined) conv.title = data.title.trim();
+      if (data.project_id !== undefined) conv.project_id = data.project_id;
+      if (data.status !== undefined) conv.status = data.status;
+      conv.updated_at = new Date().toISOString();
+    }
+    return { success: true };
+  }
+
+  try {
+    const client = getSupabase();
+    const { data: updatedRows, error } = await (client as any)
+      .from('platform_agent_conversations')
+      .update(updatePayload)
+      .eq('id', conversationId)
+      .select();
+
+    if (error) {
+      console.warn('Supabase updateAgentConversation error:', error.message);
+      return { success: false, error: error.message };
+    }
+
+    if (!updatedRows || updatedRows.length === 0) {
+      console.warn('Supabase updateAgentConversation: 0 rows affected');
+      return { success: false, error: 'Discussion introuvable ou mise à jour échouée.' };
+    }
+
+    const updatedConv = updatedRows[0] as AgentConversation;
+    const conv = store.agentConversations.find((c) => c.id === conversationId);
+    if (conv) {
+      Object.assign(conv, updatedConv);
+    }
+    return { success: true };
+  } catch (err: any) {
+    console.warn('Supabase updateAgentConversation exception:', err?.message || err);
+    return { success: false, error: err?.message || 'Erreur de connexion à la base de données' };
+  }
+}
+
+/**
+ * 8. Supprime définitivement une conversation et ses messages dans platform_agent_conversations.
+ */
+export async function deleteAgentConversationPermanently(
+  conversationId: string
+): Promise<{ success: boolean; error?: string }> {
+  const store = getStore();
+
+  const hasCredentials =
+    Boolean(process.env.NEXT_PUBLIC_SUPABASE_URL?.trim()) &&
+    Boolean(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY?.trim());
+
+  if (!hasCredentials) {
+    store.deleteConversationPermanently(conversationId);
+    return { success: true };
+  }
+
+  try {
+    const client = getSupabase();
+
+    // Suppression préalable des messages rattachés pour respecter l'intégrité référentielle
+    await (client as any)
+      .from('platform_agent_messages')
+      .delete()
+      .eq('conversation_id', conversationId);
+
+    const { data: deletedRows, error } = await (client as any)
+      .from('platform_agent_conversations')
+      .delete()
+      .eq('id', conversationId)
+      .select();
+
+    if (error) {
+      console.warn('Supabase deleteAgentConversationPermanently error:', error.message);
+      return { success: false, error: error.message };
+    }
+
+    if (!deletedRows || deletedRows.length === 0) {
+      console.warn('Supabase deleteAgentConversationPermanently: 0 rows affected');
+      return { success: false, error: 'Discussion introuvable ou suppression échouée.' };
+    }
+
+    store.deleteConversationPermanently(conversationId);
+    return { success: true };
+  } catch (err: any) {
+    console.warn('Supabase deleteAgentConversationPermanently exception:', err?.message || err);
+    return { success: false, error: err?.message || 'Erreur de connexion à la base de données' };
+  }
+}
+
+/**
+ * 9. Récupère tous les messages d'une discussion ordonnés par date de création.
+ */
+export async function fetchAgentMessagesForConversation(conversationId: string): Promise<AgentChatMessage[]> {
+  const hasCredentials =
+    Boolean(process.env.NEXT_PUBLIC_SUPABASE_URL?.trim()) &&
+    Boolean(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY?.trim());
+
+  if (!hasCredentials) {
+    const store = getStore();
+    return store.agentMessages.filter((m) => m.conversation_id === conversationId);
+  }
+
+  try {
+    const client = getSupabase();
+    const { data, error } = await (client as any)
+      .from('platform_agent_messages')
+      .select('*')
+      .eq('conversation_id', conversationId)
+      .order('created_at', { ascending: true });
+
+    if (error) {
+      console.warn('Supabase fetchAgentMessages error:', error.message);
+      return [];
+    }
+
+    return ((data || []) as any[]).map((row) => ({
+      id: row.id,
+      conversation_id: row.conversation_id,
+      sender: row.sender as 'user' | 'assistant',
+      text: row.content || row.text || '',
+      attachments: row.attachments || undefined,
+      created_at: row.created_at,
+    }));
+  } catch (err: any) {
+    console.warn('Supabase fetchAgentMessages exception:', err?.message || err);
+    return [];
+  }
+}
+
+/**
+ * 10. Insère un message (utilisateur ou assistant) dans platform_agent_messages.
+ */
+export async function insertAgentMessage(data: {
+  conversation_id: string;
+  sender: 'user' | 'assistant';
+  content?: string;
+  attachments?: any[];
+}): Promise<{ success: boolean; message?: AgentChatMessage; error?: string }> {
+  const store = getStore();
+  const newId = `agmsg_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+  const now = new Date().toISOString();
+  const rawContent = data.content || (data as any).text || '';
+
+  const recordToInsert = {
+    id: newId,
+    conversation_id: data.conversation_id,
+    sender: data.sender,
+    content: rawContent,
+    attachments: data.attachments && data.attachments.length > 0 ? data.attachments : null,
+    created_at: now,
+  };
+
+  const hasCredentials =
+    Boolean(process.env.NEXT_PUBLIC_SUPABASE_URL?.trim()) &&
+    Boolean(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY?.trim());
+
+  if (!hasCredentials) {
+    const msg = store.addAgentChatMessage(
+      data.conversation_id,
+      data.sender,
+      rawContent,
+      data.attachments
+    );
+    return { success: true, message: msg };
+  }
+
+  try {
+    const client = getSupabase();
+    const { data: insertedRows, error } = await (client as any)
+      .from('platform_agent_messages')
+      .insert(recordToInsert)
+      .select();
+
+    if (error) {
+      console.warn('Supabase insertAgentMessage error:', error.message);
+      return { success: false, error: error.message };
+    }
+
+    if (!insertedRows || insertedRows.length === 0) {
+      console.warn('Supabase insertAgentMessage: 0 rows returned');
+      return { success: false, error: "L'insertion du message n'a retourné aucun enregistrement." };
+    }
+
+    const insertedRow = insertedRows[0] as any;
+    const formattedMessage: AgentChatMessage = {
+      id: insertedRow.id,
+      conversation_id: insertedRow.conversation_id,
+      sender: insertedRow.sender as 'user' | 'assistant',
+      text: insertedRow.content || insertedRow.text || '',
+      attachments: insertedRow.attachments || undefined,
+      created_at: insertedRow.created_at,
+    };
+
+    const existingMsgIndex = store.agentMessages.findIndex((m) => m.id === formattedMessage.id);
+    if (existingMsgIndex >= 0) {
+      store.agentMessages[existingMsgIndex] = formattedMessage;
+    } else {
+      store.agentMessages.push(formattedMessage);
+    }
+
+    // Mise à jour de la date de modification de la conversation
+    const conv = store.agentConversations.find((c) => c.id === data.conversation_id);
+    if (conv) {
+      conv.updated_at = now;
+      if ((conv.title === 'Nouvelle discussion' || !conv.title) && data.sender === 'user' && rawContent) {
+        conv.title = rawContent.length > 30 ? rawContent.substring(0, 30) + '...' : rawContent;
+      }
+    }
+
+    return { success: true, message: formattedMessage };
+  } catch (err: any) {
+    console.warn('Supabase insertAgentMessage exception:', err?.message || err);
+    return { success: false, error: err?.message || 'Erreur de connexion à la base de données' };
+  }
+}
+
+
+
+

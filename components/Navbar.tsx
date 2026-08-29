@@ -73,7 +73,7 @@ export default function Navbar({
                   {activeBusiness.name}
                 </span>
                 <span className="px-2 py-0.5 rounded-full text-[11px] font-extrabold bg-[#F4EFE6] text-[#6B6259] border border-[#E5DCD0] capitalize hidden sm:inline-block">
-                  {activeBusiness.type}
+                  {activeBusiness.business_type}
                 </span>
               </div>
               <span className="text-xs text-[#6B6259] hidden sm:block">

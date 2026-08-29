@@ -1,5 +1,7 @@
 'use client';
 
+export const dynamic = 'force-dynamic';
+
 import React, { useState, useEffect, useSyncExternalStore } from 'react';
 import { getStore, AppStore } from '@/lib/store';
 import Navbar from '@/components/Navbar';

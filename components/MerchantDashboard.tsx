@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import Image from 'next/image';
 import { motion, AnimatePresence } from 'motion/react';
 import {
@@ -77,6 +77,7 @@ import {
   ExternalLink,
   CheckSquare,
   Square,
+  Receipt,
 } from 'lucide-react';
 import {
   uploadStaffAvatar,
@@ -98,6 +99,32 @@ import {
   markCustomerAsFavorite,
   insertCustomer,
   uploadCustomerAvatar,
+  fetchExpensesForBusiness,
+  fetchExpenseCategoriesForBusiness,
+  insertExpenseCategory,
+  deleteExpenseCategory,
+  insertExpense,
+  updateExpense,
+  deleteExpense,
+  fetchDeliveryZonesForBusiness,
+  insertDeliveryZone,
+  updateDeliveryZone,
+  toggleDeliveryZoneActive,
+  deleteDeliveryZone,
+  fetchBusinessById,
+  updateBusinessConfig,
+  fetchAgentProjectsForBusiness,
+  insertAgentProject,
+  updateAgentProject,
+  deleteAgentProject,
+  restoreAgentProject,
+  deleteAgentProjectPermanently,
+  fetchAgentConversationsForBusiness,
+  insertAgentConversation,
+  updateAgentConversation,
+  deleteAgentConversationPermanently,
+  fetchAgentMessagesForConversation,
+  insertAgentMessage,
   supabase,
 } from '@/lib/supabase';
 import {
@@ -110,11 +137,17 @@ import {
   StaffPermissions,
   Staff,
   DeliveryZone,
+  AgentProject,
+  AgentConversation,
+  AgentChatMessage,
   AgentChatMessageAttachment,
   AttendanceRecord,
   AttendanceStatus,
   Customer,
   CustomerMessage,
+  Expense,
+  ExpenseCategory,
+  ExpenseCategoryItem,
 } from '@/lib/types';
 import { getStore } from '@/lib/store';
 import PeriodFilter from '@/components/ui/period-filter';
@@ -154,7 +187,28 @@ interface MerchantDashboardProps {
   onToggleWhatsAppSim: () => void;
 }
 
-type TabType = 'overview' | 'finance' | 'orders' | 'products' | 'customers' | 'agent' | 'settings' | 'profile' | 'conversion' | 'team' | 'attendance';
+type TabType = 'overview' | 'finance' | 'expenses' | 'orders' | 'products' | 'customers' | 'agent' | 'settings' | 'profile' | 'conversion' | 'team' | 'attendance';
+
+function getCategoryBadgeStyle(category?: string | null): string {
+  const palette = [
+    'bg-purple-50 text-purple-700 border-purple-200',
+    'bg-blue-50 text-blue-700 border-blue-200',
+    'bg-emerald-50 text-emerald-700 border-emerald-200',
+    'bg-amber-50 text-amber-700 border-amber-200',
+    'bg-rose-50 text-rose-700 border-rose-200',
+    'bg-indigo-50 text-indigo-700 border-indigo-200',
+    'bg-teal-50 text-teal-700 border-teal-200',
+    'bg-cyan-50 text-cyan-700 border-cyan-200',
+  ];
+  if (!category || !category.trim()) return 'bg-slate-100 text-slate-700 border-slate-200';
+  let hash = 0;
+  const str = category.trim().toLowerCase();
+  for (let i = 0; i < str.length; i++) {
+    hash = str.charCodeAt(i) + ((hash << 5) - hash);
+  }
+  const index = Math.abs(hash) % palette.length;
+  return palette[index];
+}
 
 export default function MerchantDashboard({
   business,
@@ -459,6 +513,30 @@ export default function MerchantDashboard({
   const [isCategoryModalOpen, setIsCategoryModalOpen] = useState(false);
   const [newCatName, setNewCatName] = useState('');
 
+  // Expenses state & modal
+  const [businessExpenses, setBusinessExpenses] = useState<Expense[]>([]);
+  const [expenseCategories, setExpenseCategories] = useState<ExpenseCategoryItem[]>([]);
+  const [expensesLoading, setExpensesLoading] = useState<boolean>(false);
+  const [expenseSearch, setExpenseSearch] = useState<string>('');
+  const [expenseCategoryFilter, setExpenseCategoryFilter] = useState<string>('all');
+  const [isExpenseModalOpen, setIsExpenseModalOpen] = useState<boolean>(false);
+  const [editingExpense, setEditingExpense] = useState<Expense | null>(null);
+  const [expenseFormCategory, setExpenseFormCategory] = useState<string>('');
+  const [expenseFormLabel, setExpenseFormLabel] = useState<string>('');
+  const [expenseFormAmount, setExpenseFormAmount] = useState<string>('');
+  const [expenseFormDate, setExpenseFormDate] = useState<string>(new Date().toISOString().split('T')[0]);
+  const [expenseFormIsRecurring, setExpenseFormIsRecurring] = useState<boolean>(false);
+  const [expenseSaving, setExpenseSaving] = useState<boolean>(false);
+  const [expenseError, setExpenseError] = useState<string | null>(null);
+  const [expenseDeletingId, setExpenseDeletingId] = useState<string | null>(null);
+
+  // Expense Category modal & actions state
+  const [isExpenseCategoryModalOpen, setIsExpenseCategoryModalOpen] = useState<boolean>(false);
+  const [newExpenseCatName, setNewExpenseCatName] = useState<string>('');
+  const [expenseCatSaving, setExpenseCatSaving] = useState<boolean>(false);
+  const [expenseCatError, setExpenseCatError] = useState<string | null>(null);
+  const [expenseCatDeletingId, setExpenseCatDeletingId] = useState<string | null>(null);
+
   // Customer Creation Modal
   const [isCustomerModalOpen, setIsCustomerModalOpen] = useState(false);
   const [isCustomerActionsMenuOpen, setIsCustomerActionsMenuOpen] = useState(false);
@@ -521,7 +599,11 @@ export default function MerchantDashboard({
   // Team Member Slide-over detail panel
   const [selectedTeamMemberForDetail, setSelectedTeamMemberForDetail] = useState<(typeof allTeamRows)[number] | null>(null);
 
-  // Delivery Zone Modal state
+  // Delivery Zone Modal state & Supabase data
+  const [deliveryZones, setDeliveryZones] = useState<DeliveryZone[]>(() => store.getDeliveryZones(business.id));
+  const [isDeliveryZonesLoading, setIsDeliveryZonesLoading] = useState(false);
+  const [isZoneSaving, setIsZoneSaving] = useState(false);
+  const [isZoneDeleting, setIsZoneDeleting] = useState(false);
   const [isZoneModalOpen, setIsZoneModalOpen] = useState(false);
   const [editingZone, setEditingZone] = useState<Partial<DeliveryZone> | null>(null);
   const [deletingZone, setDeletingZone] = useState<DeliveryZone | null>(null);
@@ -536,6 +618,13 @@ export default function MerchantDashboard({
   const [bizName, setBizName] = useState(business.name);
   const [bizWhatsapp, setBizWhatsapp] = useState(business.whatsapp_number);
   const [bizCurrency, setBizCurrency] = useState(business.currency);
+  const [savedBizProfile, setSavedBizProfile] = useState<{ name: string; whatsapp_number: string; currency: string }>({
+    name: business.name,
+    whatsapp_number: business.whatsapp_number,
+    currency: business.currency,
+  });
+  const [isBizSaving, setIsBizSaving] = useState(false);
+  const [isBizLoading, setIsBizLoading] = useState(false);
 
   // Payment Gateway Form state
   const initialGw = store.getPaymentGateway(business.id);
@@ -561,6 +650,11 @@ export default function MerchantDashboard({
     setBizName(business.name);
     setBizWhatsapp(business.whatsapp_number);
     setBizCurrency(business.currency);
+    setSavedBizProfile({
+      name: business.name,
+      whatsapp_number: business.whatsapp_number,
+      currency: business.currency,
+    });
     const gw = store.getPaymentGateway(business.id);
     setGwProvider(gw.provider);
     setGwPublicKey(gw.public_key || '');
@@ -597,6 +691,249 @@ export default function MerchantDashboard({
       isMounted = false;
     };
   }, [business.id, activeTab, todayStr]);
+
+  // Load expenses and expense categories effect
+  useEffect(() => {
+    let isMounted = true;
+    async function loadExpensesData() {
+      if (!business?.id) return;
+      if (activeTab === 'expenses' || activeTab === 'finance') {
+        setExpensesLoading(true);
+        try {
+          const [expensesData, categoriesData] = await Promise.all([
+            fetchExpensesForBusiness(business.id),
+            fetchExpenseCategoriesForBusiness(business.id),
+          ]);
+          if (isMounted) {
+            setBusinessExpenses(expensesData || []);
+            setExpenseCategories(categoriesData || []);
+            setExpensesLoading(false);
+          }
+        } catch (err) {
+          console.error('Error fetching expenses/categories:', err);
+          if (isMounted) setExpensesLoading(false);
+        }
+      }
+    }
+    loadExpensesData();
+    return () => {
+      isMounted = false;
+    };
+  }, [business?.id, activeTab]);
+
+  // Load delivery zones effect (Supabase)
+  const loadDeliveryZones = async () => {
+    if (!business?.id) return;
+    setIsDeliveryZonesLoading(true);
+    try {
+      const zones = await fetchDeliveryZonesForBusiness(business.id);
+      setDeliveryZones(zones || []);
+    } catch (err) {
+      console.error('Error fetching delivery zones:', err);
+    } finally {
+      setIsDeliveryZonesLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    let isMounted = true;
+    async function loadZones() {
+      if (!business?.id) return;
+      try {
+        const zones = await fetchDeliveryZonesForBusiness(business.id);
+        if (isMounted) {
+          setDeliveryZones(zones || []);
+        }
+      } catch (err) {
+        console.error('Error loading delivery zones:', err);
+      }
+    }
+    loadZones();
+    return () => {
+      isMounted = false;
+    };
+  }, [business?.id, activeTab]);
+
+  // Load Business Profile from Supabase on mount or settings tab activation
+  useEffect(() => {
+    let isMounted = true;
+    async function loadBusinessData() {
+      if (!business?.id) return;
+      if (activeTab === 'settings') {
+        setIsBizLoading(true);
+        try {
+          const bizData = await fetchBusinessById(business.id);
+          if (bizData && isMounted) {
+            setBizName(bizData.name);
+            setBizWhatsapp(bizData.whatsapp_number);
+            setBizCurrency(bizData.currency);
+            setSavedBizProfile({
+              name: bizData.name,
+              whatsapp_number: bizData.whatsapp_number,
+              currency: bizData.currency,
+            });
+          }
+        } catch (err) {
+          console.error('Error loading business from Supabase:', err);
+        } finally {
+          if (isMounted) setIsBizLoading(false);
+        }
+      }
+    }
+    loadBusinessData();
+    return () => {
+      isMounted = false;
+    };
+  }, [business?.id, activeTab]);
+
+  const handleOpenNewExpenseCategoryModal = () => {
+    setNewExpenseCatName('');
+    setExpenseCatError(null);
+    setIsExpenseCategoryModalOpen(true);
+  };
+
+  const handleSaveExpenseCategory = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!business?.id) return;
+    const trimmed = newExpenseCatName.trim();
+    if (!trimmed) {
+      setExpenseCatError('Le nom de la cat√©gorie est requis.');
+      return;
+    }
+
+    setExpenseCatSaving(true);
+    setExpenseCatError(null);
+    const res = await insertExpenseCategory({
+      business_id: business.id,
+      name: trimmed,
+    });
+    setExpenseCatSaving(false);
+
+    if (res.success && res.category) {
+      setExpenseCategories((prev) =>
+        [...prev, res.category!].sort((a, b) => a.name.localeCompare(b.name, 'fr', { sensitivity: 'base' }))
+      );
+      setNewExpenseCatName('');
+      setIsExpenseCategoryModalOpen(false);
+    } else {
+      setExpenseCatError(res.error || 'Erreur lors de la cr√©ation de la cat√©gorie.');
+    }
+  };
+
+  const handleDeleteExpenseCategory = async (catId: string, catName: string) => {
+    if (!window.confirm(`√ätes-vous s√ªr de vouloir supprimer la cat√©gorie "${catName}" ?`)) {
+      return;
+    }
+    setExpenseCatDeletingId(catId);
+    const res = await deleteExpenseCategory(catId);
+    setExpenseCatDeletingId(null);
+    if (res.success) {
+      setExpenseCategories((prev) => prev.filter((c) => c.id !== catId));
+    } else {
+      alert(res.error || 'Erreur lors de la suppression de la cat√©gorie.');
+    }
+  };
+
+  const handleOpenNewExpenseModal = () => {
+    setEditingExpense(null);
+    setExpenseFormCategory(expenseCategories[0]?.name || '');
+    setExpenseFormLabel('');
+    setExpenseFormAmount('');
+    setExpenseFormDate(new Date().toISOString().split('T')[0]);
+    setExpenseFormIsRecurring(false);
+    setExpenseError(null);
+    setIsExpenseModalOpen(true);
+  };
+
+  const handleOpenEditExpenseModal = (expense: Expense) => {
+    setEditingExpense(expense);
+    setExpenseFormCategory(expense.category || '');
+    setExpenseFormLabel(expense.label || '');
+    setExpenseFormAmount(String(expense.amount || ''));
+    setExpenseFormDate(expense.date ? expense.date.split('T')[0] : new Date().toISOString().split('T')[0]);
+    setExpenseFormIsRecurring(Boolean(expense.is_recurring));
+    setExpenseError(null);
+    setIsExpenseModalOpen(true);
+  };
+
+  const handleSaveExpense = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!business?.id) return;
+    const trimmedCategory = expenseFormCategory.trim();
+    if (!trimmedCategory) {
+      setExpenseError('La cat√©gorie est requise');
+      return;
+    }
+    const trimmedLabel = expenseFormLabel.trim();
+    if (!trimmedLabel) {
+      setExpenseError('Le libell√© est requis');
+      return;
+    }
+    const numAmount = parseFloat(expenseFormAmount);
+    if (isNaN(numAmount) || numAmount <= 0) {
+      setExpenseError('Veuillez renseigner un montant valide (> 0)');
+      return;
+    }
+    if (!expenseFormDate) {
+      setExpenseError('Veuillez s√©lectionner une date');
+      return;
+    }
+
+    setExpenseSaving(true);
+    setExpenseError(null);
+
+    if (editingExpense) {
+      const res = await updateExpense(editingExpense.id, {
+        category: trimmedCategory,
+        label: trimmedLabel,
+        amount: numAmount,
+        date: expenseFormDate,
+        is_recurring: expenseFormIsRecurring,
+      });
+
+      setExpenseSaving(false);
+      if (res.success && res.expense) {
+        setBusinessExpenses((prev) => prev.map((exp) => (exp.id === editingExpense.id ? res.expense! : exp)));
+        setIsExpenseModalOpen(false);
+        setEditingExpense(null);
+      } else {
+        setExpenseError(res.error || 'Erreur lors de la modification de la d√©pense');
+      }
+    } else {
+      const res = await insertExpense({
+        business_id: business.id,
+        category: trimmedCategory,
+        label: trimmedLabel,
+        amount: numAmount,
+        date: expenseFormDate,
+        is_recurring: expenseFormIsRecurring,
+        created_by: activeStaff?.id || 'owner',
+      });
+
+      setExpenseSaving(false);
+      if (res.success && res.expense) {
+        setBusinessExpenses((prev) => [res.expense!, ...prev]);
+        setIsExpenseModalOpen(false);
+        setEditingExpense(null);
+      } else {
+        setExpenseError(res.error || "Erreur lors de l'enregistrement de la d√©pense");
+      }
+    }
+  };
+
+  const handleDeleteExpense = async (expenseId: string) => {
+    if (!window.confirm('√ätes-vous s√ªr de vouloir supprimer cette d√©pense ?')) {
+      return;
+    }
+    setExpenseDeletingId(expenseId);
+    const res = await deleteExpense(expenseId);
+    setExpenseDeletingId(null);
+    if (res.success) {
+      setBusinessExpenses((prev) => prev.filter((exp) => exp.id !== expenseId));
+    } else {
+      alert(res.error || 'Erreur lors de la suppression de la d√©pense');
+    }
+  };
 
   // Load 30-day attendance history for selected member
   useEffect(() => {
@@ -742,9 +1079,9 @@ export default function MerchantDashboard({
   const currentChs = store.getPaymentChannels(business.id);
 
   const isGeneralChanged =
-    bizName !== business.name ||
-    bizWhatsapp !== business.whatsapp_number ||
-    bizCurrency !== business.currency;
+    bizName !== savedBizProfile.name ||
+    bizWhatsapp !== savedBizProfile.whatsapp_number ||
+    bizCurrency !== savedBizProfile.currency;
 
   const isGatewayChanged =
     gwProvider !== currentGw.provider ||
@@ -757,9 +1094,29 @@ export default function MerchantDashboard({
 
   const hasSettingsChanges = isGeneralChanged || isGatewayChanged || isChannelsChanged;
 
-  const handleSaveAllSettings = () => {
+  const handleSaveAllSettings = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
     if (isGeneralChanged) {
-      onUpdateConfig({}, { name: bizName, whatsapp_number: bizWhatsapp, currency: bizCurrency });
+      setIsBizSaving(true);
+      try {
+        const res = await updateBusinessConfig(business.id, {
+          name: bizName,
+          whatsapp_number: bizWhatsapp,
+          currency: bizCurrency,
+        });
+        if (!res.success) {
+          alert(`Erreur lors de l'enregistrement des r√©glages g√©n√©raux : ${res.error || '√âchec de la mise √† jour'}`);
+          return;
+        }
+        setSavedBizProfile({
+          name: bizName,
+          whatsapp_number: bizWhatsapp,
+          currency: bizCurrency,
+        });
+        onUpdateConfig({}, { name: bizName, whatsapp_number: bizWhatsapp, currency: bizCurrency });
+      } finally {
+        setIsBizSaving(false);
+      }
     }
     if (isGatewayChanged) {
       store.updatePaymentGateway(gwProvider, gwPublicKey, gwSecretKey);
@@ -773,9 +1130,9 @@ export default function MerchantDashboard({
   };
 
   const handleCancelSettingsChanges = () => {
-    setBizName(business.name);
-    setBizWhatsapp(business.whatsapp_number);
-    setBizCurrency(business.currency);
+    setBizName(savedBizProfile.name);
+    setBizWhatsapp(savedBizProfile.whatsapp_number);
+    setBizCurrency(savedBizProfile.currency);
     const gw = store.getPaymentGateway(business.id);
     setGwProvider(gw.provider);
     setGwPublicKey(gw.public_key || '');
@@ -1021,10 +1378,25 @@ export default function MerchantDashboard({
   const [oldPass, setOldPass] = useState('');
   const [newPass, setNewPass] = useState('');
 
-  // Agent Chat / Claude-style Sidebar UI State
+  // Agent Chat / Claude-style Sidebar UI State (Supabase Persistence)
+  const [agentProjectsList, setAgentProjectsList] = useState<AgentProject[]>([]);
+  const [agentConversationsList, setAgentConversationsList] = useState<AgentConversation[]>([]);
+  const [agentMessagesList, setAgentMessagesList] = useState<AgentChatMessage[]>([]);
+  const [isLoadingAgentData, setIsLoadingAgentData] = useState(false);
+
   const [selectedConversationId, setSelectedConversationId] = useState<string | null>(null);
   const [editingProjectId, setEditingProjectId] = useState<string | null>(null);
   const [editingProjectName, setEditingProjectName] = useState('');
+  const [editingConversationId, setEditingConversationId] = useState<string | null>(null);
+  const [editingConversationTitle, setEditingConversationTitle] = useState('');
+  const [deletingProjectId, setDeletingProjectId] = useState<string | null>(null);
+  const [permanentDeletingProjectId, setPermanentDeletingProjectId] = useState<string | null>(null);
+  const [deletingConversationId, setDeletingConversationId] = useState<string | null>(null);
+  const [isDeletingConversationLoading, setIsDeletingConversationLoading] = useState(false);
+  const [draggedConversationId, setDraggedConversationId] = useState<string | null>(null);
+  const [dragOverProjectId, setDragOverProjectId] = useState<string | null>(null);
+  const [isDragOverRoot, setIsDragOverRoot] = useState(false);
+  const [isDeletingProjectLoading, setIsDeletingProjectLoading] = useState(false);
   const [newProjectInput, setNewProjectInput] = useState('');
   const [showNewProjectForm, setShowNewProjectForm] = useState(false);
   const [expandedProjects, setExpandedProjects] = useState<Record<string, boolean>>({});
@@ -1036,12 +1408,60 @@ export default function MerchantDashboard({
   const [stagedAttachments, setStagedAttachments] = useState<AgentChatMessageAttachment[]>([]);
   const agentFileInputRef = useRef<HTMLInputElement | null>(null);
 
-  const activeConversations = store.agentConversations.filter((c) => c.status === 'active');
-  const trashedConversations = store.agentConversations.filter((c) => c.status === 'trashed');
+  // 1. Charge les projets et conversations au montage ou √† l'ouverture de l'onglet 'agent'
+  useEffect(() => {
+    if (activeTab === 'agent' && business?.id) {
+      let isMounted = true;
+      setIsLoadingAgentData(true);
+      Promise.all([
+        fetchAgentProjectsForBusiness(business.id),
+        fetchAgentConversationsForBusiness(business.id),
+      ])
+        .then(([projs, convs]) => {
+          if (isMounted) {
+            setAgentProjectsList(projs || []);
+            setAgentConversationsList(convs || []);
+            setIsLoadingAgentData(false);
+          }
+        })
+        .catch((err) => {
+          console.error("Erreur lors du chargement des donn√©es de l'agent:", err);
+          if (isMounted) setIsLoadingAgentData(false);
+        });
+
+      return () => {
+        isMounted = false;
+      };
+    }
+  }, [activeTab, business?.id]);
+
+  // 2. Quand une conversation est s√©lectionn√©e, charge ses messages depuis Supabase
+  useEffect(() => {
+    if (selectedConversationId) {
+      let isMounted = true;
+      fetchAgentMessagesForConversation(selectedConversationId)
+        .then((msgs) => {
+          if (isMounted) {
+            setAgentMessagesList(msgs || []);
+          }
+        })
+        .catch((err) => {
+          console.error("Erreur lors du chargement des messages de l'agent:", err);
+        });
+      return () => {
+        isMounted = false;
+      };
+    } else {
+      setAgentMessagesList([]);
+    }
+  }, [selectedConversationId]);
+
+  const activeProjects = agentProjectsList.filter((p) => (p.status || 'active') === 'active');
+  const trashedProjects = agentProjectsList.filter((p) => p.status === 'trashed');
+  const activeConversations = agentConversationsList.filter((c) => c.status === 'active');
+  const trashedConversations = agentConversationsList.filter((c) => c.status === 'trashed');
   const currentConversation = activeConversations.find((c) => c.id === selectedConversationId);
-  const currentMessages = selectedConversationId
-    ? store.agentMessages.filter((m) => m.conversation_id === selectedConversationId)
-    : [];
+  const currentMessages = selectedConversationId ? agentMessagesList : [];
 
   const handleAgentFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
@@ -1068,12 +1488,11 @@ export default function MerchantDashboard({
     }
   };
 
-  const handleSendAgentMessage = (promptText?: string) => {
+  const handleSendAgentMessage = async (promptText?: string) => {
     const textToSend = (promptText || agentChatInput).trim();
     if (!textToSend && stagedAttachments.length === 0) return;
 
     const currentAttachments = [...stagedAttachments];
-
     let targetConvId = selectedConversationId;
     const currentConv = activeConversations.find((c) => c.id === targetConvId);
 
@@ -1081,15 +1500,58 @@ export default function MerchantDashboard({
       const fallbackTitle = textToSend
         ? (textToSend.length > 30 ? textToSend.substring(0, 30) + '...' : textToSend)
         : (currentAttachments[0]?.name || 'Nouvelle discussion');
-      const newConv = store.createAgentConversation(null, fallbackTitle);
-      targetConvId = newConv.id;
-      setSelectedConversationId(newConv.id);
+      const convRes = await insertAgentConversation({
+        business_id: business.id,
+        project_id: null,
+        title: fallbackTitle,
+      });
+
+      if (!convRes.success || !convRes.conversation) {
+        alert(convRes.error || "Impossible d'initialiser la discussion.");
+        return;
+      }
+
+      targetConvId = convRes.conversation.id;
+      setAgentConversationsList((prev) => [convRes.conversation!, ...prev]);
+      setSelectedConversationId(convRes.conversation.id);
     }
 
     const displayText = textToSend || (currentAttachments.length === 1 ? `Fichier joint : ${currentAttachments[0].name}` : `${currentAttachments.length} fichiers joints`);
 
-    store.addAgentChatMessage(targetConvId!, 'user', displayText, currentAttachments);
+    // 1. Enregistre le message utilisateur dans Supabase
+    const userMsgRes = await insertAgentMessage({
+      conversation_id: targetConvId!,
+      sender: 'user',
+      content: displayText,
+      attachments: currentAttachments,
+    });
 
+    if (!userMsgRes.success || !userMsgRes.message) {
+      alert(userMsgRes.error || "Impossible d'enregistrer le message.");
+      return;
+    }
+
+    setAgentMessagesList((prev) => [...prev, userMsgRes.message!]);
+    setAgentChatInput('');
+    setStagedAttachments([]);
+    setShowPlusMenu(false);
+
+    // Met √† jour la conversation dans la liste locale (updated_at et titre si 'Nouvelle discussion')
+    setAgentConversationsList((prev) =>
+      prev.map((c) => {
+        if (c.id === targetConvId) {
+          const shouldUpdateTitle = (c.title === 'Nouvelle discussion' || !c.title) && displayText;
+          return {
+            ...c,
+            title: shouldUpdateTitle ? (displayText.length > 30 ? displayText.substring(0, 30) + '...' : displayText) : c.title,
+            updated_at: new Date().toISOString(),
+          };
+        }
+        return c;
+      })
+    );
+
+    // Moteur de r√©ponse mock (inchang√©)
     const lower = textToSend.toLowerCase();
     let responseText = "Cette fonctionnalit√© n'est pas encore connect√©e √† un moteur de r√©ponse conversationnel ‚Äî disponible prochainement.";
 
@@ -1108,32 +1570,209 @@ export default function MerchantDashboard({
       responseText = `Projet IA initi√© pour ${business.name}. Votre assistant virtuel surveille vos commandes et interactions clients en temps r√©el.`;
     }
 
-    store.addAgentChatMessage(targetConvId!, 'assistant', responseText);
-    setAgentChatInput('');
-    setStagedAttachments([]);
-    setShowPlusMenu(false);
+    // 2. Enregistre la r√©ponse de l'assistant dans Supabase
+    const assistantMsgRes = await insertAgentMessage({
+      conversation_id: targetConvId!,
+      sender: 'assistant',
+      content: responseText,
+    });
+
+    if (assistantMsgRes.success && assistantMsgRes.message) {
+      setAgentMessagesList((prev) => [...prev, assistantMsgRes.message!]);
+    }
   };
 
-  const handleStartNewConversation = (projectId: string | null = null) => {
+  const handleStartNewConversation = async (projectId: string | null = null) => {
     setIsTrashViewOpen(false);
-    const newConv = store.createAgentConversation(projectId, 'Nouvelle discussion');
-    setSelectedConversationId(newConv.id);
+    const res = await insertAgentConversation({
+      business_id: business.id,
+      project_id: projectId || null,
+      title: 'Nouvelle discussion',
+    });
+
+    if (!res.success || !res.conversation) {
+      alert(res.error || "Impossible de cr√©er la nouvelle discussion.");
+      return;
+    }
+
+    setAgentConversationsList((prev) => [res.conversation!, ...prev]);
+    setSelectedConversationId(res.conversation.id);
   };
 
-  const handleCreateProject = () => {
-    if (!newProjectInput.trim()) return;
-    store.createAgentProject(newProjectInput.trim());
+  const handleCreateProject = async () => {
+    const name = newProjectInput.trim();
+    if (!name) return;
+    const res = await insertAgentProject({
+      business_id: business.id,
+      name,
+    });
+
+    if (!res.success || !res.project) {
+      alert(res.error || "Impossible de cr√©er le projet.");
+      return;
+    }
+
+    setAgentProjectsList((prev) => [...prev, res.project!]);
     setNewProjectInput('');
     setShowNewProjectForm(false);
   };
 
-  const handleRenameProject = (projectId: string) => {
-    if (!editingProjectName.trim()) return;
-    store.renameAgentProject(projectId, editingProjectName.trim());
+  const handleRenameProject = async (projectId: string) => {
+    const newName = editingProjectName.trim();
+    if (!newName) return;
+    const res = await updateAgentProject(projectId, newName);
+
+    if (!res.success) {
+      alert(res.error || "Impossible de renommer le projet.");
+      return;
+    }
+
+    setAgentProjectsList((prev) =>
+      prev.map((p) => (p.id === projectId ? { ...p, name: newName } : p))
+    );
     setEditingProjectId(null);
     setEditingProjectName('');
   };
 
+  const handleDeleteProject = async (projectId: string) => {
+    setIsDeletingProjectLoading(true);
+    try {
+      const res = await deleteAgentProject(projectId);
+      if (!res.success) {
+        alert(res.error || "Impossible de mettre le projet en corbeille.");
+        return;
+      }
+      setAgentProjectsList((prev) =>
+        prev.map((p) => (p.id === projectId ? { ...p, status: 'trashed' } : p))
+      );
+      setAgentConversationsList((prev) =>
+        prev.map((c) => (c.project_id === projectId ? { ...c, project_id: null } : c))
+      );
+    } finally {
+      setIsDeletingProjectLoading(false);
+      setDeletingProjectId(null);
+    }
+  };
+
+  const handleRestoreProject = async (projectId: string) => {
+    const res = await restoreAgentProject(projectId);
+    if (!res.success) {
+      alert(res.error || "Impossible de restaurer le projet.");
+      return;
+    }
+    setAgentProjectsList((prev) =>
+      prev.map((p) => (p.id === projectId ? { ...p, status: 'active' } : p))
+    );
+  };
+
+  const handleDeleteProjectPermanently = async (projectId: string) => {
+    setIsDeletingProjectLoading(true);
+    try {
+      const res = await deleteAgentProjectPermanently(projectId);
+      if (!res.success) {
+        alert(res.error || "Impossible de supprimer d√©finitivement le projet.");
+        return;
+      }
+      setAgentProjectsList((prev) => prev.filter((p) => p.id !== projectId));
+    } finally {
+      setIsDeletingProjectLoading(false);
+      setPermanentDeletingProjectId(null);
+    }
+  };
+
+  const handleRenameConversation = async (conversationId: string) => {
+    const newTitle = editingConversationTitle.trim();
+    if (!newTitle) {
+      setEditingConversationId(null);
+      setEditingConversationTitle('');
+      return;
+    }
+    const res = await updateAgentConversation(conversationId, { title: newTitle });
+    if (!res.success) {
+      alert(res.error || "Impossible de renommer la discussion.");
+      return;
+    }
+    setAgentConversationsList((prev) =>
+      prev.map((c) =>
+        c.id === conversationId
+          ? { ...c, title: newTitle, updated_at: new Date().toISOString() }
+          : c
+      )
+    );
+    setEditingConversationId(null);
+    setEditingConversationTitle('');
+  };
+
+  const handleMoveConversationToTrash = async (conversationId: string) => {
+    const res = await updateAgentConversation(conversationId, { status: 'trashed' });
+    if (!res.success) {
+      alert(res.error || "Impossible de d√©placer la discussion dans la corbeille.");
+      return;
+    }
+
+    setAgentConversationsList((prev) =>
+      prev.map((c) =>
+        c.id === conversationId
+          ? { ...c, status: 'trashed', updated_at: new Date().toISOString() }
+          : c
+      )
+    );
+
+    if (selectedConversationId === conversationId) {
+      setSelectedConversationId(null);
+    }
+  };
+
+  const handleRestoreConversation = async (conversationId: string) => {
+    const res = await updateAgentConversation(conversationId, { status: 'active' });
+    if (!res.success) {
+      alert(res.error || "Impossible de restaurer la discussion.");
+      return;
+    }
+
+    setAgentConversationsList((prev) =>
+      prev.map((c) =>
+        c.id === conversationId
+          ? { ...c, status: 'active', updated_at: new Date().toISOString() }
+          : c
+      )
+    );
+  };
+
+  const handleDeleteConversationPermanently = async (conversationId: string) => {
+    setIsDeletingConversationLoading(true);
+    try {
+      const res = await deleteAgentConversationPermanently(conversationId);
+      if (!res.success) {
+        alert(res.error || "Impossible de supprimer definitivement la discussion.");
+        return;
+      }
+      setAgentConversationsList((prev) => prev.filter((c) => c.id !== conversationId));
+      if (selectedConversationId === conversationId) {
+        setSelectedConversationId(null);
+        setAgentMessagesList([]);
+      }
+    } finally {
+      setIsDeletingConversationLoading(false);
+      setDeletingConversationId(null);
+    }
+  };
+
+  const handleAssignConversationToProject = async (conversationId: string, projectId: string | null) => {
+    const res = await updateAgentConversation(conversationId, { project_id: projectId });
+    if (!res.success) {
+      alert(res.error || "Impossible d'affecter le projet √† la discussion.");
+      return;
+    }
+
+    setAgentConversationsList((prev) =>
+      prev.map((c) =>
+        c.id === conversationId
+          ? { ...c, project_id: projectId, updated_at: new Date().toISOString() }
+          : c
+      )
+    );
+  };
   // Filtered lists
   const businessOrders = orders.filter((o) => o.business_id === business.id);
   const businessProducts = products.filter((p) => p.business_id === business.id);
@@ -1747,7 +2386,8 @@ export default function MerchantDashboard({
   const hasPermission = (tab: TabType): boolean => {
     if (activeStaff.role === 'owner') return true;
     if (tab === 'team' || tab === 'attendance') return true;
-    if (tab === 'overview' || tab === 'profile' || tab === 'conversion' || tab === 'finance') return true;
+    if (tab === 'overview' || tab === 'profile' || tab === 'conversion') return true;
+    if (tab === 'finance' || tab === 'expenses') return Boolean(activeStaff.permissions?.finance);
     return Boolean(activeStaff.permissions[tab as keyof StaffPermissions]);
   };
 
@@ -1868,13 +2508,6 @@ export default function MerchantDashboard({
   const handleSaveTemplates = () => {
     onUpdateConfig({ message_templates: templates });
     alert('Templates de messages WhatsApp sauvegard√©s avec succ√®s !');
-  };
-
-  const handleSaveBizProfile = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (hasSettingsChanges) {
-      handleSaveAllSettings();
-    }
   };
 
   const handleInviteStaffSubmit = async (e: React.FormEvent) => {
@@ -2080,9 +2713,10 @@ export default function MerchantDashboard({
   };
 
   // Sidebar Menu Items Configuration
-  const navItems: { id: TabType; label: string; icon: React.ComponentType<{ className?: string }>; badge?: number | string; ownerOnly?: boolean }[] = [
+  const navItems: { id: TabType; label: string; icon: React.ComponentType<{ className?: string }>; badge?: number | string; ownerOnly?: boolean; hidden?: boolean }[] = [
     { id: 'overview', label: 'Tableau de bord', icon: TrendingUp },
     { id: 'finance', label: 'Finance', icon: CreditCard },
+    { id: 'expenses', label: 'D√©penses', icon: Receipt, hidden: !hasPermission('finance') },
     { id: 'orders', label: 'Commandes', icon: ListFilter, badge: totalSubAlertsCount > 0 ? totalSubAlertsCount : undefined },
     { id: 'products', label: 'Produits & Cat√©gories', icon: Package, badge: businessProducts.length },
     { id: 'customers', label: 'Clients', icon: Users, badge: businessCustomers.length },
@@ -2165,7 +2799,7 @@ export default function MerchantDashboard({
 
           {/* Navigation Links */}
           <nav className="p-3 space-y-1.5 mt-2">
-            {navItems.map((item) => {
+            {navItems.filter((item) => !item.hidden).map((item) => {
               const Icon = item.icon;
               const isActive = activeTab === item.id;
               const allowed = hasPermission(item.id);
@@ -2564,7 +3198,7 @@ export default function MerchantDashboard({
                 <div>
                   <div className="flex items-center justify-between">
                     <span className="text-[11px] font-extrabold text-slate-500 uppercase tracking-wider block">
-                      Taux de conversion
+                      Taux de paiement
                     </span>
                     <ArrowUpRight className="w-4 h-4 text-slate-400 group-hover:text-emerald-600 group-hover:translate-x-0.5 group-hover:-translate-y-0.5 transition-all" />
                   </div>
@@ -3120,7 +3754,431 @@ export default function MerchantDashboard({
             currency={business.currency || 'XOF'}
             nowMs={nowMs}
             businessId={business.id}
+            onNavigateToExpenses={() => setActiveTab('expenses')}
           />
+        )}
+
+        {/* 4.6 PAGE D√âPENSES (EXPENSES) */}
+        {hasPermission('finance') && activeTab === 'expenses' && (
+          <div className="space-y-6">
+            {/* Header / Top Toolbar */}
+            <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-4 bg-white p-4 sm:p-6 rounded-3xl border border-slate-200/80 shadow-2xs">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-2xl bg-emerald-50 text-emerald-600 flex items-center justify-center shrink-0 border border-emerald-100">
+                  <Receipt className="w-5 h-5" />
+                </div>
+                <div>
+                  <h2 className="text-lg font-bold text-slate-900">Gestion des D√©penses</h2>
+                  <p className="text-xs text-slate-500 font-medium">Suivez et cat√©gorisez les charges de votre entreprise</p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-3">
+                <button
+                  type="button"
+                  onClick={handleOpenNewExpenseCategoryModal}
+                  className="px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-800 font-extrabold text-xs rounded-xl flex items-center gap-2 border border-slate-200 transition-all shadow-2xs cursor-pointer"
+                >
+                  <Plus className="w-4 h-4" />
+                  <span>Nouvelle Cat√©gorie</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleOpenNewExpenseModal}
+                  className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-extrabold shadow-sm transition-all cursor-pointer"
+                >
+                  <Plus className="w-4 h-4" />
+                  <span>Ajouter une d√©pense</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Expense Categories List */}
+            <div className="flex items-center space-x-2 overflow-x-auto pb-1">
+              {expenseCategories.length === 0 ? (
+                <div className="px-3 py-1.5 bg-slate-50 border border-dashed border-slate-200 rounded-xl text-xs text-slate-400 font-medium">
+                  Aucune cat√©gorie cr√©√©e. Cliquez sur &quot;Nouvelle Cat√©gorie&quot;.
+                </div>
+              ) : (
+                expenseCategories.map((cat) => (
+                  <div
+                    key={cat.id}
+                    className="px-4 py-2 bg-white border border-slate-200/80 rounded-2xl flex items-center space-x-2 text-xs font-bold text-slate-700 shrink-0 shadow-2xs"
+                  >
+                    <span>{cat.name}</span>
+                    <button
+                      type="button"
+                      disabled={expenseCatDeletingId === cat.id}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleDeleteExpenseCategory(cat.id, cat.name);
+                      }}
+                      className="text-slate-400 hover:text-rose-600 ml-1 p-1 cursor-pointer disabled:opacity-50"
+                      title="Supprimer la cat√©gorie"
+                    >
+                      {expenseCatDeletingId === cat.id ? (
+                        <Loader2 className="w-3.5 h-3.5 animate-spin text-rose-600" />
+                      ) : (
+                        <Trash2 className="w-3.5 h-3.5" />
+                      )}
+                    </button>
+                  </div>
+                ))
+              )}
+            </div>
+
+            {/* Filter toolbar */}
+            <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 bg-white p-4 rounded-3xl border border-slate-200/80 shadow-2xs">
+              <div className="relative flex-1 min-w-[200px]">
+                <Search className="w-4 h-4 absolute left-3.5 top-3.5 text-slate-400" />
+                <input
+                  type="text"
+                  placeholder="Rechercher par libell√©..."
+                  value={expenseSearch}
+                  onChange={(e) => setExpenseSearch(e.target.value)}
+                  className="w-full bg-slate-50 hover:bg-slate-100/80 focus:bg-white border border-slate-200 rounded-2xl pl-10 pr-4 py-2.5 text-xs text-slate-900 placeholder:text-slate-400 focus:outline-none focus:border-emerald-500 transition-all font-medium"
+                />
+              </div>
+
+              <div className="flex items-center gap-2">
+                <label className="text-xs font-bold text-slate-500 shrink-0">Cat√©gorie :</label>
+                <select
+                  value={expenseCategoryFilter}
+                  onChange={(e) => setExpenseCategoryFilter(e.target.value)}
+                  className="bg-slate-50 hover:bg-slate-100/80 border border-slate-200 rounded-2xl px-3 py-2.5 text-xs text-slate-700 font-bold focus:outline-none focus:border-emerald-500 cursor-pointer max-w-[200px]"
+                >
+                  <option value="all">Toutes les cat√©gories</option>
+                  {expenseCategories.map((cat) => (
+                    <option key={cat.id} value={cat.name}>
+                      {cat.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            {/* Table / List */}
+            <div className="bg-white rounded-3xl border border-slate-200/80 shadow-2xs overflow-hidden">
+              {expensesLoading ? (
+                <div className="py-16 text-center text-slate-400 flex flex-col items-center justify-center gap-3">
+                  <Loader2 className="w-8 h-8 animate-spin text-emerald-600" />
+                  <p className="text-xs font-bold">Chargement des d√©penses...</p>
+                </div>
+              ) : (() => {
+                const filteredExpenses = businessExpenses.filter((exp) => {
+                  const matchesSearch = !expenseSearch.trim() || exp.label.toLowerCase().includes(expenseSearch.toLowerCase());
+                  const matchesCategory =
+                    expenseCategoryFilter === 'all' ||
+                    (exp.category || '').trim().toLowerCase() === expenseCategoryFilter.trim().toLowerCase();
+                  return matchesSearch && matchesCategory;
+                });
+
+                if (filteredExpenses.length === 0) {
+                  return (
+                    <div className="py-16 text-center text-slate-400">
+                      <Receipt className="w-12 h-12 mx-auto mb-3 text-slate-300 stroke-1" />
+                      <p className="text-sm font-bold text-slate-600">Aucune d√©pense enregistr√©e pour le moment.</p>
+                      <p className="text-xs text-slate-400 mt-1">Cliquez sur &quot;Ajouter une d√©pense&quot; pour commencer.</p>
+                    </div>
+                  );
+                }
+
+                return (
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left text-xs border-collapse">
+                      <thead>
+                        <tr className="border-b border-slate-100 bg-slate-50/75 text-slate-500 font-extrabold uppercase tracking-wider text-[10px]">
+                          <th className="py-3.5 px-4 sm:px-6">Date</th>
+                          <th className="py-3.5 px-4">Cat√©gorie</th>
+                          <th className="py-3.5 px-4">Libell√©</th>
+                          <th className="py-3.5 px-4 text-right">Montant</th>
+                          <th className="py-3.5 px-4 text-center">R√©currente</th>
+                          <th className="py-3.5 px-4 sm:px-6 text-right">Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {filteredExpenses.map((exp) => {
+                          const formattedDate = exp.date
+                            ? new Date(exp.date).toLocaleDateString('fr-FR', {
+                                day: 'numeric',
+                                month: 'short',
+                                year: 'numeric',
+                              })
+                            : '‚Äî';
+
+                          return (
+                            <tr key={exp.id} className="hover:bg-slate-50/80 transition-colors">
+                              <td className="py-4 px-4 sm:px-6 font-bold text-slate-700 whitespace-nowrap">
+                                {formattedDate}
+                              </td>
+                              <td className="py-4 px-4 whitespace-nowrap">
+                                <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-[11px] font-bold border ${getCategoryBadgeStyle(exp.category)}`}>
+                                  {exp.category || 'Non cat√©goris√©'}
+                                </span>
+                              </td>
+                              <td className="py-4 px-4 font-semibold text-slate-900 max-w-[240px] truncate">
+                                {exp.label}
+                              </td>
+                              <td className="py-4 px-4 text-right font-black text-slate-900 whitespace-nowrap">
+                                {Number(exp.amount || 0).toLocaleString('fr-FR')} {business.currency || 'XOF'}
+                              </td>
+                              <td className="py-4 px-4 text-center whitespace-nowrap">
+                                {exp.is_recurring ? (
+                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                                    <Check className="w-3 h-3" /> Oui
+                                  </span>
+                                ) : (
+                                  <span className="text-slate-400 font-medium text-[11px]">Non</span>
+                                )}
+                              </td>
+                              <td className="py-4 px-4 sm:px-6 text-right whitespace-nowrap">
+                                <div className="inline-flex items-center gap-1 justify-end">
+                                  <button
+                                    type="button"
+                                    onClick={() => handleOpenEditExpenseModal(exp)}
+                                    className="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-xl transition-colors cursor-pointer"
+                                    title="Modifier"
+                                  >
+                                    <Edit2 className="w-4 h-4" />
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleDeleteExpense(exp.id)}
+                                    disabled={expenseDeletingId === exp.id}
+                                    className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-xl transition-colors cursor-pointer disabled:opacity-50"
+                                    title="Supprimer"
+                                  >
+                                    {expenseDeletingId === exp.id ? (
+                                      <Loader2 className="w-4 h-4 animate-spin text-red-600" />
+                                    ) : (
+                                      <Trash2 className="w-4 h-4" />
+                                    )}
+                                  </button>
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                );
+              })()}
+            </div>
+
+            {/* Expense Category Modal */}
+            {isExpenseCategoryModalOpen && (
+              <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-xs animate-in fade-in">
+                <div className="bg-white rounded-3xl max-w-sm w-full p-6 border border-slate-200 shadow-2xl text-slate-800">
+                  <div className="flex items-center justify-between pb-4 border-b border-slate-100 mb-4">
+                    <h3 className="font-extrabold text-slate-900 text-base">Nouvelle Cat√©gorie de D√©pense</h3>
+                    <button
+                      type="button"
+                      onClick={() => setIsExpenseCategoryModalOpen(false)}
+                      className="text-slate-400 hover:text-slate-700 p-1 rounded-full transition-colors cursor-pointer"
+                    >
+                      <X className="w-5 h-5" />
+                    </button>
+                  </div>
+
+                  <form onSubmit={handleSaveExpenseCategory} className="space-y-4 text-xs">
+                    {expenseCatError && (
+                      <div className="p-3 bg-red-50 text-red-700 text-xs font-semibold rounded-2xl border border-red-200">
+                        {expenseCatError}
+                      </div>
+                    )}
+
+                    <div>
+                      <label className="font-extrabold text-slate-700 block mb-1">Nom de la cat√©gorie</label>
+                      <input
+                        type="text"
+                        value={newExpenseCatName}
+                        onChange={(e) => setNewExpenseCatName(e.target.value)}
+                        className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-slate-900 font-medium focus:outline-none focus:border-emerald-500 shadow-2xs"
+                        placeholder="ex: Loyer, Salaires, Achats stock, √âlectricit√©..."
+                        required
+                        autoFocus
+                      />
+                    </div>
+
+                    <button
+                      type="submit"
+                      disabled={expenseCatSaving}
+                      className="w-full py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs rounded-xl transition-all shadow-sm cursor-pointer disabled:opacity-50 flex items-center justify-center gap-2"
+                    >
+                      {expenseCatSaving ? (
+                        <>
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                          <span>Cr√©ation en cours...</span>
+                        </>
+                      ) : (
+                        <span>Cr√©er la Cat√©gorie</span>
+                      )}
+                    </button>
+                  </form>
+                </div>
+              </div>
+            )}
+
+            {/* Expense Creation / Edit Modal */}
+            {isExpenseModalOpen && (
+              <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-xs animate-in fade-in">
+                <div className="bg-white rounded-3xl shadow-xl border border-slate-100 max-w-lg w-full overflow-hidden">
+                  <div className="p-6 border-b border-slate-100 flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-2xl bg-emerald-50 text-emerald-600 flex items-center justify-center shrink-0 border border-emerald-100">
+                        <Receipt className="w-5 h-5" />
+                      </div>
+                      <div>
+                        <h3 className="text-base font-bold text-slate-900">
+                          {editingExpense ? 'Modifier la d√©pense' : 'Ajouter une d√©pense'}
+                        </h3>
+                        <p className="text-xs text-slate-500 font-medium">Remplissez les informations ci-dessous</p>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setIsExpenseModalOpen(false)}
+                      className="p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-xl transition-colors cursor-pointer"
+                    >
+                      <X className="w-5 h-5" />
+                    </button>
+                  </div>
+
+                  <form onSubmit={handleSaveExpense} className="p-6 space-y-4">
+                    {expenseError && (
+                      <div className="p-3 bg-red-50 text-red-700 text-xs font-semibold rounded-2xl border border-red-200">
+                        {expenseError}
+                      </div>
+                    )}
+
+                    <div>
+                      <div className="flex items-center justify-between mb-1.5">
+                        <label className="block text-xs font-bold text-slate-700">
+                          Cat√©gorie <span className="text-red-500">*</span>
+                        </label>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setIsExpenseCategoryModalOpen(true);
+                          }}
+                          className="text-[11px] font-bold text-emerald-600 hover:text-emerald-700 hover:underline inline-flex items-center gap-1 cursor-pointer"
+                        >
+                          <Plus className="w-3 h-3" />
+                          <span>Nouvelle Cat√©gorie</span>
+                        </button>
+                      </div>
+                      <select
+                        value={expenseFormCategory}
+                        onChange={(e) => setExpenseFormCategory(e.target.value)}
+                        required
+                        className="w-full bg-slate-50 border border-slate-200 rounded-2xl px-3.5 py-2.5 text-xs text-slate-900 font-bold focus:outline-none focus:border-emerald-500 focus:bg-white transition-all cursor-pointer"
+                      >
+                        <option value="" disabled>
+                          {expenseCategories.length === 0 ? 'Aucune cat√©gorie disponible ‚Äî cr√©ez-en une d‚Äôabord' : 'S√©lectionner une cat√©gorie'}
+                        </option>
+                        {expenseCategories.map((cat) => (
+                          <option key={cat.id} value={cat.name}>
+                            {cat.name}
+                          </option>
+                        ))}
+                      </select>
+                      {expenseCategories.length === 0 && (
+                        <p className="text-[11px] text-amber-600 mt-1 font-medium">
+                          Vous n&apos;avez pas encore cr√©√© de cat√©gorie. Cliquez sur &quot;Nouvelle Cat√©gorie&quot; ci-dessus.
+                        </p>
+                      )}
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 mb-1.5">
+                        Libell√© <span className="text-red-500">*</span>
+                      </label>
+                      <input
+                        type="text"
+                        placeholder="Ex: Loyer du local commercial, Achat carton..."
+                        value={expenseFormLabel}
+                        onChange={(e) => setExpenseFormLabel(e.target.value)}
+                        required
+                        className="w-full bg-slate-50 border border-slate-200 rounded-2xl px-3.5 py-2.5 text-xs text-slate-900 font-medium placeholder:text-slate-400 focus:outline-none focus:border-emerald-500 focus:bg-white transition-all"
+                      />
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-xs font-bold text-slate-700 mb-1.5">
+                          Montant ({business.currency || 'XOF'}) <span className="text-red-500">*</span>
+                        </label>
+                        <input
+                          type="number"
+                          step="any"
+                          min="0"
+                          placeholder="0"
+                          value={expenseFormAmount}
+                          onChange={(e) => setExpenseFormAmount(e.target.value)}
+                          required
+                          className="w-full bg-slate-50 border border-slate-200 rounded-2xl px-3.5 py-2.5 text-xs text-slate-900 font-bold placeholder:text-slate-400 focus:outline-none focus:border-emerald-500 focus:bg-white transition-all"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-bold text-slate-700 mb-1.5">
+                          Date <span className="text-red-500">*</span>
+                        </label>
+                        <input
+                          type="date"
+                          value={expenseFormDate}
+                          onChange={(e) => setExpenseFormDate(e.target.value)}
+                          required
+                          className="w-full bg-slate-50 border border-slate-200 rounded-2xl px-3.5 py-2.5 text-xs text-slate-900 font-bold focus:outline-none focus:border-emerald-500 focus:bg-white transition-all"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="pt-2">
+                      <label className="flex items-center gap-2.5 cursor-pointer select-none">
+                        <input
+                          type="checkbox"
+                          checked={expenseFormIsRecurring}
+                          onChange={(e) => setExpenseFormIsRecurring(e.target.checked)}
+                          className="w-4 h-4 text-emerald-600 rounded-lg border-slate-300 focus:ring-emerald-500"
+                        />
+                        <div>
+                          <span className="text-xs font-bold text-slate-800">D√©pense r√©currente</span>
+                          <p className="text-[11px] text-slate-400 font-medium">Cochez si cette d√©pense revient mensuellement</p>
+                        </div>
+                      </label>
+                    </div>
+
+                    <div className="pt-4 border-t border-slate-100 flex items-center justify-end gap-3">
+                      <button
+                        type="button"
+                        onClick={() => setIsExpenseModalOpen(false)}
+                        className="px-4 py-2.5 rounded-2xl text-xs font-bold text-slate-600 hover:bg-slate-100 transition-colors cursor-pointer"
+                      >
+                        Annuler
+                      </button>
+                      <button
+                        type="submit"
+                        disabled={expenseSaving}
+                        className="inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-2xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-sm transition-all cursor-pointer disabled:opacity-50"
+                      >
+                        {expenseSaving ? (
+                          <>
+                            <Loader2 className="w-4 h-4 animate-spin" />
+                            <span>Enregistrement...</span>
+                          </>
+                        ) : (
+                          <span>{editingExpense ? 'Enregistrer les modifications' : 'Ajouter la d√©pense'}</span>
+                        )}
+                      </button>
+                    </div>
+                  </form>
+                </div>
+              </div>
+            )}
+          </div>
         )}
 
         {/* 4.5 PAGE TAUX DE CONVERSION (CONVERSION ANALYTICS & DETAIL) */}
@@ -5400,52 +6458,164 @@ export default function MerchantDashboard({
                 </div>
 
                 {/* Discussions Section */}
-                <div className="space-y-1.5">
-                  <div className="text-[10px] font-mono tracking-wider text-slate-500 uppercase font-bold px-2 py-1">
-                    Discussions
+                <div
+                  className={`space-y-1.5 transition-all p-1 rounded-xl ${
+                    isDragOverRoot
+                      ? 'bg-[#1B4B4A]/10 border-2 border-dashed border-[#1B4B4A]'
+                      : ''
+                  }`}
+                  onDragOver={(e) => {
+                    e.preventDefault();
+                    e.dataTransfer.dropEffect = 'move';
+                  }}
+                  onDragEnter={(e) => {
+                    e.preventDefault();
+                    setIsDragOverRoot(true);
+                  }}
+                  onDragLeave={(e) => {
+                    e.preventDefault();
+                    if (e.currentTarget.contains(e.relatedTarget as Node)) return;
+                    setIsDragOverRoot(false);
+                  }}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    setIsDragOverRoot(false);
+                    const conversationId = e.dataTransfer.getData('text/plain');
+                    if (conversationId) {
+                      handleAssignConversationToProject(conversationId, null);
+                    }
+                  }}
+                >
+                  <div className="text-[10px] font-mono tracking-wider text-slate-500 uppercase font-bold px-2 py-1 flex items-center justify-between">
+                    <span>Discussions</span>
+                    {isDragOverRoot && (
+                      <span className="text-[9px] text-[#1B4B4A] font-bold lowercase">
+                        deposer a la racine
+                      </span>
+                    )}
                   </div>
                   <div className="space-y-1 max-h-48 overflow-y-auto pr-1">
-                    {activeConversations.filter(c => !agentSearchQuery || c.title.toLowerCase().includes(agentSearchQuery.toLowerCase())).length === 0 ? (
-                      <p className="text-xs text-slate-400 italic px-2 py-1">Aucune discussion active</p>
-                    ) : (
-                      activeConversations
-                        .filter(c => !agentSearchQuery || c.title.toLowerCase().includes(agentSearchQuery.toLowerCase()))
-                        .map((conv) => {
-                          const isSelected = selectedConversationId === conv.id;
-                          return (
-                            <div
-                              key={conv.id}
-                              className={`group flex items-center justify-between p-2 rounded-xl text-xs font-medium cursor-pointer transition-all ${
-                                isSelected && !isTrashViewOpen
-                                  ? 'bg-white border border-[#E5DCD0] text-[#241F1B] shadow-2xs'
-                                  : 'hover:bg-white/60 text-slate-600'
-                              }`}
-                              onClick={() => {
+                    {(() => {
+                      const rootConversations = activeConversations.filter(
+                        (c) =>
+                          (!c.project_id || !activeProjects.some((p) => p.id === c.project_id)) &&
+                          (!agentSearchQuery || c.title.toLowerCase().includes(agentSearchQuery.toLowerCase()))
+                      );
+
+                      if (rootConversations.length === 0) {
+                        return <p className="text-xs text-slate-400 italic px-2 py-1">Aucune discussion active</p>;
+                      }
+
+                      return rootConversations.map((conv) => {
+                        const isSelected = selectedConversationId === conv.id;
+                        const isEditingThisConv = editingConversationId === conv.id;
+
+                        return (
+                          <div
+                            key={conv.id}
+                            draggable={!isEditingThisConv}
+                            onDragStart={(e) => {
+                              e.dataTransfer.setData('text/plain', conv.id);
+                              e.dataTransfer.effectAllowed = 'move';
+                              setDraggedConversationId(conv.id);
+                            }}
+                            onDragEnd={() => {
+                              setDraggedConversationId(null);
+                              setDragOverProjectId(null);
+                              setIsDragOverRoot(false);
+                            }}
+                            className={`group flex items-center justify-between p-2 rounded-xl text-xs font-medium cursor-pointer transition-all ${
+                              draggedConversationId === conv.id ? 'opacity-40 ' : ''
+                            }${
+                              isSelected && !isTrashViewOpen
+                                ? 'bg-white border border-[#E5DCD0] text-[#241F1B] shadow-2xs'
+                                : 'hover:bg-white/60 text-slate-600'
+                            }`}
+                            onClick={() => {
+                              if (!isEditingThisConv) {
                                 setSelectedConversationId(conv.id);
                                 setIsTrashViewOpen(false);
-                              }}
-                            >
-                              <div className="flex items-center space-x-2 truncate pr-1">
-                                <MessageSquare className="w-3.5 h-3.5 text-[#1B4B4A] shrink-0" />
+                              }
+                            }}
+                          >
+                            <div className="flex items-center space-x-2 truncate pr-1 flex-1 min-w-0">
+                              <MessageSquare className="w-3.5 h-3.5 text-[#1B4B4A] shrink-0" />
+                              {isEditingThisConv ? (
+                                <input
+                                  type="text"
+                                  value={editingConversationTitle}
+                                  onChange={(e) => setEditingConversationTitle(e.target.value)}
+                                  onClick={(e) => e.stopPropagation()}
+                                  onKeyDown={(e) => {
+                                    if (e.key === 'Enter') handleRenameConversation(conv.id);
+                                    if (e.key === 'Escape') {
+                                      setEditingConversationId(null);
+                                      setEditingConversationTitle('');
+                                    }
+                                  }}
+                                  className="text-xs p-0.5 border border-[#E5DCD0] rounded bg-white w-full focus:outline-none focus:border-[#1B4B4A]"
+                                  autoFocus
+                                />
+                              ) : (
                                 <span className="truncate">{conv.title}</span>
-                              </div>
-                              <button
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  store.moveConversationToTrash(conv.id);
-                                  if (selectedConversationId === conv.id) {
-                                    setSelectedConversationId(null);
-                                  }
-                                }}
-                                className="opacity-0 group-hover:opacity-100 p-1 hover:text-[#B5451B] text-slate-400 transition-opacity cursor-pointer"
-                                title="Mettre en corbeille"
-                              >
-                                <Trash2 className="w-3.5 h-3.5" />
-                              </button>
+                              )}
                             </div>
-                          );
-                        })
-                    )}
+
+                            <div className="flex items-center space-x-1 shrink-0">
+                              {isEditingThisConv ? (
+                                <>
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      handleRenameConversation(conv.id);
+                                    }}
+                                    className="p-1 hover:text-emerald-600 text-slate-400 cursor-pointer"
+                                    title="Valider"
+                                  >
+                                    <Check className="w-3 h-3" />
+                                  </button>
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setEditingConversationId(null);
+                                      setEditingConversationTitle('');
+                                    }}
+                                    className="p-1 hover:text-slate-600 text-slate-400 cursor-pointer"
+                                    title="Annuler"
+                                  >
+                                    <X className="w-3 h-3" />
+                                  </button>
+                                </>
+                              ) : (
+                                <>
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setEditingConversationId(conv.id);
+                                      setEditingConversationTitle(conv.title);
+                                    }}
+                                    className="opacity-0 group-hover:opacity-100 p-1 hover:text-slate-800 text-slate-400 transition-opacity cursor-pointer"
+                                    title="Renommer"
+                                  >
+                                    <Edit2 className="w-3 h-3" />
+                                  </button>
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      handleMoveConversationToTrash(conv.id);
+                                    }}
+                                    className="opacity-0 group-hover:opacity-100 p-1 hover:text-[#B5451B] text-slate-400 transition-opacity cursor-pointer"
+                                    title="Mettre en corbeille"
+                                  >
+                                    <Trash2 className="w-3.5 h-3.5" />
+                                  </button>
+                                </>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      });
+                    })()}
                   </div>
                 </div>
 
@@ -5453,7 +6623,7 @@ export default function MerchantDashboard({
                 <div className="space-y-1.5 pt-2 border-t border-[#E5DCD0]">
                   <div className="flex items-center justify-between px-2 py-1">
                     <span className="text-[10px] font-mono tracking-wider text-slate-500 uppercase font-bold">
-                      Projets ({store.agentProjects.length})
+                      Projets ({activeProjects.length})
                     </span>
                     <button
                       onClick={() => setShowNewProjectForm(true)}
@@ -5492,15 +6662,48 @@ export default function MerchantDashboard({
                   )}
 
                   <div className="space-y-1 max-h-48 overflow-y-auto pr-1">
-                    {store.agentProjects.length === 0 ? (
-                      <p className="text-xs text-slate-400 italic px-2 py-1">Aucun projet cr√©√©</p>
+                    {activeProjects.length === 0 ? (
+                      <p className="text-xs text-slate-400 italic px-2 py-1">Aucun projet actif</p>
                     ) : (
-                      store.agentProjects.map((proj) => {
-                        const projConvs = activeConversations.filter(c => c.project_id === proj.id);
+                      activeProjects.map((proj) => {
+                        const projConvs = activeConversations.filter(
+                          (c) =>
+                            c.project_id === proj.id &&
+                            (!agentSearchQuery || c.title.toLowerCase().includes(agentSearchQuery.toLowerCase()))
+                        );
                         const isExpanded = expandedProjects[proj.id] ?? true;
                         return (
                           <div key={proj.id} className="space-y-1">
-                            <div className="flex items-center justify-between p-2 rounded-xl text-xs font-semibold bg-white/40 hover:bg-white/80 transition-all">
+                            <div
+                              onDragOver={(e) => {
+                                e.preventDefault();
+                                e.dataTransfer.dropEffect = 'move';
+                              }}
+                              onDragEnter={(e) => {
+                                e.preventDefault();
+                                setDragOverProjectId(proj.id);
+                              }}
+                              onDragLeave={(e) => {
+                                e.preventDefault();
+                                if (e.currentTarget.contains(e.relatedTarget as Node)) return;
+                                if (dragOverProjectId === proj.id) {
+                                  setDragOverProjectId(null);
+                                }
+                              }}
+                              onDrop={(e) => {
+                                e.preventDefault();
+                                setDragOverProjectId(null);
+                                const conversationId = e.dataTransfer.getData('text/plain');
+                                if (conversationId) {
+                                  handleAssignConversationToProject(conversationId, proj.id);
+                                }
+                              }}
+                              className={`flex items-center justify-between p-2 rounded-xl text-xs font-semibold transition-all ${
+                                dragOverProjectId === proj.id
+                                  ? 'bg-[#1B4B4A]/15 border-2 border-dashed border-[#1B4B4A]'
+                                  : 'bg-white/40 hover:bg-white/80'
+                              }`}
+                            >
                               <div
                                 className="flex items-center space-x-1.5 flex-1 cursor-pointer truncate"
                                 onClick={() =>
@@ -5517,10 +6720,15 @@ export default function MerchantDashboard({
                                     type="text"
                                     value={editingProjectName}
                                     onChange={(e) => setEditingProjectName(e.target.value)}
+                                    onClick={(e) => e.stopPropagation()}
                                     onKeyDown={(e) => {
                                       if (e.key === 'Enter') handleRenameProject(proj.id);
+                                      if (e.key === 'Escape') {
+                                        setEditingProjectId(null);
+                                        setEditingProjectName('');
+                                      }
                                     }}
-                                    className="text-xs p-0.5 border border-[#E5DCD0] rounded bg-white"
+                                    className="text-xs p-0.5 border border-[#E5DCD0] rounded bg-white w-full"
                                     autoFocus
                                   />
                                 ) : (
@@ -5556,9 +6764,12 @@ export default function MerchantDashboard({
                                   </button>
                                 )}
                                 <button
-                                  onClick={() => store.deleteAgentProject(proj.id)}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setDeletingProjectId(proj.id);
+                                  }}
                                   className="p-1 hover:text-[#B5451B] text-slate-400 cursor-pointer"
-                                  title="Supprimer le projet"
+                                  title="Mettre en corbeille"
                                 >
                                   <Trash2 className="w-3 h-3" />
                                 </button>
@@ -5571,29 +6782,114 @@ export default function MerchantDashboard({
                                 {projConvs.length === 0 ? (
                                   <p className="text-[11px] text-slate-400 italic px-2">Aucune discussion</p>
                                 ) : (
-                                  projConvs.map(conv => (
-                                    <div
-                                      key={conv.id}
-                                      onClick={() => setSelectedConversationId(conv.id)}
-                                      className={`p-1.5 rounded-lg text-xs font-medium cursor-pointer transition-all flex items-center justify-between ${
-                                        selectedConversationId === conv.id
-                                          ? 'bg-white text-[#241F1B] border border-[#E5DCD0] font-semibold'
-                                          : 'text-slate-600 hover:bg-white/50'
-                                      }`}
-                                    >
-                                      <span className="truncate">{conv.title}</span>
-                                      <button
-                                        onClick={(e) => {
-                                          e.stopPropagation();
-                                          store.assignConversationToProject(conv.id, null);
+                                  projConvs.map(conv => {
+                                    const isSelected = selectedConversationId === conv.id;
+                                    const isEditingThisConv = editingConversationId === conv.id;
+
+                                    return (
+                                      <div
+                                        key={conv.id}
+                                        draggable={!isEditingThisConv}
+                                        onDragStart={(e) => {
+                                          e.dataTransfer.setData('text/plain', conv.id);
+                                          e.dataTransfer.effectAllowed = 'move';
+                                          setDraggedConversationId(conv.id);
                                         }}
-                                        className="text-[10px] text-slate-400 hover:text-[#B5451B] cursor-pointer"
-                                        title="Retirer du projet"
+                                        onDragEnd={() => {
+                                          setDraggedConversationId(null);
+                                          setDragOverProjectId(null);
+                                          setIsDragOverRoot(false);
+                                        }}
+                                        onClick={() => {
+                                          if (!isEditingThisConv) {
+                                            setSelectedConversationId(conv.id);
+                                            setIsTrashViewOpen(false);
+                                          }
+                                        }}
+                                        className={`group p-1.5 rounded-lg text-xs font-medium cursor-pointer transition-all flex items-center justify-between ${
+                                          draggedConversationId === conv.id ? 'opacity-40 ' : ''
+                                        }${
+                                          isSelected && !isTrashViewOpen
+                                            ? 'bg-white text-[#241F1B] border border-[#E5DCD0] font-semibold'
+                                            : 'text-slate-600 hover:bg-white/50'
+                                        }`}
                                       >
-                                        <X className="w-3 h-3" />
-                                      </button>
-                                    </div>
-                                  ))
+                                        <div className="flex items-center space-x-1.5 truncate flex-1 min-w-0 pr-1">
+                                          {isEditingThisConv ? (
+                                            <input
+                                              type="text"
+                                              value={editingConversationTitle}
+                                              onChange={(e) => setEditingConversationTitle(e.target.value)}
+                                              onClick={(e) => e.stopPropagation()}
+                                              onKeyDown={(e) => {
+                                                if (e.key === 'Enter') handleRenameConversation(conv.id);
+                                                if (e.key === 'Escape') {
+                                                  setEditingConversationId(null);
+                                                  setEditingConversationTitle('');
+                                                }
+                                              }}
+                                              className="text-[11px] p-0.5 border border-[#E5DCD0] rounded bg-white w-full focus:outline-none focus:border-[#1B4B4A]"
+                                              autoFocus
+                                            />
+                                          ) : (
+                                            <span className="truncate">{conv.title}</span>
+                                          )}
+                                        </div>
+
+                                        <div className="flex items-center space-x-0.5 shrink-0">
+                                          {isEditingThisConv ? (
+                                            <>
+                                              <button
+                                                onClick={(e) => {
+                                                  e.stopPropagation();
+                                                  handleRenameConversation(conv.id);
+                                                }}
+                                                className="p-0.5 hover:text-emerald-600 text-slate-400 cursor-pointer"
+                                                title="Valider"
+                                              >
+                                                <Check className="w-3 h-3" />
+                                              </button>
+                                              <button
+                                                onClick={(e) => {
+                                                  e.stopPropagation();
+                                                  setEditingConversationId(null);
+                                                  setEditingConversationTitle('');
+                                                }}
+                                                className="p-0.5 hover:text-slate-600 text-slate-400 cursor-pointer"
+                                                title="Annuler"
+                                              >
+                                                <X className="w-3 h-3" />
+                                              </button>
+                                            </>
+                                          ) : (
+                                            <>
+                                              <button
+                                                onClick={(e) => {
+                                                  e.stopPropagation();
+                                                  setEditingConversationId(conv.id);
+                                                  setEditingConversationTitle(conv.title);
+                                                }}
+                                                className="opacity-0 group-hover:opacity-100 p-0.5 hover:text-slate-800 text-slate-400 transition-opacity cursor-pointer"
+                                                title="Renommer"
+                                              >
+                                                <Edit2 className="w-3 h-3" />
+                                              </button>
+                                              <button
+                                                onClick={(e) => {
+                                                  e.stopPropagation();
+                                                  handleMoveConversationToTrash(conv.id);
+                                                }}
+                                                className="opacity-0 group-hover:opacity-100 p-0.5 hover:text-[#B5451B] text-slate-400 transition-opacity cursor-pointer"
+                                                title="Mettre en corbeille"
+                                              >
+                                                <Trash2 className="w-3 h-3" />
+                                              </button>
+                                            </>
+                                          )}
+                                        </div>
+                                      </div>
+                                    );
+                                  })
                                 )}
                               </div>
                             )}
@@ -5617,10 +6913,10 @@ export default function MerchantDashboard({
                 >
                   <div className="flex items-center space-x-2">
                     <Trash2 className="w-4 h-4 text-[#B5451B]" />
-                    <span className="text-xs">Corbeille ({trashedConversations.length})</span>
+                    <span className="text-xs">Corbeille ({trashedConversations.length + trashedProjects.length})</span>
                   </div>
                   <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-red-50 text-[#B5451B] font-bold border border-red-100">
-                    {trashedConversations.length}
+                    {trashedConversations.length + trashedProjects.length}
                   </span>
                 </button>
               </div>
@@ -5629,7 +6925,7 @@ export default function MerchantDashboard({
             {/* MAIN CHAT WORKSPACE AREA */}
             <div className="flex-1 flex flex-col justify-between space-y-4 p-2 sm:p-4">
               {isTrashViewOpen ? (
-                /* VUE D√âDI√âE CORBEILLE */
+                /* VUE D√âDI√âE CORBEILLE (Conversations & Projets) */
                 <div className="flex-1 flex flex-col space-y-4 h-full">
                   {/* Top Bar for Trash View */}
                   <div className="flex items-center justify-between w-full border-b border-[#E5DCD0]/60 pb-3">
@@ -5644,10 +6940,10 @@ export default function MerchantDashboard({
                       <div>
                         <h3 className="text-base font-bold text-[#241F1B] flex items-center space-x-2">
                           <Trash2 className="w-4 h-4 text-[#B5451B]" />
-                          <span>Corbeille des conversations</span>
+                          <span>Corbeille de l'assistant</span>
                         </h3>
                         <p className="text-xs text-slate-500">
-                          {trashedConversations.length} discussion(s) mise(s) en corbeille
+                          {trashedConversations.length} discussion(s) et {trashedProjects.length} projet(s) en corbeille
                         </p>
                       </div>
                     </div>
@@ -5660,16 +6956,16 @@ export default function MerchantDashboard({
                     </button>
                   </div>
 
-                  {/* List of Trashed Conversations */}
-                  <div className="flex-1 overflow-y-auto pr-1 py-2">
-                    {trashedConversations.length === 0 ? (
+                  {/* List of Trashed Items */}
+                  <div className="flex-1 overflow-y-auto pr-1 py-2 space-y-6">
+                    {trashedConversations.length === 0 && trashedProjects.length === 0 ? (
                       <div className="max-w-md mx-auto my-auto text-center py-16 space-y-3">
                         <div className="w-16 h-16 rounded-full bg-[#FAF7F2] border border-[#E5DCD0] flex items-center justify-center mx-auto text-slate-400">
                           <Trash2 className="w-8 h-8 text-slate-300" />
                         </div>
                         <h4 className="text-base font-bold text-[#241F1B]">La corbeille est vide</h4>
                         <p className="text-xs text-slate-500 max-w-xs mx-auto">
-                          Aucune discussion ne se trouve dans la corbeille pour le moment.
+                          Aucune discussion ni aucun projet ne se trouve dans la corbeille pour le moment.
                         </p>
                         <button
                           onClick={() => setIsTrashViewOpen(false)}
@@ -5679,56 +6975,121 @@ export default function MerchantDashboard({
                         </button>
                       </div>
                     ) : (
-                      <div className="space-y-3 max-w-2xl mx-auto w-full pt-2">
-                        {trashedConversations.map((conv) => {
-                          const projName = conv.project_id
-                            ? store.agentProjects.find((p) => p.id === conv.project_id)?.name
-                            : null;
-                          return (
-                            <div
-                              key={conv.id}
-                              className="p-4 rounded-2xl bg-white border border-[#E5DCD0] shadow-2xs flex items-center justify-between space-x-4 hover:border-slate-300 transition-all"
-                            >
-                              <div className="space-y-1 min-w-0 flex-1">
-                                <div className="flex items-center space-x-2">
-                                  <MessageSquare className="w-4 h-4 text-slate-400 shrink-0" />
-                                  <h4 className="text-sm font-bold text-[#241F1B] truncate">{conv.title}</h4>
-                                  {projName && (
-                                    <span className="text-[10px] font-semibold bg-[#FAF7F2] border border-[#E5DCD0] text-slate-600 px-2 py-0.5 rounded-full shrink-0">
-                                      {projName}
-                                    </span>
-                                  )}
-                                </div>
-                                <p className="text-[11px] text-slate-400">
-                                  {conv.updated_at
-                                    ? `Modifi√© le ${new Date(conv.updated_at).toLocaleDateString('fr-FR', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })}`
-                                    : 'En corbeille'}
-                                </p>
-                              </div>
+                      <div className="space-y-6 max-w-2xl mx-auto w-full pt-2">
+                        {/* Section 1: Discussions en corbeille */}
+                        <div className="space-y-2">
+                          <div className="text-xs font-mono font-bold text-slate-500 uppercase tracking-wider px-1">
+                            Discussions en corbeille ({trashedConversations.length})
+                          </div>
+                          {trashedConversations.length === 0 ? (
+                            <p className="text-xs text-slate-400 italic px-2 py-1">Aucune discussion en corbeille</p>
+                          ) : (
+                            <div className="space-y-2">
+                              {trashedConversations.map((conv) => {
+                                const projName = conv.project_id
+                                  ? agentProjectsList.find((p) => p.id === conv.project_id)?.name
+                                  : null;
+                                return (
+                                  <div
+                                    key={conv.id}
+                                    className="p-3.5 rounded-2xl bg-white border border-[#E5DCD0] shadow-2xs flex items-center justify-between space-x-4 hover:border-slate-300 transition-all"
+                                  >
+                                    <div className="space-y-1 min-w-0 flex-1">
+                                      <div className="flex items-center space-x-2">
+                                        <MessageSquare className="w-4 h-4 text-slate-400 shrink-0" />
+                                        <h4 className="text-sm font-bold text-[#241F1B] truncate">{conv.title}</h4>
+                                        {projName && (
+                                          <span className="text-[10px] font-semibold bg-[#FAF7F2] border border-[#E5DCD0] text-slate-600 px-2 py-0.5 rounded-full shrink-0">
+                                            {projName}
+                                          </span>
+                                        )}
+                                      </div>
+                                      <p className="text-[11px] text-slate-400">
+                                        {conv.updated_at
+                                          ? `Modifi√© le ${new Date(conv.updated_at).toLocaleDateString('fr-FR', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })}`
+                                          : 'En corbeille'}
+                                      </p>
+                                    </div>
 
-                              <div className="flex items-center space-x-2 shrink-0">
-                                <button
-                                  onClick={() => {
-                                    store.restoreConversationFromTrash(conv.id);
-                                  }}
-                                  className="flex items-center space-x-1 px-3 py-1.5 text-xs font-medium text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-xl transition-colors cursor-pointer"
-                                  title="Restaurer la discussion"
-                                >
-                                  <RotateCcw className="w-3.5 h-3.5" />
-                                  <span>Restaurer</span>
-                                </button>
-                                <button
-                                  onClick={() => store.deleteConversationPermanently(conv.id)}
-                                  className="flex items-center space-x-1 px-3 py-1.5 text-xs font-medium text-[#B5451B] bg-red-50 hover:bg-red-100 border border-red-200 rounded-xl transition-colors cursor-pointer"
-                                  title="Supprimer d√©finitivement"
-                                >
-                                  <Trash2 className="w-3.5 h-3.5" />
-                                  <span>Supprimer d√©finitivement</span>
-                                </button>
-                              </div>
+                                    <div className="flex items-center space-x-2 shrink-0">
+                                      <button
+                                        onClick={() => {
+                                          handleRestoreConversation(conv.id);
+                                        }}
+                                        className="flex items-center space-x-1 px-3 py-1.5 text-xs font-medium text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-xl transition-colors cursor-pointer"
+                                        title="Restaurer la discussion"
+                                      >
+                                        <RotateCcw className="w-3.5 h-3.5" />
+                                        <span>Restaurer</span>
+                                      </button>
+                                      <button
+                                        onClick={() => setDeletingConversationId(conv.id)}
+                                        className="flex items-center space-x-1 px-3 py-1.5 text-xs font-medium text-[#B5451B] bg-red-50 hover:bg-red-100 border border-red-200 rounded-xl transition-colors cursor-pointer"
+                                        title="Supprimer d√©finitivement"
+                                      >
+                                        <Trash2 className="w-3.5 h-3.5" />
+                                        <span>Supprimer d√©finitivement</span>
+                                      </button>
+                                    </div>
+                                  </div>
+                                );
+                              })}
                             </div>
-                          );
-                        })}
+                          )}
+                        </div>
+
+                        {/* Section 2: Projets en corbeille */}
+                        <div className="space-y-2 pt-2 border-t border-[#E5DCD0]/60">
+                          <div className="text-xs font-mono font-bold text-slate-500 uppercase tracking-wider px-1">
+                            Projets en corbeille ({trashedProjects.length})
+                          </div>
+                          {trashedProjects.length === 0 ? (
+                            <p className="text-xs text-slate-400 italic px-2 py-1">Aucun projet en corbeille</p>
+                          ) : (
+                            <div className="space-y-2">
+                              {trashedProjects.map((proj) => (
+                                <div
+                                  key={proj.id}
+                                  className="p-3.5 rounded-2xl bg-white border border-[#E5DCD0] shadow-2xs flex items-center justify-between space-x-4 hover:border-slate-300 transition-all"
+                                >
+                                  <div className="space-y-1 min-w-0 flex-1">
+                                    <div className="flex items-center space-x-2">
+                                      <Folder className="w-4 h-4 text-[#B5451B] shrink-0" />
+                                      <h4 className="text-sm font-bold text-[#241F1B] truncate">{proj.name}</h4>
+                                      <span className="text-[10px] font-semibold bg-rose-50 border border-rose-100 text-rose-700 px-2 py-0.5 rounded-full shrink-0">
+                                        Projet corbeille
+                                      </span>
+                                    </div>
+                                    <p className="text-[11px] text-slate-400">
+                                      {proj.created_at
+                                        ? `Cr√©√© le ${new Date(proj.created_at).toLocaleDateString('fr-FR', { day: '2-digit', month: 'short', year: 'numeric' })}`
+                                        : 'En corbeille'}
+                                    </p>
+                                  </div>
+
+                                  <div className="flex items-center space-x-2 shrink-0">
+                                    <button
+                                      onClick={() => handleRestoreProject(proj.id)}
+                                      className="flex items-center space-x-1 px-3 py-1.5 text-xs font-medium text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-xl transition-colors cursor-pointer"
+                                      title="Restaurer le projet"
+                                    >
+                                      <RotateCcw className="w-3.5 h-3.5" />
+                                      <span>Restaurer</span>
+                                    </button>
+                                    <button
+                                      onClick={() => setPermanentDeletingProjectId(proj.id)}
+                                      className="flex items-center space-x-1 px-3 py-1.5 text-xs font-medium text-[#B5451B] bg-red-50 hover:bg-red-100 border border-red-200 rounded-xl transition-colors cursor-pointer"
+                                      title="Supprimer d√©finitivement"
+                                    >
+                                      <Trash2 className="w-3.5 h-3.5" />
+                                      <span>Supprimer d√©finitivement</span>
+                                    </button>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
                       </div>
                     )}
                   </div>
@@ -5751,7 +7112,7 @@ export default function MerchantDashboard({
                           <h3 className="text-sm font-bold text-[#241F1B]">{currentConversation.title}</h3>
                           <p className="text-[11px] text-slate-500">
                             {currentConversation.project_id
-                              ? `Projet: ${store.agentProjects.find(p => p.id === currentConversation.project_id)?.name || 'Inconnu'}`
+                              ? `Projet: ${agentProjectsList.find(p => p.id === currentConversation.project_id)?.name || 'Inconnu'}`
                               : 'Discussion non class√©e'}
                           </p>
                         </div>
@@ -5763,18 +7124,17 @@ export default function MerchantDashboard({
                       <div className="flex items-center space-x-2">
                         <select
                           value={currentConversation.project_id || ''}
-                          onChange={(e) => store.assignConversationToProject(currentConversation.id, e.target.value || null)}
+                          onChange={(e) => handleAssignConversationToProject(currentConversation.id, e.target.value || null)}
                           className="text-xs bg-white border border-[#E5DCD0] rounded-xl px-2.5 py-1.5 text-[#241F1B] focus:outline-none focus:border-[#1B4B4A] cursor-pointer"
                         >
                           <option value="">-- Sans projet --</option>
-                          {store.agentProjects.map((p) => (
+                          {agentProjectsList.map((p) => (
                             <option key={p.id} value={p.id}>{p.name}</option>
                           ))}
                         </select>
                         <button
                           onClick={() => {
-                            store.moveConversationToTrash(currentConversation.id);
-                            setSelectedConversationId(null);
+                            handleMoveConversationToTrash(currentConversation.id);
                           }}
                           className="p-2 text-slate-400 hover:text-[#B5451B] hover:bg-white rounded-xl border border-transparent hover:border-[#E5DCD0] transition-all cursor-pointer"
                           title="Mettre en corbeille"
@@ -5979,6 +7339,178 @@ export default function MerchantDashboard({
           </div>
         )}
 
+
+      {/* Modal Confirmation de Mise en Corbeille de Projet (Agent IA) */}
+      <AnimatePresence>
+        {deletingProjectId !== null && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-xs">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="bg-white rounded-2xl max-w-sm w-full p-6 shadow-xl border border-slate-200/80 space-y-4 font-sans"
+            >
+              <div className="flex items-center space-x-3">
+                <div className="w-10 h-10 rounded-xl bg-amber-50 border border-amber-100 flex items-center justify-center text-amber-600 shrink-0">
+                  <Trash2 className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-black text-slate-900">
+                    Mettre ce projet en corbeille ?
+                  </h3>
+                  <p className="text-xs text-slate-500 font-medium">
+                    Cette action d√©tachera les discussions.
+                  </p>
+                </div>
+              </div>
+
+              <p className="text-xs text-slate-600 leading-relaxed">
+                Voulez-vous vraiment mettre ce projet en corbeille ? Les discussions qu'il contient ne seront pas supprim√©es, elles seront simplement d√©tach√©es du projet et resteront accessibles dans votre liste de discussions.
+              </p>
+
+              <div className="flex items-center justify-end space-x-2 pt-2 border-t border-slate-100">
+                <button
+                  type="button"
+                  disabled={isDeletingProjectLoading}
+                  onClick={() => setDeletingProjectId(null)}
+                  className="px-4 py-2 bg-slate-100 hover:bg-slate-200 disabled:opacity-50 text-slate-700 rounded-xl text-xs font-bold transition-colors cursor-pointer"
+                >
+                  Annuler
+                </button>
+                <button
+                  type="button"
+                  disabled={isDeletingProjectLoading}
+                  onClick={() => handleDeleteProject(deletingProjectId)}
+                  className="inline-flex items-center space-x-1.5 px-4 py-2 bg-amber-600 hover:bg-amber-700 disabled:opacity-50 text-white rounded-xl text-xs font-bold transition-colors cursor-pointer"
+                >
+                  {isDeletingProjectLoading ? (
+                    <span>Mise en corbeille...</span>
+                  ) : (
+                    <>
+                      <Trash2 className="w-3.5 h-3.5" />
+                      <span>Mettre en corbeille</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Modal Confirmation de Suppression D√©finitive de Projet (Agent IA) */}
+      {/* Modal Confirmation Suppression Definitive Discussion (Agent IA) */}
+      <AnimatePresence>
+        {deletingConversationId !== null && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-xs">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="bg-white rounded-2xl max-w-sm w-full p-6 shadow-xl border border-slate-200/80 space-y-4 font-sans"
+            >
+              <div className="flex items-center space-x-3">
+                <div className="w-10 h-10 rounded-xl bg-rose-50 border border-rose-100 flex items-center justify-center text-rose-600 shrink-0">
+                  <Trash2 className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-black text-slate-900">
+                    Supprimer definitivement cette discussion ?
+                  </h3>
+                  <p className="text-xs text-rose-500 font-medium">
+                    Cette action est irreversible.
+                  </p>
+                </div>
+              </div>
+              <p className="text-xs text-slate-600 leading-relaxed">
+                Voulez-vous vraiment supprimer definitivement cette discussion ? Tous les messages associes seront definitivement effaces de la base de donnees.
+              </p>
+              <div className="flex items-center justify-end space-x-2 pt-2 border-t border-slate-100">
+                <button
+                  type="button"
+                  disabled={isDeletingConversationLoading}
+                  onClick={() => setDeletingConversationId(null)}
+                  className="px-4 py-2 bg-slate-100 hover:bg-slate-200 disabled:opacity-50 text-slate-700 rounded-xl text-xs font-bold transition-colors cursor-pointer"
+                >
+                  Annuler
+                </button>
+                <button
+                  type="button"
+                  disabled={isDeletingConversationLoading}
+                  onClick={() => handleDeleteConversationPermanently(deletingConversationId)}
+                  className="inline-flex items-center space-x-1.5 px-4 py-2 bg-rose-600 hover:bg-rose-700 disabled:opacity-50 text-white rounded-xl text-xs font-bold transition-colors cursor-pointer"
+                >
+                  {isDeletingConversationLoading ? (
+                    <span>Suppression...</span>
+                  ) : (
+                    <>
+                      <Trash2 className="w-3.5 h-3.5" />
+                      <span>Supprimer definitivement</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {permanentDeletingProjectId !== null && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-xs">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="bg-white rounded-2xl max-w-sm w-full p-6 shadow-xl border border-slate-200/80 space-y-4 font-sans"
+            >
+              <div className="flex items-center space-x-3">
+                <div className="w-10 h-10 rounded-xl bg-rose-50 border border-rose-100 flex items-center justify-center text-rose-600 shrink-0">
+                  <Trash2 className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-black text-slate-900">
+                    Supprimer d√©finitivement ce projet ?
+                  </h3>
+                  <p className="text-xs text-rose-500 font-medium">
+                    Cette action est irr√©versible.
+                  </p>
+                </div>
+              </div>
+
+              <p className="text-xs text-slate-600 leading-relaxed">
+                Voulez-vous vraiment supprimer d√©finitivement ce projet ? Cette action est irr√©versible et supprimera le projet de la base de donn√©es. Les discussions qui √©taient rattach√©es √† ce projet restent conserv√©es dans vos discussions.
+              </p>
+
+              <div className="flex items-center justify-end space-x-2 pt-2 border-t border-slate-100">
+                <button
+                  type="button"
+                  disabled={isDeletingProjectLoading}
+                  onClick={() => setPermanentDeletingProjectId(null)}
+                  className="px-4 py-2 bg-slate-100 hover:bg-slate-200 disabled:opacity-50 text-slate-700 rounded-xl text-xs font-bold transition-colors cursor-pointer"
+                >
+                  Annuler
+                </button>
+                <button
+                  type="button"
+                  disabled={isDeletingProjectLoading}
+                  onClick={() => handleDeleteProjectPermanently(permanentDeletingProjectId)}
+                  className="inline-flex items-center space-x-1.5 px-4 py-2 bg-rose-600 hover:bg-rose-700 disabled:opacity-50 text-white rounded-xl text-xs font-bold transition-colors cursor-pointer"
+                >
+                  {isDeletingProjectLoading ? (
+                    <span>Suppression...</span>
+                  ) : (
+                    <>
+                      <Trash2 className="w-3.5 h-3.5" />
+                      <span>Supprimer d√©finitivement</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
         {/* TAB 6: PARAM√àTRES (STORE SETTINGS, OWNER ONLY) */}
         {hasPermission('settings') && activeTab === 'settings' && (
           <div className="space-y-6">
@@ -5991,14 +7523,15 @@ export default function MerchantDashboard({
               </div>
 
               {/* Profile Form */}
-              <form onSubmit={handleSaveBizProfile} className="mt-6 space-y-4 max-w-xl">
+              <form onSubmit={handleSaveAllSettings} className="mt-6 space-y-4 max-w-xl">
                 <div>
                   <label className="text-xs font-extrabold text-slate-700 block mb-1">Nom du commerce</label>
                   <input
                     type="text"
                     value={bizName}
                     onChange={(e) => setBizName(e.target.value)}
-                    className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs text-slate-900 font-medium focus:outline-none focus:border-emerald-500 shadow-2xs"
+                    disabled={isBizLoading || isBizSaving}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs text-slate-900 font-medium focus:outline-none focus:border-emerald-500 shadow-2xs disabled:opacity-60"
                   />
                 </div>
 
@@ -6008,7 +7541,8 @@ export default function MerchantDashboard({
                     type="text"
                     value={bizWhatsapp}
                     onChange={(e) => setBizWhatsapp(e.target.value)}
-                    className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs text-slate-900 font-mono focus:outline-none focus:border-emerald-500 shadow-2xs"
+                    disabled={isBizLoading || isBizSaving}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs text-slate-900 font-mono focus:outline-none focus:border-emerald-500 shadow-2xs disabled:opacity-60"
                   />
                 </div>
 
@@ -6018,7 +7552,8 @@ export default function MerchantDashboard({
                     type="text"
                     value={bizCurrency}
                     onChange={(e) => setBizCurrency(e.target.value)}
-                    className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs text-slate-900 font-bold focus:outline-none focus:border-emerald-500 shadow-2xs"
+                    disabled={isBizLoading || isBizSaving}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs text-slate-900 font-bold focus:outline-none focus:border-emerald-500 shadow-2xs disabled:opacity-60"
                   />
                 </div>
               </form>
@@ -6059,7 +7594,7 @@ export default function MerchantDashboard({
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
-                    {store.getDeliveryZones(business.id).map((zone) => (
+                    {deliveryZones.map((zone) => (
                       <tr key={zone.id} className="hover:bg-slate-50/80 transition-colors">
                         <td className="py-3.5 px-4 font-extrabold text-slate-900">{zone.name}</td>
                         <td className="py-3.5 px-4 font-black text-emerald-700">
@@ -6067,8 +7602,20 @@ export default function MerchantDashboard({
                         </td>
                         <td className="py-3.5 px-4">
                           <button
-                            onClick={() => store.toggleDeliveryZoneActive(zone.id)}
-                            className={`px-2.5 py-1 rounded-full text-[10px] font-black uppercase transition-all ${
+                            type="button"
+                            onClick={async () => {
+                              const res = await toggleDeliveryZoneActive(zone.id, zone.active);
+                              if (res.success) {
+                                if (res.zone) {
+                                  setDeliveryZones((prev) => prev.map((z) => (z.id === zone.id ? res.zone! : z)));
+                                } else {
+                                  await loadDeliveryZones();
+                                }
+                              } else {
+                                alert(`Erreur lors du changement de statut de la zone : ${res.error || '√âchec'}`);
+                              }
+                            }}
+                            className={`px-2.5 py-1 rounded-full text-[10px] font-black uppercase transition-all cursor-pointer ${
                               zone.active
                                 ? 'bg-emerald-100 text-emerald-800 border border-emerald-200'
                                 : 'bg-slate-100 text-slate-500 border border-slate-200'
@@ -6079,15 +7626,17 @@ export default function MerchantDashboard({
                         </td>
                         <td className="py-3.5 px-4 text-right space-x-2">
                           <button
+                            type="button"
                             onClick={() => {
                               setEditingZone(zone);
                               setIsZoneModalOpen(true);
                             }}
-                            className="px-3 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-lg transition-colors"
+                            className="px-3 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-lg transition-colors cursor-pointer"
                           >
                             √âditer
                           </button>
                           <button
+                            type="button"
                             onClick={() => setDeletingZone(zone)}
                             className="px-3 py-1 bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold text-xs rounded-lg border border-rose-200 transition-colors cursor-pointer"
                           >
@@ -6096,10 +7645,10 @@ export default function MerchantDashboard({
                         </td>
                       </tr>
                     ))}
-                    {store.getDeliveryZones(business.id).length === 0 && (
+                    {deliveryZones.length === 0 && (
                       <tr>
                         <td colSpan={4} className="py-8 text-center text-slate-400 text-xs">
-                          Aucune zone de livraison d√©finie.
+                          {isDeliveryZonesLoading ? 'Chargement des zones...' : 'Aucune zone de livraison d√©finie.'}
                         </td>
                       </tr>
                     )}
@@ -6594,9 +8143,9 @@ export default function MerchantDashboard({
                 <button
                   type="button"
                   onClick={handleCancelSettingsChanges}
-                  disabled={!hasSettingsChanges}
+                  disabled={!hasSettingsChanges || isBizSaving}
                   className={`px-4 py-2.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
-                    hasSettingsChanges
+                    hasSettingsChanges && !isBizSaving
                       ? 'bg-slate-100 hover:bg-slate-200 text-slate-700'
                       : 'bg-slate-100/50 text-slate-400 cursor-not-allowed'
                   }`}
@@ -6606,15 +8155,15 @@ export default function MerchantDashboard({
                 <button
                   type="button"
                   onClick={handleSaveAllSettings}
-                  disabled={!hasSettingsChanges}
+                  disabled={!hasSettingsChanges || isBizSaving}
                   className={`px-5 py-2.5 rounded-xl text-xs font-extrabold transition-all flex items-center justify-center space-x-2 cursor-pointer ${
-                    hasSettingsChanges
+                    hasSettingsChanges && !isBizSaving
                       ? 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-md shadow-emerald-600/20 active:scale-98'
                       : 'bg-slate-200 text-slate-400 cursor-not-allowed'
                   }`}
                 >
                   <Check className="w-4 h-4" />
-                  <span>Enregistrer les modifications</span>
+                  <span>{isBizSaving ? 'Enregistrement...' : 'Enregistrer les modifications'}</span>
                 </button>
               </div>
             </div>
@@ -8406,17 +9955,61 @@ export default function MerchantDashboard({
             </div>
 
             <form
-              onSubmit={(e) => {
+              onSubmit={async (e) => {
                 e.preventDefault();
-                if (editingZone.name && editingZone.fee !== undefined && editingZone.fee >= 0) {
-                  store.saveDeliveryZone({
-                    id: editingZone.id,
-                    business_id: business.id,
-                    name: editingZone.name,
-                    fee: Number(editingZone.fee),
-                    active: editingZone.active ?? true,
-                  });
-                  setIsZoneModalOpen(false);
+                const trimmedName = editingZone.name?.trim();
+                if (!trimmedName) {
+                  alert('Le nom de la zone de livraison est requis.');
+                  return;
+                }
+                const feeNum = Number(editingZone.fee);
+                if (isNaN(feeNum) || feeNum < 0) {
+                  alert('Les frais de livraison doivent √™tre un montant valide sup√©rieur ou √©gal √† 0.');
+                  return;
+                }
+
+                setIsZoneSaving(true);
+                try {
+                  if (editingZone.id) {
+                    const res = await updateDeliveryZone(editingZone.id, {
+                      name: trimmedName,
+                      fee: feeNum,
+                      active: editingZone.active ?? true,
+                    });
+                    if (!res.success) {
+                      alert(`Erreur lors de la modification de la zone : ${res.error || '√âchec de la mise √† jour'}`);
+                      return;
+                    }
+                    if (res.zone) {
+                      setDeliveryZones((prev) => prev.map((z) => (z.id === res.zone!.id ? res.zone! : z)));
+                    } else {
+                      await loadDeliveryZones();
+                    }
+                    setIsZoneModalOpen(false);
+                    setEditingZone(null);
+                  } else {
+                    const res = await insertDeliveryZone({
+                      business_id: business.id,
+                      name: trimmedName,
+                      fee: feeNum,
+                      active: editingZone.active ?? true,
+                    });
+                    if (!res.success) {
+                      alert(`Erreur lors de l'ajout de la zone : ${res.error || "√âchec de l'insertion"}`);
+                      return;
+                    }
+                    if (res.zone) {
+                      setDeliveryZones((prev) =>
+                        [...prev, res.zone!].sort((a, b) => a.name.localeCompare(b.name, 'fr', { sensitivity: 'base' }))
+                      );
+                    } else {
+                      await loadDeliveryZones();
+                    }
+                    setIsZoneModalOpen(false);
+                    setEditingZone(null);
+                  }
+                } finally {
+                  setIsZoneSaving(false);
                 }
               }}
               className="space-y-4 text-xs"
@@ -8466,16 +10059,18 @@ export default function MerchantDashboard({
               <div className="flex items-center justify-end space-x-2 pt-3 border-t border-slate-100">
                 <button
                   type="button"
+                  disabled={isZoneSaving}
                   onClick={() => setIsZoneModalOpen(false)}
-                  className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-xl"
+                  className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-xl cursor-pointer"
                 >
                   Annuler
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs rounded-xl shadow-xs"
+                  disabled={isZoneSaving}
+                  className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs rounded-xl shadow-xs cursor-pointer disabled:opacity-50"
                 >
-                  Enregistrer la Zone
+                  {isZoneSaving ? 'Enregistrement...' : 'Enregistrer la Zone'}
                 </button>
               </div>
             </form>
@@ -8497,6 +10092,7 @@ export default function MerchantDashboard({
             <div className="flex items-center justify-end space-x-2 pt-3 border-t border-slate-100">
               <button
                 type="button"
+                disabled={isZoneDeleting}
                 onClick={() => setDeletingZone(null)}
                 className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-xl cursor-pointer"
               >
@@ -8504,13 +10100,24 @@ export default function MerchantDashboard({
               </button>
               <button
                 type="button"
-                onClick={() => {
-                  store.deleteDeliveryZone(deletingZone.id);
-                  setDeletingZone(null);
+                disabled={isZoneDeleting}
+                onClick={async () => {
+                  setIsZoneDeleting(true);
+                  try {
+                    const res = await deleteDeliveryZone(deletingZone.id);
+                    if (!res.success) {
+                      alert(`Erreur lors de la suppression de la zone : ${res.error || '√âchec de la suppression'}`);
+                      return;
+                    }
+                    setDeliveryZones((prev) => prev.filter((z) => z.id !== deletingZone.id));
+                    setDeletingZone(null);
+                  } finally {
+                    setIsZoneDeleting(false);
+                  }
                 }}
-                className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white font-extrabold text-xs rounded-xl shadow-xs cursor-pointer"
+                className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white font-extrabold text-xs rounded-xl shadow-xs cursor-pointer disabled:opacity-50"
               >
-                Confirmer la suppression
+                {isZoneDeleting ? 'Suppression...' : 'Confirmer la suppression'}
               </button>
             </div>
           </div>
@@ -8526,17 +10133,17 @@ export default function MerchantDashboard({
               <h3 className="font-extrabold text-slate-900 text-base">Motif d&apos;annulation obligatoire</h3>
             </div>
             <p className="text-xs text-slate-600">
-              Sp√©cifiez la raison pour laquelle la commande <span className="font-mono font-bold text-slate-900">#{cancellingOrderId}</span> est annul√©e :
+              Specifiez la raison pour laquelle la commande <span className="font-mono font-bold text-slate-900">#{cancellingOrderId}</span> est annulee :
             </p>
 
             {/* Quick Option Buttons */}
             <div className="flex flex-wrap gap-1.5">
               {[
-                'Client injoignable',
-                'Rupture de stock',
-                'Erreur de commande',
-                'Client a annul√©',
-                'Hors zone de livraison',
+                "Client injoignable",
+                "Rupture de stock",
+                "Erreur de commande",
+                "Client a annule",
+                "Hors zone de livraison",
               ].map((preset) => (
                 <button
                   key={preset}
@@ -8544,8 +10151,8 @@ export default function MerchantDashboard({
                   onClick={() => setCancellationReason(preset)}
                   className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all border cursor-pointer ${
                     cancellationReason === preset
-                      ? 'bg-rose-100 text-rose-900 border-rose-300 font-extrabold ring-2 ring-rose-400/30'
-                      : 'bg-slate-50 hover:bg-slate-100 text-slate-700 border-slate-200'
+                      ? "bg-rose-100 text-rose-900 border-rose-300 font-extrabold ring-2 ring-rose-400/30"
+                      : "bg-slate-50 hover:bg-slate-100 text-slate-700 border-slate-200"
                   }`}
                 >
                   {preset}
@@ -8560,7 +10167,7 @@ export default function MerchantDashboard({
                 required
                 value={cancellationReason}
                 onChange={(e) => setCancellationReason(e.target.value)}
-                placeholder="Ex: Le client ne r√©pond pas au t√©l√©phone apr√®s 3 tentatives..."
+                placeholder="Ex: Le client ne repond pas au telephone apres 3 tentatives..."
                 className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium focus:ring-2 focus:ring-rose-500"
               />
             </div>
@@ -8573,7 +10180,7 @@ export default function MerchantDashboard({
                   setIsCancelModalOpen(false);
                   setCancellingOrderId(null);
                 }}
-                className="px-4 py-2 bg-slate-100 hover:bg-slate-200 disabled:opacity-50 text-slate-700 font-bold text-xs rounded-xl"
+                className="px-4 py-2 bg-slate-100 hover:bg-slate-200 disabled:opacity-50 text-slate-700 font-bold text-xs rounded-xl cursor-pointer"
               >
                 Abandonner
               </button>
@@ -8581,596 +10188,5 @@ export default function MerchantDashboard({
                 type="button"
                 disabled={!cancellationReason.trim() || isCancellingOrder}
                 onClick={async () => {
-                  if (cancellingOrderId && cancellationReason.trim() && !isCancellingOrder) {
-                    setIsCancellingOrder(true);
-                    try {
-                      await onCancelOrder(cancellingOrderId, cancellationReason.trim());
-                      setIsCancelModalOpen(false);
-                      setCancellingOrderId(null);
-                    } catch (err) {
-                      console.error("Erreur lors de l'annulation de la commande:", err);
-                    } finally {
-                      setIsCancellingOrder(false);
-                    }
-                  }
-                }}
-                className="px-4 py-2 bg-rose-600 hover:bg-rose-700 disabled:opacity-50 text-white font-extrabold text-xs rounded-xl shadow-xs"
-              >
-                {isCancellingOrder ? "Annulation en cours..." : "Confirmer l'annulation"}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Enlarged Photo Modal (Double click on photo cell) */}
-      {enlargedPhoto && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs">
-          <div className="bg-white rounded-3xl max-w-sm w-full p-6 shadow-2xl border border-slate-200 text-center space-y-4 relative text-slate-800 animate-in fade-in zoom-in-95 duration-150">
-            <button
-              type="button"
-              onClick={() => setEnlargedPhoto(null)}
-              className="absolute top-4 right-4 p-1.5 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-full transition-colors cursor-pointer"
-            >
-              <X className="w-5 h-5" />
-            </button>
-            <h3 className="font-extrabold text-slate-900 text-base">Photo de Profil Client</h3>
-            <p className="text-xs font-bold text-emerald-800 bg-emerald-50 py-1 px-3 rounded-full border border-emerald-200 inline-block">
-              {enlargedPhoto.name}
-            </p>
-            <div className="pt-2">
-              {enlargedPhoto.url ? (
-                <img
-                  src={enlargedPhoto.url}
-                  alt={enlargedPhoto.name}
-                  className="w-56 h-56 rounded-2xl object-cover mx-auto border-2 border-slate-200 shadow-md"
-                />
-              ) : (
-                <div className="w-48 h-48 rounded-full bg-emerald-100 text-emerald-800 border-2 border-emerald-300 font-black text-5xl flex items-center justify-center mx-auto shadow-md">
-                  {enlargedPhoto.name.charAt(0).toUpperCase()}
-                </div>
-              )}
-            </div>
-            <button
-              type="button"
-              onClick={() => setEnlargedPhoto(null)}
-              className="mt-4 w-full py-2.5 bg-slate-900 hover:bg-slate-800 text-white font-extrabold text-xs rounded-xl shadow-xs cursor-pointer transition-all"
-            >
-              Fermer
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* Enlarged Comment Modal (Double click on comment icon cell) */}
-      {enlargedComment && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs">
-          <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl border border-slate-200 space-y-4 relative text-slate-800 animate-in fade-in zoom-in-95 duration-150">
-            <button
-              type="button"
-              onClick={() => setEnlargedComment(null)}
-              className="absolute top-4 right-4 p-1.5 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-full transition-colors cursor-pointer"
-            >
-              <X className="w-5 h-5" />
-            </button>
-            <div>
-              <h3 className="font-black text-slate-900 text-base">Commentaire & Avis Client</h3>
-              <p className="text-xs font-semibold text-slate-500 mt-0.5">
-                Client : <span className="font-bold text-slate-800">{enlargedComment.name}</span> (Commande #{enlargedComment.orderId})
-              </p>
-            </div>
-
-            {/* Rating Stars if available */}
-            {enlargedComment.rating ? (
-              <div className="flex items-center space-x-1.5 bg-amber-50 px-3 py-1.5 rounded-xl border border-amber-200 text-amber-900 text-xs font-black">
-                <Star className="w-4 h-4 fill-amber-400 text-amber-500 shrink-0" />
-                <span>Note attribu√©e : {enlargedComment.rating}/5</span>
-              </div>
-            ) : null}
-
-            {/* Comment Text */}
-            <div className="space-y-1">
-              <span className="text-[10px] font-black uppercase text-slate-400 tracking-wider block">
-                Message / Avis du Client :
-              </span>
-              <div className="p-4 bg-amber-50/90 border border-amber-200 rounded-2xl text-xs text-amber-950 font-medium italic whitespace-pre-wrap leading-relaxed shadow-2xs">
-                {enlargedComment.comment ? `‚Äú${enlargedComment.comment}‚Äù` : 'Aucun commentaire √©crit par le client.'}
-              </div>
-            </div>
-
-            {/* Internal Note if available */}
-            {enlargedComment.internalNote ? (
-              <div className="space-y-1 pt-2">
-                <span className="text-[10px] font-black uppercase text-slate-400 tracking-wider block">
-                  Note Interne (Staff / Livreur) :
-                </span>
-                <div className="p-3 bg-slate-50 border border-slate-200 rounded-2xl text-xs text-slate-800 font-medium whitespace-pre-wrap leading-relaxed">
-                  {enlargedComment.internalNote}
-                </div>
-              </div>
-            ) : null}
-
-            <button
-              type="button"
-              onClick={() => setEnlargedComment(null)}
-              className="w-full py-2.5 bg-slate-900 hover:bg-slate-800 text-white font-extrabold text-xs rounded-xl shadow-xs cursor-pointer transition-all mt-2"
-            >
-              Fermer
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* Modal Carte D√©taill√©e Commande */}
-      {(() => {
-        if (!selectedModalOrderId) return null;
-        const modalOrder = businessOrders.find((o) => o.id === selectedModalOrderId);
-        if (!modalOrder) return null;
-
-        const modalCustomer = businessCustomers.find(
-          (c) => c.id === modalOrder.customer_id || c.phone === modalOrder.customer_phone
-        );
-        const modalAlert = getOrderAlert(modalOrder);
-
-        return (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs overflow-y-auto">
-            <div className="bg-white rounded-3xl max-w-2xl w-full max-h-[90vh] overflow-y-auto p-6 sm:p-8 shadow-2xl border border-slate-200 space-y-6 text-slate-800 relative my-auto animate-in fade-in zoom-in-95 duration-150">
-              {/* Header Modal */}
-              <div className="flex items-start justify-between pb-4 border-b border-slate-100">
-                <div>
-                  <div className="flex flex-wrap items-center gap-2.5">
-                    <h3 className="font-black text-slate-900 text-xl">
-                      Commande #{modalOrder.id}
-                    </h3>
-                    <span className={`px-3 py-1 rounded-full text-xs font-black uppercase border ${getStatusBadgeClass(modalOrder.status)}`}>
-                      {getStatusLabel(modalOrder.status)}
-                    </span>
-                  </div>
-                  <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500 mt-1 font-medium">
-                    <span className="inline-flex items-center gap-1">
-                      <Calendar className="w-3.5 h-3.5 text-slate-400" />
-                      {new Date(modalOrder.created_at).toLocaleDateString('fr-FR', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
-                    </span>
-                    <span>‚Ä¢</span>
-                    <span className="inline-flex items-center gap-1" suppressHydrationWarning>
-                      <Clock className="w-3.5 h-3.5 text-slate-400" />
-                      {new Date(modalOrder.created_at).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}
-                    </span>
-                  </div>
-                </div>
-                <button
-                  onClick={() => setSelectedModalOrderId(null)}
-                  className="p-2 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-full transition-colors cursor-pointer"
-                  title="Fermer"
-                >
-                  <X className="w-5 h-5" />
-                </button>
-              </div>
-
-              {/* Alerte Active sur cette commande */}
-              {modalAlert && (
-                <div className={`p-4 rounded-2xl border flex items-start space-x-3 shadow-2xs ${modalAlert.badgeClass}`}>
-                  <AlertTriangle className={`w-5 h-5 shrink-0 mt-0.5 ${modalAlert.iconClass}`} />
-                  <div>
-                    <h4 className="font-extrabold text-xs uppercase tracking-wider">{modalAlert.title}</h4>
-                    <p className="text-xs font-medium mt-0.5 leading-relaxed">{modalAlert.description}</p>
-                  </div>
-                </div>
-              )}
-
-              {/* Grille Informations Client & Logistique */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {/* Informations Client */}
-                <div className="bg-slate-50/80 p-4 rounded-2xl border border-slate-200/80 space-y-3">
-                  <span className="text-[10px] font-black uppercase text-slate-400 tracking-wider block">
-                    Informations Client
-                  </span>
-                  
-                  <div className="flex items-center space-x-3">
-                    {modalCustomer?.avatar_url ? (
-                      <img
-                        src={modalCustomer.avatar_url}
-                        alt={modalOrder.customer_name}
-                        className="w-12 h-12 rounded-full object-cover border-2 border-emerald-500 shadow-2xs"
-                      />
-                    ) : (
-                      <div className="w-12 h-12 rounded-full bg-emerald-600 text-white font-black text-sm flex items-center justify-center shadow-xs">
-                        {getInitials(modalOrder.customer_name)}
-                      </div>
-                    )}
-                    <div className="min-w-0">
-                      <h4 className="font-extrabold text-slate-900 text-sm truncate">{modalOrder.customer_name}</h4>
-                      <span className="text-[11px] text-slate-500 font-mono block">
-                        ID Client : {modalOrder.customer_id || modalCustomer?.id || `CLI-${modalOrder.customer_phone}`}
-                      </span>
-                    </div>
-                  </div>
-
-                  <div className="pt-2 border-t border-slate-200/60 space-y-2 text-xs">
-                    <div className="flex items-center justify-between">
-                      <span className="text-slate-500 font-medium flex items-center gap-1.5">
-                        <Phone className="w-3.5 h-3.5 text-slate-400" />
-                        T√©l√©phone :
-                      </span>
-                      <a
-                        href={`tel:${modalOrder.customer_phone}`}
-                        className="font-bold font-mono text-emerald-700 hover:underline"
-                      >
-                        {modalOrder.customer_phone}
-                      </a>
-                    </div>
-
-                    <div className="space-y-1">
-                      <span className="text-slate-500 font-medium flex items-center gap-1.5">
-                        <MapPin className="w-3.5 h-3.5 text-slate-400" />
-                        Adresse de livraison :
-                      </span>
-                      <p className="font-bold text-slate-800 bg-white p-2.5 rounded-xl border border-slate-200/80 leading-relaxed text-xs">
-                        {modalOrder.delivery_address || 'Aucune adresse renseign√©e'}
-                      </p>
-                    </div>
-
-                    {/* Mode de retrait / zone */}
-                    <div className="pt-1">
-                      {modalOrder.order_type === 'pickup' ? (
-                        <span className="px-2.5 py-1 rounded-lg text-[10px] font-extrabold uppercase bg-amber-100 text-amber-900 border border-amber-200 inline-flex items-center">
-                          <Store className="w-3 h-3 mr-1" />
-                          Sur place (Retrait)
-                        </span>
-                      ) : (
-                        <span className="px-2.5 py-1 rounded-lg text-[10px] font-extrabold bg-cyan-100 text-cyan-900 border border-cyan-200 inline-flex items-center">
-                          <Truck className="w-3 h-3 mr-1" />
-                          Livraison {modalOrder.delivery_zone_name ? `(${modalOrder.delivery_zone_name})` : ''}
-                        </span>
-                      )}
-                    </div>
-
-                    {/* GPS Google Maps Link */}
-                    {modalOrder.customer_lat && modalOrder.customer_lng && (
-                      <a
-                        href={`https://www.google.com/maps?q=${modalOrder.customer_lat},${modalOrder.customer_lng}`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="w-full mt-2 px-3 py-2 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 rounded-xl text-xs font-bold flex items-center justify-center transition-colors"
-                      >
-                        <Navigation className="w-3.5 h-3.5 mr-1.5 text-emerald-600" />
-                        Ouvrir la position GPS sur Google Maps
-                      </a>
-                    )}
-                  </div>
-                </div>
-
-                {/* Suivi & Attribution */}
-                <div className="bg-slate-50/80 p-4 rounded-2xl border border-slate-200/80 space-y-3.5">
-                  <span className="text-[10px] font-black uppercase text-slate-400 tracking-wider block">
-                    Statut & Suivi Logistique
-                  </span>
-
-                  {/* Changer le statut */}
-                  <div>
-                    <label className="block text-xs font-extrabold text-slate-700 mb-1">
-                      Statut de la commande :
-                    </label>
-                    <select
-                      value={modalOrder.status}
-                      onChange={(e) => {
-                        const newStatus = e.target.value as OrderStatus;
-                        if (newStatus === 'cancelled') {
-                          setCancellingOrderId(modalOrder.id);
-                          setCancellationReason(modalOrder.cancellation_reason || '');
-                          setIsCancelModalOpen(true);
-                        } else {
-                          onUpdateOrderStatus(modalOrder.id, newStatus);
-                        }
-                      }}
-                      className={`border rounded-xl px-3 py-2 text-xs font-extrabold focus:outline-none cursor-pointer shadow-2xs w-full transition-colors ${getStatusSelectClass(modalOrder.status)}`}
-                    >
-                      <option value="confirmed" className="bg-blue-100 text-blue-900 font-bold">Confirm√©e</option>
-                      <option value="preparing" className="bg-orange-100 text-orange-900 font-bold">En cours</option>
-                      <option value="delivered" className="bg-emerald-100 text-emerald-900 font-bold">Livr√©e</option>
-                      <option value="cancelled" className="bg-rose-100 text-rose-900 font-bold">Annul√©e</option>
-                    </select>
-                  </div>
-
-                  {/* Livreur assign√© */}
-                  <div>
-                    <label className="block text-xs font-extrabold text-slate-700 mb-1">
-                      Nom du livreur assign√© :
-                    </label>
-                    <input
-                      type="text"
-                      placeholder="Ex: Babacar Diallo..."
-                      value={modalOrder.assigned_to || ''}
-                      onChange={(e) => store.assignDriver(modalOrder.id, e.target.value)}
-                      className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs font-bold text-slate-800 focus:ring-2 focus:ring-emerald-500"
-                    />
-                  </div>
-
-                  {/* Mode de r√®glement & Montant */}
-                  <div className="pt-2 border-t border-slate-200/60 space-y-2 text-xs">
-                    <div className="flex items-center justify-between">
-                      <span className="text-slate-500 font-medium">M√©thode de paiement :</span>
-                      <span className="font-extrabold text-slate-900 uppercase bg-white px-2.5 py-1 rounded-lg border border-slate-200">
-                        {modalOrder.payment_method}
-                      </span>
-                    </div>
-
-                    {modalOrder.payment_reference && (
-                      <div className="flex items-center justify-between text-[11px]">
-                        <span className="text-slate-500 font-medium">R√©f√©rence paiement :</span>
-                        <span className="font-mono text-slate-700 bg-white px-2 py-0.5 rounded border border-slate-200">
-                          {modalOrder.payment_reference}
-                        </span>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </div>
-
-              {/* Produits Command√©s */}
-              <div className="bg-slate-50/80 p-4 rounded-2xl border border-slate-200/80 space-y-3">
-                <span className="text-[10px] font-black uppercase text-slate-400 tracking-wider block">
-                  Produits Command√©s ({modalOrder.items?.reduce((sum, i) => sum + i.quantity, 0) || 0} article(s))
-                </span>
-                <div className="divide-y divide-slate-200/60">
-                  {modalOrder.items?.map((item) => (
-                    <div key={item.id} className="py-2.5 flex items-center justify-between text-xs">
-                      <div className="flex items-center space-x-3">
-                        <span className="w-7 h-7 rounded-lg bg-emerald-100 text-emerald-900 font-black text-xs flex items-center justify-center shrink-0">
-                          {item.quantity}x
-                        </span>
-                        <div>
-                          <span className="font-bold text-slate-900 block">{item.product_name || 'Produit'}</span>
-                          {item.unit_price ? (
-                            <span className="text-[10px] text-slate-500 block">
-                              {item.unit_price.toLocaleString()} {business.currency} / unit√©
-                            </span>
-                          ) : null}
-                        </div>
-                      </div>
-                      <span className="font-black text-slate-900">
-                        {((item.unit_price || 0) * item.quantity).toLocaleString()} {business.currency}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-
-                {/* Synth√®se financi√®re */}
-                <div className="pt-3 border-t border-slate-200 space-y-1.5 text-xs font-bold">
-                  {modalOrder.delivery_fee ? (
-                    <div className="flex items-center justify-between text-slate-500">
-                      <span>Frais de livraison :</span>
-                      <span>+{modalOrder.delivery_fee.toLocaleString()} {business.currency}</span>
-                    </div>
-                  ) : null}
-                  <div className="flex items-center justify-between text-slate-900 text-sm font-black pt-1 border-t border-slate-200/80">
-                    <span>Montant Total :</span>
-                    <span className="text-emerald-700 text-base">
-                      {modalOrder.total_amount.toLocaleString()} {business.currency}
-                    </span>
-                  </div>
-                </div>
-              </div>
-
-              {/* Commentaire / Avis client (Affich√© uniquement pour commande Livr√©e) */}
-              {modalOrder.status === 'delivered' && (
-                <div className="bg-amber-50/90 border border-amber-200/90 rounded-2xl p-4 space-y-2 shadow-2xs">
-                  <div className="flex items-center justify-between">
-                    <span className="font-extrabold text-xs text-amber-900 flex items-center gap-1.5">
-                      <Star className="w-4 h-4 fill-amber-400 text-amber-500" />
-                      Commentaire & Avis Client {modalOrder.rating ? `(${modalOrder.rating}/5 ‚òÖ)` : ''}
-                    </span>
-                    <span className="text-[10px] text-amber-700 font-extrabold uppercase">Avis Int√©gral</span>
-                  </div>
-                  <p className="text-xs text-amber-950 font-medium italic whitespace-pre-wrap leading-relaxed bg-white/80 p-3 rounded-xl border border-amber-200/60">
-                    {modalOrder.rating_comment
-                      ? `‚Äú${modalOrder.rating_comment}‚Äù`
-                      : 'Aucun commentaire r√©dig√© pour cette commande.'}
-                  </p>
-                </div>
-              )}
-
-              {/* Note Interne */}
-              <div className="bg-slate-50/80 p-4 rounded-2xl border border-slate-200/80 space-y-2">
-                <label className="text-[10px] font-black uppercase text-slate-500 tracking-wider flex items-center gap-1.5">
-                  <FileText className="w-3.5 h-3.5 text-slate-400" />
-                  Note Interne (Livreur / Cuisine / Staff)
-                </label>
-                <textarea
-                  rows={2}
-                  placeholder="Ajouter une note interne ou consigne sp√©ciale..."
-                  value={modalOrder.internal_note || ''}
-                  onChange={(e) => store.updateOrderInternalNote(modalOrder.id, e.target.value)}
-                  className="w-full p-3 bg-white border border-slate-200 rounded-xl text-xs text-slate-800 font-medium focus:ring-2 focus:ring-emerald-500"
-                />
-              </div>
-
-              {/* Actions Footer */}
-              <div className="flex items-center justify-end pt-4 border-t border-slate-100">
-                <button
-                  type="button"
-                  onClick={() => setSelectedModalOrderId(null)}
-                  className="px-5 py-2.5 bg-slate-900 hover:bg-slate-800 text-white font-extrabold text-xs rounded-xl transition-all shadow-xs cursor-pointer"
-                >
-                  Fermer
-                </button>
-              </div>
-            </div>
-          </div>
-        );
-      })()}
-
-      {/* Modal Saisie Motif pour Absent / Retard */}
-      <AnimatePresence>
-        {attendanceReasonModal.isOpen && attendanceReasonModal.staff && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-xs">
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.95 }}
-              className="bg-white rounded-2xl max-w-md w-full p-6 shadow-xl border border-slate-200/80 space-y-4"
-            >
-              <div className="flex items-center justify-between pb-3 border-b border-slate-100">
-                <div>
-                  <h3 className="text-sm font-black text-slate-900">
-                    Pointage : {attendanceReasonModal.status === 'absent' ? 'Absence' : 'Retard'}
-                  </h3>
-                  <p className="text-xs text-slate-500">
-                    Membre : <strong className="text-slate-800">{attendanceReasonModal.staff.name}</strong>
-                  </p>
-                </div>
-                <button
-                  onClick={() => setAttendanceReasonModal({ isOpen: false, staff: null, status: 'absent', reason: '' })}
-                  className="p-1.5 text-slate-400 hover:text-slate-600 rounded-lg hover:bg-slate-100"
-                >
-                  <X className="w-4 h-4" />
-                </button>
-              </div>
-
-              <div className="space-y-2">
-                <label className="text-xs font-bold text-slate-700 block">
-                  Motif / Justification <span className="text-slate-400 font-normal">(Optionnel)</span>
-                </label>
-                <textarea
-                  value={attendanceReasonModal.reason}
-                  onChange={(e) =>
-                    setAttendanceReasonModal((prev) => ({ ...prev, reason: e.target.value }))
-                  }
-                  placeholder="Ex: Maladie avec certificat, Embouteillages, Cong√© personnel..."
-                  rows={3}
-                  className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs text-slate-900 focus:outline-none focus:border-emerald-500 font-medium"
-                />
-                <p className="text-[11px] text-slate-500 italic">
-                  * Si un motif est renseign√©, le statut affichera le badge factuel <strong className="text-sky-700">Justifi√©</strong>. Sinon, il sera affich√© <strong className="text-amber-700">Non justifi√©</strong>.
-                </p>
-              </div>
-
-              <div className="flex items-center justify-end space-x-2 pt-2 border-t border-slate-100">
-                <button
-                  onClick={() => setAttendanceReasonModal({ isOpen: false, staff: null, status: 'absent', reason: '' })}
-                  className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold transition-colors cursor-pointer"
-                >
-                  Annuler
-                </button>
-                <button
-                  onClick={handleSaveAttendanceReasonModal}
-                  className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition-colors shadow-2xs cursor-pointer"
-                >
-                  Enregistrer le pointage
-                </button>
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
-
-      {/* Shared Image Cropper Modal for Profile, Staff Invite & Customer Create */}
-      <ImageCropperModal
-        isOpen={cropModalOpen}
-        imageSrc={cropImageSrc}
-        title={
-          cropTarget === 'profile'
-            ? 'Recadrer ma photo de profil'
-            : cropTarget === 'staff_invite'
-            ? 'Recadrer la photo du membre'
-            : 'Recadrer la photo du client'
-        }
-        isSaving={cropSaving}
-        onCancel={() => {
-          setCropModalOpen(false);
-          setCropImageSrc(null);
-        }}
-        onConfirm={async (croppedBlob) => {
-          setCropSaving(true);
-          try {
-            if (cropTarget === 'customer_create') {
-              const url = await uploadCustomerAvatar(croppedBlob, business.id);
-              setNewCustomerPhotoUrl(url);
-            } else {
-              const url = await uploadStaffAvatar(croppedBlob, business.id);
-              if (cropTarget === 'profile') {
-                store.updateStaff(activeStaff.id, { photo_url: url, avatar_url: url });
-              } else {
-                setInvitePhotoUrl(url);
-              }
-            }
-            setCropModalOpen(false);
-            setCropImageSrc(null);
-          } catch (err) {
-            console.error('Erreur lors de l\'enregistrement de la photo recadr√©e:', err);
-          } finally {
-            setCropSaving(false);
-          }
-        }}
-      />
-
-      {/* Confirmation Modal for Deleting Selected Customer Messages */}
-      <AnimatePresence>
-        {showDeleteMessagesConfirmModal && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-xs">
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95 }}
-              animate={{ opacity: 1, scale: 1 }}
-              exit={{ opacity: 0, scale: 0.95 }}
-              className="bg-white rounded-2xl max-w-sm w-full p-6 shadow-xl border border-slate-200/80 space-y-4"
-            >
-              <div className="flex items-center space-x-3">
-                <div className="w-10 h-10 rounded-xl bg-rose-50 border border-rose-100 flex items-center justify-center text-rose-600 shrink-0">
-                  <Trash2 className="w-5 h-5" />
-                </div>
-                <div>
-                  <h3 className="text-sm font-black text-slate-900">
-                    Supprimer {selectedCustomerMessageIds.length} message{selectedCustomerMessageIds.length > 1 ? 's' : ''} ?
-                  </h3>
-                  <p className="text-xs text-slate-500 font-medium">
-                    Cette action est irr√©versible.
-                  </p>
-                </div>
-              </div>
-
-              <p className="text-xs text-slate-600 leading-relaxed">
-                Voulez-vous vraiment supprimer d√©finitivement {selectedCustomerMessageIds.length > 1 ? 'ces messages s√©lectionn√©s' : 'ce message'} de la conversation ?
-              </p>
-
-              <div className="flex items-center justify-end space-x-2 pt-2 border-t border-slate-100">
-                <button
-                  type="button"
-                  disabled={customerMessageDeleting}
-                  onClick={() => setShowDeleteMessagesConfirmModal(false)}
-                  className="px-4 py-2 bg-slate-100 hover:bg-slate-200 disabled:opacity-50 text-slate-700 rounded-xl text-xs font-bold transition-colors cursor-pointer"
-                >
-                  Annuler
-                </button>
-                <button
-                  type="button"
-                  disabled={customerMessageDeleting}
-                  onClick={handleConfirmDeleteSelectedMessages}
-                  className="inline-flex items-center gap-1.5 px-4 py-2 bg-rose-600 hover:bg-rose-700 disabled:opacity-50 text-white rounded-xl text-xs font-bold transition-colors shadow-2xs cursor-pointer"
-                >
-                  {customerMessageDeleting ? (
-                    <>
-                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                      <span>Suppression...</span>
-                    </>
-                  ) : (
-                    <>
-                      <Trash2 className="w-3.5 h-3.5" />
-                      <span>Supprimer</span>
-                    </>
-                  )}
-                </button>
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
-
-      {/* Reusable Media Viewer Modal for Customer Chat & Previews */}
-      <MediaViewer
-        isOpen={!!activeMediaViewer}
-        onClose={() => setActiveMediaViewer(null)}
-        media={activeMediaViewer}
-      />
-    </div>
-  );
-}
+                  if (cancellingOrderId && cancellationReasxúåëMn¬0Ö˜úb‰M©®ÍèDi´äã©70Ò,OdO ÂÓçHãHH™zÁo<oûﬂêKÿõm«pAœ	»ã0W.Ekç[/ΩF±/0~Ó}œ˛0††ˆ 0êk‰©¥-Ω–∑Ér_®ù=ˆèlô¸ ≠Ï2Ge Ü!óßñywt‰
+kˇ—q·,b†°ÇÃ8eÌpΩ—˛Â∫Í°◊¨∫F©U!|™-æàºî˜ê‰¨÷“S@˘8ô¿ÜvËßø‰©&⁄µ≤®ßî´‘A>LÄ±dπﬂF»»±\ë’,x*úF-Ki·yôìqå^tÏº^Ÿ;ön‚›’Î8Eù$âÄ)à9πÃ¯m]∂7Í\›ˇŒ∆´Çô\{–l¨ÕÓu@Î7ögV/§}  ˇˇ √æ–5

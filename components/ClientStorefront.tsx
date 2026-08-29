@@ -188,15 +188,19 @@ export default function ClientStorefront({
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-8">
           <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-6">
             <div className="flex items-center space-x-4">
-              <div className="relative w-16 h-16 sm:w-20 sm:h-20 rounded-2xl overflow-hidden border-2 border-[#E5DCD0] shadow-xs bg-[#F4EFE6] shrink-0">
-                <Image
-                  src={business.logo_url}
-                  alt={business.name}
-                  fill
-                  unoptimized
-                  className="object-cover"
-                  referrerPolicy="no-referrer"
-                />
+              <div className="relative w-16 h-16 sm:w-20 sm:h-20 rounded-2xl overflow-hidden border-2 border-[#E5DCD0] shadow-xs bg-[#F4EFE6] shrink-0 flex items-center justify-center">
+                {business.logo_url ? (
+                  <Image
+                    src={business.logo_url}
+                    alt={business.name}
+                    fill
+                    unoptimized
+                    className="object-cover"
+                    referrerPolicy="no-referrer"
+                  />
+                ) : (
+                  <Store className="w-8 h-8 text-[#6B6259]" />
+                )}
               </div>
               <div>
                 <div className="flex items-center space-x-2">
@@ -204,7 +208,7 @@ export default function ClientStorefront({
                     {business.name}
                   </h1>
                   <span className="capitalize px-2 py-0.5 text-xs font-semibold rounded-md bg-[#F4EFE6] text-[#6B6259] border border-[#E5DCD0]">
-                    {business.type}
+                    {business.business_type}
                   </span>
                 </div>
 

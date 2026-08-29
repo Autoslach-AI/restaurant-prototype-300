@@ -36,7 +36,7 @@ export const INITIAL_BUSINESSES: Business[] = [
   {
     id: 'biz_dakar_gourmet',
     name: 'Chez Ami - Grillades & Maquis Dakar',
-    type: 'restaurant',
+    business_type: 'restaurant',
     whatsapp_number: '+221 77 845 12 90',
     logo_url: 'https://images.unsplash.com/photo-1555396273-367ea4eb4db5?auto=format&fit=crop&w=300&q=80',
     currency: 'XOF',
@@ -74,7 +74,7 @@ export const INITIAL_BUSINESSES: Business[] = [
   {
     id: 'biz_kente_chic',
     name: 'Kente & Style - Mode & Bazin Dakar',
-    type: 'boutique',
+    business_type: 'boutique',
     whatsapp_number: '+221 78 123 45 67',
     logo_url: 'https://images.unsplash.com/photo-1441986300917-64674bd600d8?auto=format&fit=crop&w=300&q=80',
     currency: 'XOF',

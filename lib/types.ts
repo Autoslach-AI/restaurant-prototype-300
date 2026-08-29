@@ -16,12 +16,17 @@ export interface BusinessConfig {
 export interface Business {
   id: string;
   name: string;
-  type: BusinessType | string;
+  business_type: BusinessType | string;
   whatsapp_number: string;
   logo_url: string;
   currency: string; // e.g. "XOF", "EUR"
+  cover_image_url?: string;
+  address?: string;
+  is_open?: boolean;
   opening_hours: Record<string, string>;
   config: BusinessConfig;
+  created_at?: string;
+  updated_at?: string;
 }
 
 export interface Category {
@@ -224,6 +229,7 @@ export interface AgentProject {
   id: string;
   business_id: string;
   name: string;
+  status?: 'active' | 'trashed';
   created_at: string;
 }
 
@@ -266,12 +272,19 @@ export interface AttendanceRecord {
   created_at: string;
 }
 
-export type ExpenseCategory = 'loyer' | 'salaires' | 'materiel' | 'achats_stock' | 'autre';
+export type ExpenseCategory = string;
+
+export interface ExpenseCategoryItem {
+  id: string;
+  business_id: string;
+  name: string;
+  created_at: string;
+}
 
 export interface Expense {
   id: string;
   business_id: string;
-  category: ExpenseCategory;
+  category: string;
   label: string;
   amount: number;
   date: string; // YYYY-MM-DD
