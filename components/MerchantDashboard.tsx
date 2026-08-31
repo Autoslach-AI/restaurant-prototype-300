@@ -1,4 +1,4 @@
-'use client';
+Ôªø'use client';
 
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import Image from 'next/image';
@@ -1392,6 +1392,12 @@ export default function MerchantDashboard({
   const [deletingProjectId, setDeletingProjectId] = useState<string | null>(null);
   const [permanentDeletingProjectId, setPermanentDeletingProjectId] = useState<string | null>(null);
   const [deletingConversationId, setDeletingConversationId] = useState<string | null>(null);
+  const [selectedTrashedConversationIds, setSelectedTrashedConversationIds] = useState<Set<string>>(new Set());
+  const [selectedTrashedProjectIds, setSelectedTrashedProjectIds] = useState<Set<string>>(new Set());
+  const [bulkDeletingConversations, setBulkDeletingConversations] = useState(false);
+  const [bulkDeletingProjects, setBulkDeletingProjects] = useState(false);
+  const [isBulkDeletingConversationsLoading, setIsBulkDeletingConversationsLoading] = useState(false);
+  const [isBulkDeletingProjectsLoading, setIsBulkDeletingProjectsLoading] = useState(false);
   const [isDeletingConversationLoading, setIsDeletingConversationLoading] = useState(false);
   const [draggedConversationId, setDraggedConversationId] = useState<string | null>(null);
   const [dragOverProjectId, setDragOverProjectId] = useState<string | null>(null);
@@ -1551,26 +1557,38 @@ export default function MerchantDashboard({
       })
     );
 
-    // Moteur de r√©ponse mock (inchang√©)
-    const lower = textToSend.toLowerCase();
-    let responseText = "Cette fonctionnalit√© n'est pas encore connect√©e √† un moteur de r√©ponse conversationnel ‚Äî disponible prochainement.";
+    // 2. Appel a la vraie route API de l'assistant IA Gemini
+    const previousHistory = agentMessagesList
+      .filter((m) => m.conversation_id === targetConvId)
+      .map((m) => ({
+        role: (m.sender === 'assistant' ? 'assistant' : 'user') as 'assistant' | 'user',
+        content: m.text,
+      }));
 
-    if (currentAttachments.length > 0) {
-      responseText = `J'ai bien re√ßu vos ${currentAttachments.length} pi√®ce(s) jointe(s) (${currentAttachments.map(a => a.name).join(', ')}). Le document a √©t√© analys√©.`;
-      if (textToSend) {
-        responseText += `\n\nEn ce qui concerne votre message : "${textToSend}" ‚Äî l'analyse est en cours.`;
+    let responseText = '';
+    try {
+      const res = await fetch('/api/agent/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          business_id: business.id,
+          message: displayText,
+          conversation_history: previousHistory,
+        }),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok || !data.success) {
+        responseText = data.error || (data.details ? `${data.error} (${data.details})` : 'Erreur de communication avec l\'assistant IA.');
+      } else {
+        responseText = data.text || 'Aucune reponse generee par l\'assistant.';
       }
-    } else if (lower.includes('commande') || lower.includes('order')) {
-      responseText = `Vous avez actuellement ${businessOrders.length} commande(s) enregistr√©e(s) dans votre espace g√©rant.`;
-    } else if (lower.includes('client') || lower.includes('customer')) {
-      responseText = `Votre base client compte ${businessCustomers.length} client(s) r√©pertori√©(s).`;
-    } else if (lower.includes('produit') || lower.includes('stock') || lower.includes('catalog')) {
-      responseText = `Votre catalogue contient ${businessProducts.length} produit(s) actif(s).`;
-    } else if (lower.includes('projet') || lower.includes('ia') || lower.includes('lancer')) {
-      responseText = `Projet IA initi√© pour ${business.name}. Votre assistant virtuel surveille vos commandes et interactions clients en temps r√©el.`;
+    } catch {
+      responseText = 'Erreur de connexion avec le serveur de l\'assistant IA.';
     }
 
-    // 2. Enregistre la r√©ponse de l'assistant dans Supabase
+    // 3. Enregistre la reponse de l'assistant dans Supabase
     const assistantMsgRes = await insertAgentMessage({
       conversation_id: targetConvId!,
       sender: 'assistant',
@@ -6978,14 +6996,88 @@ export default function MerchantDashboard({
                       <div className="space-y-6 max-w-2xl mx-auto w-full pt-2">
                         {/* Section 1: Discussions en corbeille */}
                         <div className="space-y-2">
-                          <div className="text-xs font-mono font-bold text-slate-500 uppercase tracking-wider px-1">
-                            Discussions en corbeille ({trashedConversations.length})
+                          <div className="flex items-center justify-between px-1">
+                            <div className="text-xs font-mono font-bold text-slate-500 uppercase tracking-wider">
+                              Discussions en corbeille ({trashedConversations.length})
+                            </div>
+                            {trashedConversations.length > 0 && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  if (selectedTrashedConversationIds.size === trashedConversations.length) {
+                                    setSelectedTrashedConversationIds(new Set());
+                                  } else {
+                                    setSelectedTrashedConversationIds(new Set(trashedConversations.map((c) => c.id)));
+                                  }
+                                }}
+                                className="text-xs font-medium text-[#1B4B4A] hover:underline cursor-pointer"
+                              >
+                                {selectedTrashedConversationIds.size === trashedConversations.length
+                                  ? 'Tout deselectionner'
+                                  : 'Tout selectionner'}
+                              </button>
+                            )}
                           </div>
+
+                          {selectedTrashedConversationIds.size > 0 && (
+                            <div className="p-3 bg-[#FAF7F2] border border-[#E5DCD0] rounded-xl flex items-center justify-between gap-2">
+                              <span className="text-xs font-medium text-slate-700">
+                                {selectedTrashedConversationIds.size} discussion(s) selectionnee(s)
+                              </span>
+                              <div className="flex items-center space-x-2">
+                                <button
+                                  type="button"
+                                  onClick={async () => {
+                                    const ids = Array.from(selectedTrashedConversationIds);
+                                    const results = await Promise.all(
+                                      ids.map(async (id) => {
+                                        const res = await updateAgentConversation(id, { status: 'active' });
+                                        return { id, success: res.success, error: res.error };
+                                      })
+                                    );
+                                    const successes = results.filter((r) => r.success).map((r) => r.id);
+                                    const failures = results.filter((r) => !r.success);
+                                    if (failures.length > 0) {
+                                      alert(
+                                        failures.length +
+                                          ' echec(s) lors de la restauration :\n' +
+                                          failures.map((f) => f.error || f.id).join('\n')
+                                      );
+                                    }
+                                    if (successes.length > 0) {
+                                      const successSet = new Set(successes);
+                                      setAgentConversationsList((prev) =>
+                                        prev.map((c) =>
+                                          successSet.has(c.id)
+                                            ? { ...c, status: 'active', updated_at: new Date().toISOString() }
+                                            : c
+                                        )
+                                      );
+                                    }
+                                    setSelectedTrashedConversationIds(new Set());
+                                  }}
+                                  className="flex items-center space-x-1 px-3 py-1.5 text-xs font-medium text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-xl transition-colors cursor-pointer"
+                                >
+                                  <RotateCcw className="w-3.5 h-3.5" />
+                                  <span>Restaurer la selection</span>
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setBulkDeletingConversations(true)}
+                                  className="flex items-center space-x-1 px-3 py-1.5 text-xs font-medium text-[#B5451B] bg-red-50 hover:bg-red-100 border border-red-200 rounded-xl transition-colors cursor-pointer"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                  <span>Supprimer definitivement la selection</span>
+                                </button>
+                              </div>
+                            </div>
+                          )}
                           {trashedConversations.length === 0 ? (
                             <p className="text-xs text-slate-400 italic px-2 py-1">Aucune discussion en corbeille</p>
                           ) : (
                             <div className="space-y-2">
                               {trashedConversations.map((conv) => {
+                                const isChecked = selectedTrashedConversationIds.has(conv.id);
                                 const projName = conv.project_id
                                   ? agentProjectsList.find((p) => p.id === conv.project_id)?.name
                                   : null;
@@ -6994,23 +7086,40 @@ export default function MerchantDashboard({
                                     key={conv.id}
                                     className="p-3.5 rounded-2xl bg-white border border-[#E5DCD0] shadow-2xs flex items-center justify-between space-x-4 hover:border-slate-300 transition-all"
                                   >
-                                    <div className="space-y-1 min-w-0 flex-1">
-                                      <div className="flex items-center space-x-2">
-                                        <MessageSquare className="w-4 h-4 text-slate-400 shrink-0" />
-                                        <h4 className="text-sm font-bold text-[#241F1B] truncate">{conv.title}</h4>
-                                        {projName && (
-                                          <span className="text-[10px] font-semibold bg-[#FAF7F2] border border-[#E5DCD0] text-slate-600 px-2 py-0.5 rounded-full shrink-0">
-                                            {projName}
-                                          </span>
-                                        )}
+                                    <div className="flex items-center space-x-3 min-w-0 flex-1">
+                                      <input
+                                        type="checkbox"
+                                        checked={isChecked}
+                                        onChange={() => {
+                                          setSelectedTrashedConversationIds((prev) => {
+                                            const next = new Set(prev);
+                                            if (next.has(conv.id)) {
+                                              next.delete(conv.id);
+                                            } else {
+                                              next.add(conv.id);
+                                            }
+                                            return next;
+                                          });
+                                        }}
+                                        className="w-4 h-4 rounded border-slate-300 text-[#1B4B4A] focus:ring-[#1B4B4A] cursor-pointer shrink-0"
+                                      />
+                                      <div className="space-y-1 min-w-0 flex-1">
+                                        <div className="flex items-center space-x-2">
+                                          <MessageSquare className="w-4 h-4 text-slate-400 shrink-0" />
+                                          <h4 className="text-sm font-bold text-[#241F1B] truncate">{conv.title}</h4>
+                                          {projName && (
+                                            <span className="text-[10px] font-semibold bg-[#FAF7F2] border border-[#E5DCD0] text-slate-600 px-2 py-0.5 rounded-full shrink-0">
+                                              {projName}
+                                            </span>
+                                          )}
+                                        </div>
+                                        <p className="text-[11px] text-slate-400">
+                                          {conv.updated_at
+                                            ? `Modifie le ${new Date(conv.updated_at).toLocaleDateString('fr-FR', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })}`
+                                            : 'En corbeille'}
+                                        </p>
                                       </div>
-                                      <p className="text-[11px] text-slate-400">
-                                        {conv.updated_at
-                                          ? `Modifi√© le ${new Date(conv.updated_at).toLocaleDateString('fr-FR', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })}`
-                                          : 'En corbeille'}
-                                      </p>
                                     </div>
-
                                     <div className="flex items-center space-x-2 shrink-0">
                                       <button
                                         onClick={() => {
@@ -7025,10 +7134,10 @@ export default function MerchantDashboard({
                                       <button
                                         onClick={() => setDeletingConversationId(conv.id)}
                                         className="flex items-center space-x-1 px-3 py-1.5 text-xs font-medium text-[#B5451B] bg-red-50 hover:bg-red-100 border border-red-200 rounded-xl transition-colors cursor-pointer"
-                                        title="Supprimer d√©finitivement"
+                                        title="Supprimer definitivement"
                                       >
                                         <Trash2 className="w-3.5 h-3.5" />
-                                        <span>Supprimer d√©finitivement</span>
+                                        <span>Supprimer definitivement</span>
                                       </button>
                                     </div>
                                   </div>
@@ -7040,33 +7149,121 @@ export default function MerchantDashboard({
 
                         {/* Section 2: Projets en corbeille */}
                         <div className="space-y-2 pt-2 border-t border-[#E5DCD0]/60">
-                          <div className="text-xs font-mono font-bold text-slate-500 uppercase tracking-wider px-1">
-                            Projets en corbeille ({trashedProjects.length})
+                          <div className="flex items-center justify-between px-1">
+                            <div className="text-xs font-mono font-bold text-slate-500 uppercase tracking-wider">
+                              Projets en corbeille ({trashedProjects.length})
+                            </div>
+                            {trashedProjects.length > 0 && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  if (selectedTrashedProjectIds.size === trashedProjects.length) {
+                                    setSelectedTrashedProjectIds(new Set());
+                                  } else {
+                                    setSelectedTrashedProjectIds(new Set(trashedProjects.map((p) => p.id)));
+                                  }
+                                }}
+                                className="text-xs font-medium text-[#1B4B4A] hover:underline cursor-pointer"
+                              >
+                                {selectedTrashedProjectIds.size === trashedProjects.length
+                                  ? 'Tout deselectionner'
+                                  : 'Tout selectionner'}
+                              </button>
+                            )}
                           </div>
+
+                          {selectedTrashedProjectIds.size > 0 && (
+                            <div className="p-3 bg-[#FAF7F2] border border-[#E5DCD0] rounded-xl flex items-center justify-between gap-2">
+                              <span className="text-xs font-medium text-slate-700">
+                                {selectedTrashedProjectIds.size} projet(s) selectionne(s)
+                              </span>
+                              <div className="flex items-center space-x-2">
+                                <button
+                                  type="button"
+                                  onClick={async () => {
+                                    const ids = Array.from(selectedTrashedProjectIds);
+                                    const results = await Promise.all(
+                                      ids.map(async (id) => {
+                                        const res = await restoreAgentProject(id);
+                                        return { id, success: res.success, error: res.error };
+                                      })
+                                    );
+                                    const successes = results.filter((r) => r.success).map((r) => r.id);
+                                    const failures = results.filter((r) => !r.success);
+                                    if (failures.length > 0) {
+                                      alert(
+                                        failures.length +
+                                          ' echec(s) lors de la restauration :\n' +
+                                          failures.map((f) => f.error || f.id).join('\n')
+                                      );
+                                    }
+                                    if (successes.length > 0) {
+                                      const successSet = new Set(successes);
+                                      setAgentProjectsList((prev) =>
+                                        prev.map((p) => (successSet.has(p.id) ? { ...p, status: 'active' } : p))
+                                      );
+                                    }
+                                    setSelectedTrashedProjectIds(new Set());
+                                  }}
+                                  className="flex items-center space-x-1 px-3 py-1.5 text-xs font-medium text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-xl transition-colors cursor-pointer"
+                                >
+                                  <RotateCcw className="w-3.5 h-3.5" />
+                                  <span>Restaurer la selection</span>
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setBulkDeletingProjects(true)}
+                                  className="flex items-center space-x-1 px-3 py-1.5 text-xs font-medium text-[#B5451B] bg-red-50 hover:bg-red-100 border border-red-200 rounded-xl transition-colors cursor-pointer"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                  <span>Supprimer definitivement la selection</span>
+                                </button>
+                              </div>
+                            </div>
+                          )}
                           {trashedProjects.length === 0 ? (
                             <p className="text-xs text-slate-400 italic px-2 py-1">Aucun projet en corbeille</p>
                           ) : (
                             <div className="space-y-2">
-                              {trashedProjects.map((proj) => (
+                              {trashedProjects.map((proj) => {
+                                const isChecked = selectedTrashedProjectIds.has(proj.id);
+                                return (
                                 <div
                                   key={proj.id}
                                   className="p-3.5 rounded-2xl bg-white border border-[#E5DCD0] shadow-2xs flex items-center justify-between space-x-4 hover:border-slate-300 transition-all"
                                 >
-                                  <div className="space-y-1 min-w-0 flex-1">
-                                    <div className="flex items-center space-x-2">
-                                      <Folder className="w-4 h-4 text-[#B5451B] shrink-0" />
-                                      <h4 className="text-sm font-bold text-[#241F1B] truncate">{proj.name}</h4>
-                                      <span className="text-[10px] font-semibold bg-rose-50 border border-rose-100 text-rose-700 px-2 py-0.5 rounded-full shrink-0">
-                                        Projet corbeille
-                                      </span>
+                                  <div className="flex items-center space-x-3 min-w-0 flex-1">
+                                    <input
+                                      type="checkbox"
+                                      checked={isChecked}
+                                      onChange={() => {
+                                        setSelectedTrashedProjectIds((prev) => {
+                                          const next = new Set(prev);
+                                          if (next.has(proj.id)) {
+                                            next.delete(proj.id);
+                                          } else {
+                                            next.add(proj.id);
+                                          }
+                                          return next;
+                                        });
+                                      }}
+                                      className="w-4 h-4 rounded border-slate-300 text-[#1B4B4A] focus:ring-[#1B4B4A] cursor-pointer shrink-0"
+                                    />
+                                    <div className="space-y-1 min-w-0 flex-1">
+                                      <div className="flex items-center space-x-2">
+                                        <Folder className="w-4 h-4 text-[#B5451B] shrink-0" />
+                                        <h4 className="text-sm font-bold text-[#241F1B] truncate">{proj.name}</h4>
+                                        <span className="text-[10px] font-semibold bg-rose-50 border border-rose-100 text-rose-700 px-2 py-0.5 rounded-full shrink-0">
+                                          Projet corbeille
+                                        </span>
+                                      </div>
+                                      <p className="text-[11px] text-slate-400">
+                                        {proj.created_at
+                                          ? `Cree le ${new Date(proj.created_at).toLocaleDateString('fr-FR', { day: '2-digit', month: 'short', year: 'numeric' })}`
+                                          : 'En corbeille'}
+                                      </p>
                                     </div>
-                                    <p className="text-[11px] text-slate-400">
-                                      {proj.created_at
-                                        ? `Cr√©√© le ${new Date(proj.created_at).toLocaleDateString('fr-FR', { day: '2-digit', month: 'short', year: 'numeric' })}`
-                                        : 'En corbeille'}
-                                    </p>
                                   </div>
-
                                   <div className="flex items-center space-x-2 shrink-0">
                                     <button
                                       onClick={() => handleRestoreProject(proj.id)}
@@ -7079,14 +7276,15 @@ export default function MerchantDashboard({
                                     <button
                                       onClick={() => setPermanentDeletingProjectId(proj.id)}
                                       className="flex items-center space-x-1 px-3 py-1.5 text-xs font-medium text-[#B5451B] bg-red-50 hover:bg-red-100 border border-red-200 rounded-xl transition-colors cursor-pointer"
-                                      title="Supprimer d√©finitivement"
+                                      title="Supprimer definitivement"
                                     >
                                       <Trash2 className="w-3.5 h-3.5" />
-                                      <span>Supprimer d√©finitivement</span>
+                                      <span>Supprimer definitivement</span>
                                     </button>
                                   </div>
                                 </div>
-                              ))}
+                              );
+                              })}
                             </div>
                           )}
                         </div>
@@ -7399,6 +7597,175 @@ export default function MerchantDashboard({
       </AnimatePresence>
 
       {/* Modal Confirmation de Suppression D√©finitive de Projet (Agent IA) */}
+      {/* Modal Confirmation Suppression Definitive Discussion (Agent IA) */}
+      {/* Modal Confirmation Suppression Definitive Group√©e Discussions (Agent IA) */}
+      <AnimatePresence>
+        {bulkDeletingConversations && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-xs">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="bg-white rounded-2xl max-w-sm w-full p-6 shadow-xl border border-slate-200/80 space-y-4 font-sans"
+            >
+              <div className="flex items-center space-x-3">
+                <div className="w-10 h-10 rounded-xl bg-rose-50 border border-rose-100 flex items-center justify-center text-rose-600 shrink-0">
+                  <Trash2 className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-black text-slate-900">
+                    Supprimer definitivement la selection ?
+                  </h3>
+                  <p className="text-xs text-rose-500 font-medium">
+                    Cette action est irreversible.
+                  </p>
+                </div>
+              </div>
+              <p className="text-xs text-slate-600 leading-relaxed">
+                Voulez-vous vraiment supprimer definitivement ces {selectedTrashedConversationIds.size} discussions ? Tous les messages associes seront definitivement effaces de la base de donnees.
+              </p>
+              <div className="flex items-center justify-end space-x-2 pt-2 border-t border-slate-100">
+                <button
+                  type="button"
+                  disabled={isBulkDeletingConversationsLoading}
+                  onClick={() => setBulkDeletingConversations(false)}
+                  className="px-4 py-2 bg-slate-100 hover:bg-slate-200 disabled:opacity-50 text-slate-700 rounded-xl text-xs font-bold transition-colors cursor-pointer"
+                >
+                  Annuler
+                </button>
+                <button
+                  type="button"
+                  disabled={isBulkDeletingConversationsLoading}
+                  onClick={async () => {
+                    setIsBulkDeletingConversationsLoading(true);
+                    try {
+                      const ids = Array.from(selectedTrashedConversationIds);
+                      const results = await Promise.all(
+                        ids.map(async (id) => {
+                          const res = await deleteAgentConversationPermanently(id);
+                          return { id, success: res.success, error: res.error };
+                        })
+                      );
+                      const successes = results.filter((r) => r.success).map((r) => r.id);
+                      const failures = results.filter((r) => !r.success);
+                      if (failures.length > 0) {
+                        alert(
+                          failures.length +
+                            ' echec(s) lors de la suppression :\n' +
+                            failures.map((f) => f.error || f.id).join('\n')
+                        );
+                      }
+                      if (successes.length > 0) {
+                        const successSet = new Set(successes);
+                        setAgentConversationsList((prev) => prev.filter((c) => !successSet.has(c.id)));
+                      }
+                      setSelectedTrashedConversationIds(new Set());
+                    } finally {
+                      setIsBulkDeletingConversationsLoading(false);
+                      setBulkDeletingConversations(false);
+                    }
+                  }}
+                  className="inline-flex items-center space-x-1.5 px-4 py-2 bg-rose-600 hover:bg-rose-700 disabled:opacity-50 text-white rounded-xl text-xs font-bold transition-colors cursor-pointer"
+                >
+                  {isBulkDeletingConversationsLoading ? (
+                    <span>Suppression...</span>
+                  ) : (
+                    <>
+                      <Trash2 className="w-3.5 h-3.5" />
+                      <span>Supprimer ({selectedTrashedConversationIds.size})</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Modal Confirmation Suppression Definitive Group√©e Projets (Agent IA) */}
+      <AnimatePresence>
+        {bulkDeletingProjects && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-xs">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="bg-white rounded-2xl max-w-sm w-full p-6 shadow-xl border border-slate-200/80 space-y-4 font-sans"
+            >
+              <div className="flex items-center space-x-3">
+                <div className="w-10 h-10 rounded-xl bg-rose-50 border border-rose-100 flex items-center justify-center text-rose-600 shrink-0">
+                  <Trash2 className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-black text-slate-900">
+                    Supprimer definitivement la selection ?
+                  </h3>
+                  <p className="text-xs text-rose-500 font-medium">
+                    Cette action est irreversible.
+                  </p>
+                </div>
+              </div>
+              <p className="text-xs text-slate-600 leading-relaxed">
+                Voulez-vous vraiment supprimer definitivement ces {selectedTrashedProjectIds.size} projets ? Les projets seront definitivement effaces de la base de donnees.
+              </p>
+              <div className="flex items-center justify-end space-x-2 pt-2 border-t border-slate-100">
+                <button
+                  type="button"
+                  disabled={isBulkDeletingProjectsLoading}
+                  onClick={() => setBulkDeletingProjects(false)}
+                  className="px-4 py-2 bg-slate-100 hover:bg-slate-200 disabled:opacity-50 text-slate-700 rounded-xl text-xs font-bold transition-colors cursor-pointer"
+                >
+                  Annuler
+                </button>
+                <button
+                  type="button"
+                  disabled={isBulkDeletingProjectsLoading}
+                  onClick={async () => {
+                    setIsBulkDeletingProjectsLoading(true);
+                    try {
+                      const ids = Array.from(selectedTrashedProjectIds);
+                      const results = await Promise.all(
+                        ids.map(async (id) => {
+                          const res = await deleteAgentProjectPermanently(id);
+                          return { id, success: res.success, error: res.error };
+                        })
+                      );
+                      const successes = results.filter((r) => r.success).map((r) => r.id);
+                      const failures = results.filter((r) => !r.success);
+                      if (failures.length > 0) {
+                        alert(
+                          failures.length +
+                            ' echec(s) lors de la suppression :\n' +
+                            failures.map((f) => f.error || f.id).join('\n')
+                        );
+                      }
+                      if (successes.length > 0) {
+                        const successSet = new Set(successes);
+                        setAgentProjectsList((prev) => prev.filter((p) => !successSet.has(p.id)));
+                      }
+                      setSelectedTrashedProjectIds(new Set());
+                    } finally {
+                      setIsBulkDeletingProjectsLoading(false);
+                      setBulkDeletingProjects(false);
+                    }
+                  }}
+                  className="inline-flex items-center space-x-1.5 px-4 py-2 bg-rose-600 hover:bg-rose-700 disabled:opacity-50 text-white rounded-xl text-xs font-bold transition-colors cursor-pointer"
+                >
+                  {isBulkDeletingProjectsLoading ? (
+                    <span>Suppression...</span>
+                  ) : (
+                    <>
+                      <Trash2 className="w-3.5 h-3.5" />
+                      <span>Supprimer ({selectedTrashedProjectIds.size})</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
       {/* Modal Confirmation Suppression Definitive Discussion (Agent IA) */}
       <AnimatePresence>
         {deletingConversationId !== null && (
@@ -9756,437 +10123,14 @@ export default function MerchantDashboard({
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs">
           <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl border border-slate-200 space-y-4 text-slate-800">
             <div className="flex items-center space-x-2 text-rose-600">
-              <Trash2 className="w-5 h-5 shrink-0" />
-              <h3 className="font-extrabold text-slate-900 text-base">Supprimer d√©finitivement le membre</h3>
-            </div>
-            <p className="text-xs text-slate-600 leading-relaxed">
-              √ätes-vous s√ªr de vouloir supprimer d√©finitivement <span className="font-bold text-slate-900">{deletingStaffMemberState.name}</span> (<span className="text-slate-500">{deletingStaffMemberState.email}</span>) ? Cette action est irr√©versible et supprimera le membre de la base de donn√©es.
-            </p>
-
-            <div className="flex items-center justify-end space-x-2 pt-3 border-t border-slate-100">
-              <button
-                type="button"
-                disabled={deletingLoading}
-                onClick={() => setDeletingStaffMemberState(null)}
-                className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-xl cursor-pointer disabled:opacity-50"
-              >
-                Annuler
-              </button>
-              <button
-                type="button"
-                onClick={handleDeleteStaffConfirm}
-                disabled={deletingLoading}
-                className="px-4 py-2 bg-rose-600 hover:bg-rose-700 disabled:opacity-50 text-white font-extrabold text-xs rounded-xl shadow-xs cursor-pointer flex items-center space-x-1.5"
-              >
-                {deletingLoading && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-                <span>Confirmer la suppression</span>
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Expanded Revocation Reason Modal (Carte Agrandie au clic) */}
-      {viewingReasonStaff && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs cursor-pointer animate-in fade-in duration-200"
-          onClick={() => setViewingReasonStaff(null)}
-        >
-          <div
-            className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl border border-slate-200 space-y-4 text-slate-800 cursor-default relative transform transition-all scale-100"
-            onClick={(e) => e.stopPropagation()}
-          >
-            {/* Modal Header */}
-            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
-              <div className="flex items-center space-x-2 text-rose-600">
-                <AlertCircle className="w-5 h-5 shrink-0" />
-                <h3 className="font-extrabold text-slate-900 text-base">Raison de la r√©vocation</h3>
-              </div>
-              <button
-                type="button"
-                onClick={() => setViewingReasonStaff(null)}
-                className="p-1.5 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-full transition-colors cursor-pointer"
-                title="Fermer"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            {/* Member Details */}
-            <div className="bg-slate-50 p-3 rounded-2xl border border-slate-200/80 flex items-center space-x-3">
-              {viewingReasonStaff.photo_url || viewingReasonStaff.avatar_url ? (
-                <img
-                  src={viewingReasonStaff.photo_url || viewingReasonStaff.avatar_url}
-                  alt={viewingReasonStaff.name}
-                  className="w-10 h-10 rounded-full object-cover border border-slate-200 shrink-0"
-                />
-              ) : (
-                <div className="w-10 h-10 rounded-full bg-rose-100 border border-rose-200 text-rose-700 flex items-center justify-center font-black shrink-0 text-sm">
-                  {viewingReasonStaff.name.charAt(0)}
-                </div>
-              )}
-              <div className="min-w-0 flex-1">
-                <h4 className="font-extrabold text-slate-900 text-sm truncate">{viewingReasonStaff.name}</h4>
-                <p className="text-xs text-slate-500 font-mono truncate">{viewingReasonStaff.email}</p>
-                {viewingReasonStaff.created_at && (
-                  <p className="text-[11px] text-slate-400 mt-0.5">
-                    Inscrit le : {new Date(viewingReasonStaff.created_at).toLocaleDateString('fr-FR')}
-                  </p>
-                )}
-              </div>
-            </div>
-
-            {/* Full Reason Content */}
-            <div className="space-y-1.5">
-              <span className="text-xs font-extrabold text-slate-700 uppercase tracking-wider block">
-                Motif renseign√© :
-              </span>
-              <div className="bg-rose-50/60 border border-rose-200/80 rounded-2xl p-4 text-slate-800 text-xs font-medium leading-relaxed max-h-60 overflow-y-auto whitespace-pre-wrap break-words shadow-inner">
-                {viewingReasonStaff.revocation_reason}
-              </div>
-            </div>
-
-            {/* Modal Footer */}
-            <div className="pt-2 flex justify-end border-t border-slate-100">
-              <button
-                type="button"
-                onClick={() => setViewingReasonStaff(null)}
-                className="px-5 py-2.5 bg-slate-900 hover:bg-slate-800 text-white font-extrabold text-xs rounded-xl transition-all shadow-sm cursor-pointer"
-              >
-                Fermer
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Staff Edit Modal */}
-      {editingStaff && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-xs">
-          <div className="bg-white rounded-3xl max-w-md w-full p-6 border border-slate-200 shadow-2xl text-slate-800">
-            <div className="flex items-center justify-between pb-4 border-b border-slate-100 mb-4">
-              <h3 className="font-extrabold text-slate-900 text-base">√âditer {editingStaff.name}</h3>
-              <button
-                onClick={() => setEditingStaff(null)}
-                className="text-slate-400 hover:text-slate-700 p-1 rounded-full transition-colors cursor-pointer"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            <form onSubmit={handleEditStaffSubmit} className="space-y-4 text-xs">
-              <div>
-                <label className="font-extrabold text-slate-700 block mb-1">Titre du poste / R√¥le (Affich√© dans le tableau)</label>
-                <input
-                  type="text"
-                  value={editRoleTitle}
-                  onChange={(e) => setEditRoleTitle(e.target.value)}
-                  className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-slate-900 font-medium focus:outline-none focus:border-emerald-500 shadow-2xs"
-                  placeholder="ex: Responsable Caisse, Chef de Rang, G√©rant"
-                  required
-                />
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="font-extrabold text-slate-700 block mb-1">T√©l√©phone</label>
-                  <input
-                    type="text"
-                    value={editPhone}
-                    onChange={(e) => setEditPhone(e.target.value)}
-                    className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-slate-900 font-medium focus:outline-none focus:border-emerald-500 shadow-2xs"
-                    placeholder="+221 77 000 00 00"
-                  />
-                </div>
-                <div>
-                  <label className="font-extrabold text-slate-700 block mb-1">Salaire (FCFA)</label>
-                  <input
-                    type="number"
-                    value={editSalary}
-                    onChange={(e) => setEditSalary(e.target.value)}
-                    className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-slate-900 font-medium focus:outline-none focus:border-emerald-500 shadow-2xs"
-                    placeholder="250000"
-                  />
-                </div>
-              </div>
-
-              <div>
-                <span className="font-extrabold text-slate-700 block mb-2">Permissions d&apos;acc√®s :</span>
-                <div className="grid grid-cols-2 gap-2 bg-slate-50 p-3 rounded-2xl border border-slate-200">
-                  {Object.entries(editPerms).map(([perm, val]) => (
-                    <label key={perm} className="flex items-center space-x-2 cursor-pointer text-slate-700 font-medium">
-                      <input
-                        type="checkbox"
-                        checked={val}
-                        onChange={(e) => setEditPerms({ ...editPerms, [perm]: e.target.checked })}
-                        className="rounded bg-slate-100 border-slate-300 text-emerald-600 focus:ring-emerald-500"
-                      />
-                      <span className="capitalize">{perm}</span>
-                    </label>
-                  ))}
-                </div>
-              </div>
-
-              <button
-                type="submit"
-                className="w-full py-3 bg-slate-900 hover:bg-slate-800 text-white font-extrabold text-xs rounded-xl transition-all shadow-sm cursor-pointer"
-              >
-                Enregistrer les modifications
-              </button>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* Delivery Zone Modal */}
-      {isZoneModalOpen && editingZone && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs">
-          <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl border border-slate-200 space-y-4 text-slate-800">
-            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
-              <h3 className="font-extrabold text-slate-900 text-base">
-                {editingZone.id ? '√âditer la zone de livraison' : 'Nouvelle zone de livraison'}
-              </h3>
-              <button
-                onClick={() => setIsZoneModalOpen(false)}
-                className="p-1 text-slate-400 hover:text-slate-600 rounded-lg"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            <form
-              onSubmit={async (e) => {
-                e.preventDefault();
-                const trimmedName = editingZone.name?.trim();
-                if (!trimmedName) {
-                  alert('Le nom de la zone de livraison est requis.');
-                  return;
-                }
-                const feeNum = Number(editingZone.fee);
-                if (isNaN(feeNum) || feeNum < 0) {
-                  alert('Les frais de livraison doivent √™tre un montant valide sup√©rieur ou √©gal √† 0.');
-                  return;
-                }
-
-                setIsZoneSaving(true);
-                try {
-                  if (editingZone.id) {
-                    const res = await updateDeliveryZone(editingZone.id, {
-                      name: trimmedName,
-                      fee: feeNum,
-                      active: editingZone.active ?? true,
-                    });
-                    if (!res.success) {
-                      alert(`Erreur lors de la modification de la zone : ${res.error || '√âchec de la mise √† jour'}`);
-                      return;
-                    }
-                    if (res.zone) {
-                      setDeliveryZones((prev) => prev.map((z) => (z.id === res.zone!.id ? res.zone! : z)));
-                    } else {
-                      await loadDeliveryZones();
-                    }
-                    setIsZoneModalOpen(false);
-                    setEditingZone(null);
-                  } else {
-                    const res = await insertDeliveryZone({
-                      business_id: business.id,
-                      name: trimmedName,
-                      fee: feeNum,
-                      active: editingZone.active ?? true,
-                    });
-                    if (!res.success) {
-                      alert(`Erreur lors de l'ajout de la zone : ${res.error || "√âchec de l'insertion"}`);
-                      return;
-                    }
-                    if (res.zone) {
-                      setDeliveryZones((prev) =>
-                        [...prev, res.zone!].sort((a, b) => a.name.localeCompare(b.name, 'fr', { sensitivity: 'base' }))
-                      );
-                    } else {
-                      await loadDeliveryZones();
-                    }
-                    setIsZoneModalOpen(false);
-                    setEditingZone(null);
-                  }
-                } finally {
-                  setIsZoneSaving(false);
-                }
-              }}
-              className="space-y-4 text-xs"
-            >
-              <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">
-                  Nom de la zone (ex: Dakar-Plateau, Almadies, Zone P√©riph√©rique)
-                </label>
-                <input
-                  type="text"
-                  required
-                  value={editingZone.name || ''}
-                  onChange={(e) => setEditingZone({ ...editingZone, name: e.target.value })}
-                  placeholder="Ex: Mermoz / Sacr√©-C≈ìur"
-                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 focus:ring-2 focus:ring-emerald-500"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">
-                  Frais fixe de livraison ({business.currency})
-                </label>
-                <input
-                  type="number"
-                  required
-                  min="0"
-                  step="100"
-                  value={editingZone.fee ?? 1000}
-                  onChange={(e) => setEditingZone({ ...editingZone, fee: Number(e.target.value) })}
-                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 focus:ring-2 focus:ring-emerald-500"
-                />
-              </div>
-
-              <div className="flex items-center space-x-2 pt-1">
-                <input
-                  type="checkbox"
-                  id="zoneActiveToggle"
-                  checked={editingZone.active ?? true}
-                  onChange={(e) => setEditingZone({ ...editingZone, active: e.target.checked })}
-                  className="rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
-                />
-                <label htmlFor="zoneActiveToggle" className="text-xs font-bold text-slate-800 cursor-pointer">
-                  Zone active et disponible pour les clients
-                </label>
-              </div>
-
-              <div className="flex items-center justify-end space-x-2 pt-3 border-t border-slate-100">
-                <button
-                  type="button"
-                  disabled={isZoneSaving}
-                  onClick={() => setIsZoneModalOpen(false)}
-                  className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-xl cursor-pointer"
-                >
-                  Annuler
-                </button>
-                <button
-                  type="submit"
-                  disabled={isZoneSaving}
-                  className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs rounded-xl shadow-xs cursor-pointer disabled:opacity-50"
-                >
-                  {isZoneSaving ? 'Enregistrement...' : 'Enregistrer la Zone'}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* Delete Delivery Zone Confirmation Modal */}
-      {deletingZone && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs">
-          <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl border border-slate-200 space-y-4 text-slate-800">
-            <div className="flex items-center space-x-2 text-rose-600">
               <AlertTriangle className="w-5 h-5 shrink-0" />
-              <h3 className="font-extrabold text-slate-900 text-base">Supprimer la zone de livraison</h3>
+              <h3 className="font-extrabold text-slate-900 text-base">Supprimer ce membre d&apos;equipe ?</h3>
             </div>
             <p className="text-xs text-slate-600">
-              Voulez-vous vraiment supprimer la zone <span className="font-bold text-slate-900">&quot;{deletingZone.name}&quot;</span> ?
-            </p>
-            <div className="flex items-center justify-end space-x-2 pt-3 border-t border-slate-100">
-              <button
-                type="button"
-                disabled={isZoneDeleting}
-                onClick={() => setDeletingZone(null)}
-                className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-xl cursor-pointer"
-              >
-                Annuler
-              </button>
-              <button
-                type="button"
-                disabled={isZoneDeleting}
-                onClick={async () => {
-                  setIsZoneDeleting(true);
-                  try {
-                    const res = await deleteDeliveryZone(deletingZone.id);
-                    if (!res.success) {
-                      alert(`Erreur lors de la suppression de la zone : ${res.error || '√âchec de la suppression'}`);
-                      return;
-                    }
-                    setDeliveryZones((prev) => prev.filter((z) => z.id !== deletingZone.id));
-                    setDeletingZone(null);
-                  } finally {
-                    setIsZoneDeleting(false);
-                  }
-                }}
-                className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white font-extrabold text-xs rounded-xl shadow-xs cursor-pointer disabled:opacity-50"
-              >
-                {isZoneDeleting ? 'Suppression...' : 'Confirmer la suppression'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Mandatory Order Cancellation Reason Modal */}
-      {isCancelModalOpen && cancellingOrderId && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs">
-          <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl border border-slate-200 space-y-4 text-slate-800">
-            <div className="flex items-center space-x-2 text-rose-600">
-              <AlertTriangle className="w-5 h-5 shrink-0" />
-              <h3 className="font-extrabold text-slate-900 text-base">Motif d&apos;annulation obligatoire</h3>
-            </div>
-            <p className="text-xs text-slate-600">
-              Specifiez la raison pour laquelle la commande <span className="font-mono font-bold text-slate-900">#{cancellingOrderId}</span> est annulee :
-            </p>
-
-            {/* Quick Option Buttons */}
-            <div className="flex flex-wrap gap-1.5">
-              {[
-                "Client injoignable",
-                "Rupture de stock",
-                "Erreur de commande",
-                "Client a annule",
-                "Hors zone de livraison",
-              ].map((preset) => (
-                <button
-                  key={preset}
-                  type="button"
-                  onClick={() => setCancellationReason(preset)}
-                  className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all border cursor-pointer ${
-                    cancellationReason === preset
-                      ? "bg-rose-100 text-rose-900 border-rose-300 font-extrabold ring-2 ring-rose-400/30"
-                      : "bg-slate-50 hover:bg-slate-100 text-slate-700 border-slate-200"
-                  }`}
-                >
-                  {preset}
-                </button>
-              ))}
-            </div>
-
-            <div>
-              <label className="block text-xs font-bold text-slate-700 mb-1">Motif explicite / Champ libre :</label>
-              <textarea
-                rows={2}
-                required
-                value={cancellationReason}
-                onChange={(e) => setCancellationReason(e.target.value)}
-                placeholder="Ex: Le client ne repond pas au telephone apres 3 tentatives..."
-                className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium focus:ring-2 focus:ring-rose-500"
-              />
-            </div>
-
-            <div className="flex items-center justify-end space-x-2 pt-2 border-t border-slate-100">
-              <button
-                type="button"
-                disabled={isCancellingOrder}
-                onClick={() => {
-                  setIsCancelModalOpen(false);
-                  setCancellingOrderId(null);
-                }}
-                className="px-4 py-2 bg-slate-100 hover:bg-slate-200 disabled:opacity-50 text-slate-700 font-bold text-xs rounded-xl cursor-pointer"
-              >
-                Abandonner
-              </button>
-              <button
-                type="button"
-                disabled={!cancellationReason.trim() || isCancellingOrder}
-                onClick={async () => {
-                  if (cancellingOrderId && cancellationReasxúåëMn¬0Ö˜úb‰M©®ÍèDi´äã©70Ò,OdO ÂÓçHãHH™zÁo<oûﬂêKÿõm«pAœ	»ã0W.Ekç[/ΩF±/0~Ó}œ˛0††ˆ 0êk‰©¥-Ω–∑Ér_®ù=ˆèlô¸ ≠Ï2Ge Ü!óßñywt‰
-kˇ—q·,b†°ÇÃ8eÌpΩ—˛Â∫Í°◊¨∫F©U!|™-æàºî˜ê‰¨÷“S@˘8ô¿ÜvËßø‰©&⁄µ≤®ßî´‘A>LÄ±dπﬂF»»±\ë’,x*úF-Ki·yôìqå^tÏº^Ÿ;ön‚›’Î8Eù$âÄ)à9πÃ¯m]∂7Í\›ˇŒ∆´Çô\{–l¨ÕÓu@Î7ögV/§}  ˇˇ √æ–5
+              Etes-vous sur de vouloir retirer <span className="font-boldxú‹W€n€F}œWL¯`QAñ¨⁄mÀÜ·‰¡@›N`E•≠óªÃÓ“í¢Ëﬂ;$u°x©´§-⁄0§ΩÕ˝ÃÅ√•cVráÏ«·–ª^G(—	5˚Ëx?`2EC_ä'_æ@ÁL∏ê˘ç^àê–Å¡ﬁÊj`SÆÆÈ<kgS&RÑ∏CÁxËÑVÄ÷Å0ü—X1ïºÇ ﬂ’ Ω>ﬁàƒ3Ñí[˚3Y5ÒbâKÀBT¸ñY'‚CY"[≤§éù{«¢Hÿ4sN´⁄.Ä[•$∫<ÙßZ›I>M÷~&◊`—ΩÔåØ2)˚õÜÑHXNÆFì}Ã“<¢èÊ’ä´Èí}Èäù√Tõà<-?∂9<°í“ÔikÂÿTÀ®<XZ0:SFl)aÆ)‚„Èl{ˇbaf¨6,’"èc›ÔzÏ nπá¶”A∑ø&÷'DjünW*Ñ29Î∆5 Éˇ∫´ñ˚`–eFΩkyX…Ù÷
+ﬂô˚mwùYµ*ßåjE%o–¬¯ÇW‚
++ñ¯ùHQ´∂“)íÿ,—⁄~árxπ\€Âo •≈N©ú
+¡†1⁄Ω‡°:3 µ±yêlñ¶t«Ê∏è≤mßz]*[v7rŒ¡'5c‡j’Âhi›∫	“»g¯≤Mñl äKŸï–ñ≤à9´]XcoÛgA?cF[dóÑÏ=xãùÎ;†å5µ<·V9†‘/Ê‘ˇ∏ú
+¸:©•˜>V¬=CÔN´XòÑ’qò{uá€[∆’ÄZ}u´∂q¥§&ª˝∂ºÅ;ÆBîK—%tƒ%ºÏ¥Æ√‚Tí·≈Ö˚ŒŒ¿?»≠O±ƒÑ¢4≥!|Œ€=t∂Àîí∂o≠4]óCòÚ)2:eSô ¿—4™+•«e‚viQûædñD∞`1!ï¥\ÇùÛH/ÿ9wMÖrÆ»§ |¯!˘'N÷›4=/Ì™±9Vos˝jW3âUôvs˙∑s#‘z0h<ûèé¨»ó¥~®ﬁ}XÀÂî[ÙÆ∑”(ØµP'	ß®¡Õ’`>z°™h+≠*‹·£¢©Õ«{âO~r0—î˚¢ùúÒT€w<7ÖÏ&’‘m¬ÇÔÏ¨
+æçˇ‰vqÉºfœ3óNvµ](Dnµ™Éç∆‰úÚBw}‹Òóª∆+“2CÇ&ïT
+s öâ˜∞˜øWq›«Â≥î¶)Êá÷ÈÈ-º«27°TU}jıÜcÙ¬N÷£∫ £2*Íó™î¯]WÒW⁄\¨√ÃéuÊ˙»Ê"äPm7©gT÷ïEQ‹«ú*«ÃëQÉ;7mXá|:`˜‰oØé^€§ld˙&lMÈäÍ>¢# ˇCL∑™úπºn";pF$~Àœã”òpcæ@ÅÔÎÊ}	.â/Zà*≈4yùNwP∆”j˚§Í˛fÓÈ’πg•Yﬁ◊2œf6˛Á‹≥âbü∑áHñ‰”´êœJúΩøázÌQË7Ø~  ˇˇ ∞÷+
