@@ -76,8 +76,15 @@ export async function POST(req: NextRequest) {
       }
     }
 
+    console.log('[DEBUG /api/agent/chat] Checking environment variables:');
+    console.log('[DEBUG /api/agent/chat] process.env.GEMINI_API_KEY defined:', !!process.env.GEMINI_API_KEY);
+    console.log('[DEBUG /api/agent/chat] process.env.GEMINI_API_KEY length:', process.env.GEMINI_API_KEY ? process.env.GEMINI_API_KEY.length : 0);
+    console.log('[DEBUG /api/agent/chat] process.env.GEMINI_DEMO_API_KEY defined:', !!process.env.GEMINI_DEMO_API_KEY);
+    console.log('[DEBUG /api/agent/chat] Available env keys matching GEMINI:', Object.keys(process.env).filter(k => k.toUpperCase().includes('GEMINI')));
+
     const apiKey = process.env.GEMINI_DEMO_API_KEY?.trim() || process.env.GEMINI_API_KEY?.trim();
     if (!apiKey) {
+      console.warn('[DEBUG /api/agent/chat] API Key is missing or empty!');
       return NextResponse.json(
         {
           error: "Erreur lors de la communication avec l'assistant IA.",
@@ -86,6 +93,7 @@ export async function POST(req: NextRequest) {
         { status: 500 }
       );
     }
+    console.log('[DEBUG /api/agent/chat] API Key successfully found. Initializing GoogleGenAI...');
 
     const ai = new GoogleGenAI({ apiKey });
 
@@ -108,7 +116,7 @@ export async function POST(req: NextRequest) {
     });
 
     const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
+      model: 'gemini-3.6-flash',
       contents,
       config: {
         systemInstruction: "Tu es l'assistant IA intelligent de la plateforme de commerce. Tu aides les commercants au Senegal a gerer leurs ventes, stocks, commandes, clients et strategie commerciale. Reponds de facon concise, professionnelle et bienveillante. Utilise les FCFA comme devise quand pertinent.",

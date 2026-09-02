@@ -10127,8 +10127,101 @@ export default function MerchantDashboard({
               <h3 className="font-extrabold text-slate-900 text-base">Supprimer ce membre d&apos;equipe ?</h3>
             </div>
             <p className="text-xs text-slate-600">
-              Etes-vous sur de vouloir retirer <span className="font-boldxœÜWÛnÛF}ÏWLø`IA–ìØmË†a·€:œşÀŠ‰[/w™İ¥%EÑ¿wHêBñRWI[´5`H{›û™9‡Ç¬äÙÃ¡wµŠP¢jöÑñéô“	úêĞW<Aøò:/`Â…ÌoôB„„öÖ—M¹º¢Wğ¬AÀO™H®áCà¡ZZÂ|FcÅD¢ÿ
-*—Azu¸‰g%·öY5ö¦ &–…¨ø-³NL—UdAˆlÁÎ uìÔ;EÂ&™sZÕvÜ2%Ñå¡×8ÕêVŠği¼ê`|İ]G`ú*“r°nHˆ„åäj4ŞÅügÍ#úh^­¸š.Ø;H—ì&ÚDäiù±Éáép•”~GË©VM´ŒÊƒ…£3aÄbMMf›ûçC3cµa©yë~×cp£È=4õ˜eÜşšX©]Z¸]ªÊä¬× Äú¯»jy ]fÔû–‡•Lo¬è;“á í®3ËVå”Q­¨äZŸsáJ\aÅ’~'ÒDÔª­tŠdú6C´vĞ¡^.×vùk@i±S*§Bp…hŒ6E/ø‘PÚØ¼	H6KSºcsÜGÙ¦Sø½.•-»k¹cè“špµìr´4ˆn]û	iä3|Ù¦KÖ0ŠKÙ•Ğ–²˜r
-V»°ÆŞúÏ‚~ÆŒ¶È.Ù;ğ;9Ö·@ijyÂ-s@¨ŸÇÔÿ¸ü:©¥÷>VÂèû=AïV«©0	5ªÃ0÷ê··ŒË€Z}u«¶q°¤&»ù¶
-ŞÀ-W!Jø¥è’:âŞ[­«°8•dxqá>‚“èïåÖ'ŒX`BQšÙ>çí:›eJIÛµVš®ÁÅ&<|ŠŒNÙDf†2p0êJéq™¸mšÎ(O	_°9K"˜³)!•´\€y¤çì”»¦B9—dRe>|Ÿü#'ëvš–‚¶ÕØ«79ø~5‚«™ÄªÌ9;‡˜şml„zbC‚ÆãøìÀŠ¼pI›áûêİ…µ\N¸Eïj3òZu’pŠ\_ñÙUE[iUáMm>Ş«H|Êğ3ƒ‰¦Üíä„§Ú¾ç¹)¼`7©¦n|gk•ÿmü'·‹ä5{¹Ìp¼­íBù#r«Ul4&cÊİíã–¿Ü6^õÑ'-3t~!¸ÁaRI¥SFĞŒ½‡ÿ½Šë}\Œà1Kišb~hŸŞÂ–¹	¥ ªP³¨7£çv¼:««<(£¢ş·©J‰ßu¥ÍMu˜Ù‘ÎAY,¢Õf“ªqFe]YÅ}~È©rÌüÛ¹iÛÀÚç{ß»'{uôÚ&eË ÛÓ7akJÿST÷ùbºPåÌåuÙ¾3"é·ü¼8	7Æáø¾nŞ×à’ø’¡…¨RLÃ·Ğéte<®¶ªîoæ^{Vš¥ï}-ólfãÎ=›è öy³dI>½
-ù¬ÄÙû{¨çÁ…ÈhÀO¢ø•CsŸHWĞ„4{İ·ñDs½ú  ÿÿ ² ã¡
+              Etes-vous sur de vouloir retirer <span className="font-bold text-slate-900">{deletingStaffMemberState.name || deletingStaffMemberState.email || 'ce membre'}</span> de votre equipe ? Cette action est irreversible.
+            </p>
+            <div className="flex items-center justify-end space-x-3 pt-2">
+              <button
+                type="button"
+                onClick={() => setDeletingStaffMemberState(null)}
+                disabled={deletingLoading}
+                className="px-4 py-2 border border-slate-200 text-slate-700 font-bold text-xs rounded-xl hover:bg-slate-50 cursor-pointer"
+              >
+                Annuler
+              </button>
+              <button
+                type="button"
+                disabled={deletingLoading}
+                onClick={async () => {
+                  if (!deletingStaffMemberState) return;
+                  setDeletingLoading(true);
+                  try {
+                    const res = await deleteStaffMember(deletingStaffMemberState.id);
+                    if (res.success) {
+                      setDeletingStaffMemberState(null);
+                    } else {
+                      alert(res.error || 'Erreur lors de la suppression du membre.');
+                    }
+                  } catch (err: any) {
+                    alert(err?.message || 'Erreur lors de la suppression.');
+                  } finally {
+                    setDeletingLoading(false);
+                  }
+                }}
+                className="px-4 py-2 bg-rose-600 hover:bg-rose-700 disabled:opacity-50 text-white font-bold text-xs rounded-xl cursor-pointer"
+              >
+                {deletingLoading ? 'Suppression...' : 'Confirmer la suppression'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Cancel Order Modal */}
+      {cancellingOrderId && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs">
+          <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl border border-slate-200 space-y-4 text-slate-800">
+            <div className="flex items-center space-x-2 text-rose-600">
+              <AlertTriangle className="w-5 h-5 shrink-0" />
+              <h3 className="font-extrabold text-slate-900 text-base">Annuler la commande ?</h3>
+            </div>
+            <p className="text-xs text-slate-600">
+              Indiquez le motif de l&apos;annulation pour cette commande. Cette action est irreversible.
+            </p>
+            <textarea
+              value={cancellationReason}
+              onChange={(e) => setCancellationReason(e.target.value)}
+              placeholder="Motif de l'annulation (ex: Rupture de stock, Demande client)..."
+              rows={3}
+              className="w-full text-xs p-3 border border-slate-200 rounded-xl focus:outline-hidden focus:ring-2 focus:ring-rose-500 text-slate-800"
+            />
+            <div className="flex items-center justify-end space-x-3 pt-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setCancellingOrderId(null);
+                  setCancellationReason('');
+                }}
+                disabled={isCancellingOrder}
+                className="px-4 py-2 border border-slate-200 text-slate-700 font-bold text-xs rounded-xl hover:bg-slate-50 cursor-pointer"
+              >
+                Retour
+              </button>
+              <button
+                type="button"
+                disabled={isCancellingOrder || !cancellationReason.trim()}
+                onClick={async () => {
+                  if (!cancellingOrderId) return;
+                  setIsCancellingOrder(true);
+                  try {
+                    await onCancelOrder(cancellingOrderId, cancellationReason.trim());
+                    setCancellingOrderId(null);
+                    setCancellationReason('');
+                  } catch (err: any) {
+                    alert(err?.message || "Erreur lors de l'annulation.");
+                  } finally {
+                    setIsCancellingOrder(false);
+                  }
+                }}
+                className="px-4 py-2 bg-rose-600 hover:bg-rose-700 disabled:opacity-50 text-white font-bold text-xs rounded-xl cursor-pointer"
+              >
+                {isCancellingOrder ? 'Annulation...' : "Confirmer l'annulation"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Fin du composant MerchantDashboard
