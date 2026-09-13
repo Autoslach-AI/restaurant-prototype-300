@@ -32,7 +32,6 @@ import {
   INITIAL_BUSINESSES,
   INITIAL_CATEGORIES,
   INITIAL_PRODUCTS,
-  INITIAL_CUSTOMERS,
   INITIAL_ORDERS,
   INITIAL_AGENT_EVENTS,
   INITIAL_STAFF,
@@ -136,7 +135,10 @@ export class AppStore {
     this.categoriesLoading = hasSupabase;
     this.products = hasSupabase ? [] : loadFromStorage(STORAGE_KEYS.PRODUCTS, INITIAL_PRODUCTS);
     this.productsLoading = hasSupabase;
-    this.customers = hasSupabase ? [] : loadFromStorage(STORAGE_KEYS.CUSTOMERS, INITIAL_CUSTOMERS);
+    const storedCustomers = loadFromStorage<Customer[]>(STORAGE_KEYS.CUSTOMERS, []);
+    this.customers = Array.isArray(storedCustomers)
+      ? storedCustomers.filter((c) => c && c.id !== 'cust_101' && c.id !== 'cust_102' && c.id !== 'cust_103')
+      : [];
     this.customersLoading = hasSupabase;
     this.customerMessages = loadFromStorage('cwa_customer_messages', {});
     this.orders = loadFromStorage(STORAGE_KEYS.ORDERS, INITIAL_ORDERS);
@@ -364,6 +366,16 @@ export class AppStore {
       clientMsg: customerEvent.payload.message,
       merchantMsg: merchantEvent.payload.message,
     };
+  }
+
+  upsertOrder(order: Order) {
+    const existingIdx = this.orders.findIndex((o) => o.id === order.id);
+    if (existingIdx > -1) {
+      this.orders[existingIdx] = order;
+    } else {
+      this.orders.unshift(order);
+    }
+    this.notify();
   }
 
   // Update order status & trigger post-delivery follow-up if applicable
@@ -1188,7 +1200,7 @@ export class AppStore {
     this.activeBusinessId = INITIAL_BUSINESSES[0].id;
     this.categories = INITIAL_CATEGORIES;
     this.products = INITIAL_PRODUCTS;
-    this.customers = INITIAL_CUSTOMERS;
+    this.customers = [];
     this.orders = INITIAL_ORDERS;
     this.agentEvents = INITIAL_AGENT_EVENTS;
     this.staff = INITIAL_STAFF;

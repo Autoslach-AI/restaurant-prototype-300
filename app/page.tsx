@@ -2,7 +2,7 @@
 
 export const dynamic = 'force-dynamic';
 
-import React, { useState, useEffect, useSyncExternalStore } from 'react';
+import React, { useState, useEffect, useRef, useSyncExternalStore } from 'react';
 import { getStore, AppStore } from '@/lib/store';
 import Navbar from '@/components/Navbar';
 import ClientStorefront from '@/components/ClientStorefront';
@@ -28,15 +28,20 @@ import {
   cancelOrder,
 } from '@/lib/supabase';
 
+const emptySubscribe = () => () => {};
+
 export default function HomePage() {
-  const [store] = useState<AppStore>(() => getStore());
-  const [mounted, setMounted] = useState(false);
+  const store = getStore();
+  const mounted = useSyncExternalStore(
+    emptySubscribe,
+    () => true,
+    () => false
+  );
 
   // Subscribe to store updates using React 19 pattern
   const [, setTick] = useState(0);
 
   useEffect(() => {
-    setMounted(true);
     const unsubscribe = store.subscribe(() => {
       setTick((prev) => prev + 1);
     });
@@ -44,9 +49,35 @@ export default function HomePage() {
   }, [store]);
 
   const activeBusiness = store.getActiveBusiness();
+  const prevEffectDepsRef = useRef<{ activeBusinessId?: string; store?: AppStore; isFirstRun: boolean }>({
+    activeBusinessId: undefined,
+    store: undefined,
+    isFirstRun: true,
+  });
 
   // Load staff, categories and products from Supabase on mount and whenever active business changes
   useEffect(() => {
+    const isFirstRun = prevEffectDepsRef.current.isFirstRun;
+    const prevBizId = prevEffectDepsRef.current.activeBusinessId;
+    const prevStoreRef = prevEffectDepsRef.current.store;
+    const bizChanged = prevBizId !== activeBusiness?.id;
+    const storeChanged = prevStoreRef !== store;
+
+    console.log('[DEBUG_EFFECT] useEffect(loadData) TRIGGERED:', {
+      reason: isFirstRun ? 'initial_mount' : (bizChanged ? 'activeBusiness_id_changed' : (storeChanged ? 'store_ref_changed' : 'unknown')),
+      isFirstRun,
+      prevActiveBusinessId: prevBizId,
+      currentActiveBusinessId: activeBusiness?.id,
+      storeReferenceChanged: storeChanged,
+      storeCustomersCountBeforeFetch: store.customers?.length,
+    });
+
+    prevEffectDepsRef.current = {
+      activeBusinessId: activeBusiness?.id,
+      store,
+      isFirstRun: false,
+    };
+
     let isMounted = true;
     async function loadData() {
       if (!activeBusiness?.id) return;
@@ -73,10 +104,23 @@ export default function HomePage() {
       });
 
       // 4. Customers
-      store.setCustomersLoading(true);
+      if (typeof store.setCustomersLoading === 'function') {
+        store.setCustomersLoading(true);
+      }
       fetchCustomersForBusiness(activeBusiness.id).then((customersList) => {
+        console.log('[DEBUG_EFFECT] fetchCustomersForBusiness Supabase response received:', {
+          businessId: activeBusiness.id,
+          customersCountReceived: customersList ? customersList.length : 0,
+          customersList,
+          storeCustomersBeforeUpdate: store.customers?.length,
+        });
         if (!isMounted) return;
-        store.setCustomersList(customersList);
+        if (typeof store.setCustomersList === 'function') {
+          store.setCustomersList(customersList || []);
+        } else {
+          store.customers = customersList || [];
+          store.notify();
+        }
       });
 
       // 5. Orders
@@ -227,12 +271,7 @@ export default function HomePage() {
     };
 
     // 3. Mise à jour du store local & déduction du stock
-    const existingIdx = store.orders.findIndex((o) => o.id === createdOrder.id);
-    if (existingIdx > -1) {
-      store.orders[existingIdx] = createdOrder;
-    } else {
-      store.orders.unshift(createdOrder);
-    }
+    store.upsertOrder(createdOrder);
 
     for (const item of store.cart) {
       const prod = store.products.find((p) => p.id === item.product.id);
@@ -271,8 +310,7 @@ export default function HomePage() {
       }
     );
 
-    store.cart = [];
-    store.notify();
+    store.clearCart();
 
     // Ouvrir le simulateur WhatsApp uniquement en cas de succès
     setIsWhatsAppOpen(true);

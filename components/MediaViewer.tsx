@@ -22,30 +22,33 @@ export interface MediaViewerItem {
 }
 
 interface MediaViewerProps {
-  isOpen: boolean;
+  isOpen?: boolean;
   onClose: () => void;
-  media: MediaViewerItem | null;
+  media?: MediaViewerItem | null;
+  item?: MediaViewerItem | null;
 }
 
-export function MediaViewer({ isOpen, onClose, media }: MediaViewerProps) {
+export function MediaViewer({ isOpen, onClose, media, item }: MediaViewerProps) {
+  const currentMedia = item !== undefined ? item : media;
+  const isCurrentlyOpen = isOpen !== undefined ? isOpen : Boolean(currentMedia);
   const [zoomLevel, setZoomLevel] = useState(1);
 
   useEffect(() => {
-    if (isOpen) {
-      setZoomLevel(1);
+    if (isCurrentlyOpen) {
       const handleKeyDown = (e: KeyboardEvent) => {
         if (e.key === 'Escape') {
+          setZoomLevel(1);
           onClose();
         }
       };
       window.addEventListener('keydown', handleKeyDown);
       return () => window.removeEventListener('keydown', handleKeyDown);
     }
-  }, [isOpen, onClose, media?.url]);
+  }, [isCurrentlyOpen, onClose]);
 
-  if (!isOpen || !media) return null;
+  if (!isCurrentlyOpen || !currentMedia) return null;
 
-  const { url, mediaType, name, size } = media;
+  const { url, mediaType, name, size } = currentMedia;
 
   const fileName = name || 'Fichier';
   const lowerFileName = fileName.toLowerCase();

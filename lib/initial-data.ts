@@ -224,41 +224,13 @@ export const INITIAL_PRODUCTS: Product[] = [
   },
 ];
 
-export const INITIAL_CUSTOMERS: Customer[] = [
-  {
-    id: 'cust_101',
-    business_id: 'biz_dakar_gourmet',
-    name: 'Fatou Diallo',
-    phone: '+221 77 654 32 10',
-    whatsapp_id: '221776543210',
-    channel_preference: 'whatsapp',
-    created_at: new Date(Date.now() - 3600000 * 2).toISOString(),
-  },
-  {
-    id: 'cust_102',
-    business_id: 'biz_dakar_gourmet',
-    name: 'Moussa Ndiaye',
-    phone: '+221 78 987 65 43',
-    whatsapp_id: '221789876543',
-    channel_preference: 'whatsapp',
-    created_at: new Date(Date.now() - 3600000 * 24).toISOString(),
-  },
-  {
-    id: 'cust_103',
-    business_id: 'biz_kente_chic',
-    name: 'Awa Sow',
-    phone: '+221 70 333 22 11',
-    whatsapp_id: '221703332211',
-    channel_preference: 'app',
-    created_at: new Date(Date.now() - 3600000 * 5).toISOString(),
-  },
-];
+export const INITIAL_CUSTOMERS: Customer[] = [];
 
 export const INITIAL_ORDERS: Order[] = [
   {
     id: 'ord_1001',
     business_id: 'biz_dakar_gourmet',
-    customer_id: 'cust_101',
+    customer_id: 'cust_a4c806c6-cff6-412f-9935-909d61a3f165',
     customer_name: 'Fatou Diallo',
     customer_phone: '+221 77 654 32 10',
     delivery_address: 'Mermoz Pyrotechnie, Villa 14, Dakar',
@@ -300,9 +272,9 @@ export const INITIAL_ORDERS: Order[] = [
   {
     id: 'ord_1002',
     business_id: 'biz_dakar_gourmet',
-    customer_id: 'cust_102',
-    customer_name: 'Moussa Ndiaye',
-    customer_phone: '+221 78 987 65 43',
+    customer_id: 'cust_bc63692b-edb2-4262-ba2e-1346d9e96959',
+    customer_name: 'Mr Diop',
+    customer_phone: '+221 77 123 45 67',
     delivery_address: 'Plateau, Rue du docteur Théze, Dakar',
     order_type: 'delivery',
     delivery_zone_id: 'dz_2',

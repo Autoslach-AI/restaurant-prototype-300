@@ -2,8 +2,12 @@ import type {Metadata} from 'next';
 import './globals.css'; // Global styles
 
 export const metadata: Metadata = {
-  title: 'Chez Ami - Grillades & Maquis Dakar',
-  description: 'Tableau de bord commerçant et plateforme de commande WhatsApp pour Chez Ami - Grillades & Maquis Dakar',
+  title: 'CommerceWA - Plateforme & Agent Commercial WhatsApp',
+  description: 'Plateforme de commande multi-tenant avec agent commercial WhatsApp automatisé, gestion de commandes et relances automatiques.',
+  openGraph: {
+    title: 'CommerceWA - Plateforme & Agent Commercial WhatsApp',
+    description: 'Plateforme de commande multi-tenant avec agent commercial WhatsApp automatisé, gestion de commandes et relances automatiques.',
+  },
 };
 
 export default function RootLayout({children}: {children: React.ReactNode}) {

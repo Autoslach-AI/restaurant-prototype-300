@@ -329,6 +329,26 @@ const functionDeclarations: FunctionDeclaration[] = [
 ];
 
 export async function POST(req: NextRequest) {
+  let isDemo = true;
+  let demoMessagesUsedToday: number | null = null;
+  const demoMessagesLimit = 20;
+  let resetAtIso: string | null = null;
+
+  const getDemoMeta = () => {
+    if (!isDemo) {
+      return {
+        demo_messages_used_today: null,
+        demo_messages_limit: null,
+        reset_at_iso: null,
+      };
+    }
+    return {
+      demo_messages_used_today: demoMessagesUsedToday ?? 0,
+      demo_messages_limit: demoMessagesLimit,
+      reset_at_iso: resetAtIso,
+    };
+  };
+
   try {
     const body = await req.json();
     const { business_id, message, conversation_history } = body;
@@ -341,7 +361,6 @@ export async function POST(req: NextRequest) {
     }
 
     const supabase = getSupabaseClient();
-    let isDemo = true;
 
     if (supabase) {
       try {
@@ -360,6 +379,11 @@ export async function POST(req: NextRequest) {
 
       if (isDemo) {
         try {
+          const tomorrowMidnightUTC = new Date();
+          tomorrowMidnightUTC.setUTCDate(tomorrowMidnightUTC.getUTCDate() + 1);
+          tomorrowMidnightUTC.setUTCHours(0, 0, 0, 0);
+          resetAtIso = tomorrowMidnightUTC.toISOString();
+
           const todayStart = new Date();
           todayStart.setUTCHours(0, 0, 0, 0);
           const todayStartISO = todayStart.toISOString();
@@ -378,17 +402,27 @@ export async function POST(req: NextRequest) {
               .eq('sender', 'user')
               .gte('created_at', todayStartISO);
 
-            if (!countError && count !== null && count >= 20) {
+            if (!countError && typeof count === 'number') {
+              demoMessagesUsedToday = count;
+            } else {
+              demoMessagesUsedToday = 0;
+            }
+
+            if (!countError && typeof count === 'number' && count >= 20) {
               return NextResponse.json(
                 {
                   error: 'Limite quotidienne atteinte pour le mode demo (20 messages/jour). Contactez le support pour passer a la version Enterprise.',
                   code: 'RATE_LIMIT_REACHED',
+                  ...getDemoMeta(),
                 },
                 { status: 429 }
               );
             }
+          } else {
+            demoMessagesUsedToday = 0;
           }
         } catch {
+          demoMessagesUsedToday = 0;
         }
       }
     }
@@ -397,8 +431,10 @@ export async function POST(req: NextRequest) {
     if (!apiKey) {
       return NextResponse.json(
         {
-          error: 'Erreur lors de la communication avec l assistant IA.',
+          error: 'Configuration de l assistant IA invalide. Contactez le support.',
+          code: 'AUTH_ERROR',
           details: 'Cle API non configuree sur le serveur.',
+          ...getDemoMeta(),
         },
         { status: 500 }
       );
@@ -425,7 +461,7 @@ export async function POST(req: NextRequest) {
     });
 
     const baseSystemInstruction =
-      'Tu es l assistant IA intelligent de la plateforme de commerce. Tu aides les commercants au Senegal a gerer leurs ventes, stocks, commandes, clients et strategie commerciale. Tu as acces a des fonctions dediees pour consulter les donnees reelles du commerce en direct (commandes recentes, stock des produits, resume des clients et fidelite, resume financier, repartition des depenses). Utilise toujours ces fonctions pour repondre precisement avec les donnees reelles au lieu d indiquer que tu n y as pas acces. Reponds de facon concise, professionnelle et bienveillante. Utilise les FCFA comme devise quand pertinent. IMPORTANT : Quand tu recois un resultat de fonction, tu dois UNIQUEMENT rapporter les donnees exactement telles qu\'elles sont retournees. Ne complete jamais avec des categories, produits, ou chiffres qui n\'apparaissent pas explicitement dans le resultat de la fonction. Si une liste de categories est vide ou courte, rapporte-la telle quelle, n\'ajoute jamais de categories inventees ou d\'exemples generiques.';
+      'Tu es l\'assistant IA conseiller expert de la plateforme de commerce. Tu aides les commercants au Senegal a piloter et optimiser leurs ventes, stocks, commandes, clients, finances et strategie commerciale. Tu as acces a des fonctions dediees pour consulter les donnees reelles du commerce en direct (commandes recentes, stock des produits, resume des clients et fidelite, resume financier, repartition des depenses). Utilise toujours ces fonctions pour repondre precisement avec les donnees reelles au lieu d\'indiquer que tu n\'y as pas acces. Utilise les FCFA comme devise quand pertinent. Tu n\'es pas un simple rapporteur de chiffres ni un assistant complaisant : tu agis comme un vrai conseiller d\'affaires rigoureux, lucide et oriente resultat. Adopte un ton factuel, direct et professionnel, sans formules de motivation commerciale a vide. Croise systematiquement les donnees entre elles pour etablir un diagnostic coherent au lieu de simplement les juxtaposer (par exemple, si le chiffre d\'affaires encaisse est a zero alors que des commandes existent, pointe cette anomalie comme une priorite urgente). Ne donne jamais de conseils generiques ou interchangeables : chaque recommandation doit etre justifiee par un chiffre ou un fait precis propre a ce commerce. Hierarchise toujours tes observations et recommandations en distinguant clairement ce qui est critique et urgent de ce qui est secondaire. Sois totalement honnete meme si les resultats sont mauvais ou preocupants : dis la verite clairement plutot que de rester vague ou artificiellement rassurant. Si les donnees sont insuffisantes, la periode trop courte ou l\'echantillon trop reduit pour conclure serieusement, indique-le explicitement au commercant plutot que de forcer une reponse non etayee. Pour les reponses d\'analyse ou les bilans, structure ton propos avec du Markdown (titres, gras pour les chiffres cles, listes a puces) pour assurer une lecture rapide, tout en restant concis et direct sans mise en page superflue sur les questions simples. IMPORTANT : Quand tu recois un resultat de fonction, tu dois UNIQUEMENT rapporter les donnees exactement telles qu\'elles sont retournees. Ne complete jamais avec des categories, produits, ou chiffres qui n\'apparaissent pas explicitement dans le resultat de la fonction. Si une liste de categories est vide ou courte, rapporte-la telle quelle, n\'ajoute jamais de categories inventees ou d\'exemples generiques.';
 
     const maxTurns = 3;
     let turn = 0;
@@ -488,12 +524,67 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({
       text: responseText,
       success: true,
+      ...getDemoMeta(),
     });
   } catch (err: any) {
+    const rawErrorStr = String(err?.message || err?.status || err || '');
+    const details = err?.message || String(err) || 'Erreur interne inconnue';
+
+    if (
+      rawErrorStr.includes('RESOURCE_EXHAUSTED') ||
+      rawErrorStr.includes('429') ||
+      rawErrorStr.toLowerCase().includes('quota')
+    ) {
+      return NextResponse.json(
+        {
+          error: 'Le quota quotidien de l assistant IA a ete atteint. Reessayez demain, ou contactez le support pour augmenter votre limite.',
+          code: 'QUOTA_EXCEEDED',
+          details,
+          ...getDemoMeta(),
+        },
+        { status: 429 }
+      );
+    }
+
+    if (
+      rawErrorStr.includes('API_KEY') ||
+      rawErrorStr.includes('401') ||
+      rawErrorStr.includes('403') ||
+      rawErrorStr.includes('PERMISSION_DENIED')
+    ) {
+      return NextResponse.json(
+        {
+          error: 'Configuration de l assistant IA invalide. Contactez le support.',
+          code: 'AUTH_ERROR',
+          details,
+          ...getDemoMeta(),
+        },
+        { status: 500 }
+      );
+    }
+
+    if (
+      rawErrorStr.toLowerCase().includes('timeout') ||
+      rawErrorStr.includes('ETIMEDOUT') ||
+      rawErrorStr.toLowerCase().includes('network')
+    ) {
+      return NextResponse.json(
+        {
+          error: 'Le service de l assistant IA met trop de temps a repondre. Reessayez dans quelques instants.',
+          code: 'TIMEOUT',
+          details,
+          ...getDemoMeta(),
+        },
+        { status: 504 }
+      );
+    }
+
     return NextResponse.json(
       {
-        error: 'Erreur lors de la communication avec l assistant IA.',
-        details: err?.message || 'Erreur interne inconnue',
+        error: 'Une erreur inattendue est survenue avec l assistant IA. Reessayez ou contactez le support si cela persiste.',
+        code: 'UNKNOWN_ERROR',
+        details,
+        ...getDemoMeta(),
       },
       { status: 500 }
     );

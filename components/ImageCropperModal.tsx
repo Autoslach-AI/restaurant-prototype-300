@@ -42,23 +42,15 @@ export const ImageCropperModal: React.FC<ImageCropperModalProps> = ({
   const MIN_CROP_SIZE = 100;
   const MAX_CROP_SIZE = 280;
 
-  // Reset states when opening a new image
-  useEffect(() => {
-    if (isOpen && imageSrc) {
-      setZoom(1);
-      setOffset({ x: 0, y: 0 });
-      setCropSize(220);
-      setIsDragging(false);
-      setIsResizing(false);
-    }
-  }, [isOpen, imageSrc]);
-
   // Handle image load to get original dimensions
   const onImageLoad = (e: React.SyntheticEvent<HTMLImageElement>) => {
     const { naturalWidth, naturalHeight } = e.currentTarget;
     setNaturalDimensions({ width: naturalWidth, height: naturalHeight });
     setZoom(1);
     setOffset({ x: 0, y: 0 });
+    setCropSize(220);
+    setIsDragging(false);
+    setIsResizing(false);
   };
 
   // Image Dragging handlers (Mouse + Touch)
