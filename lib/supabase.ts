@@ -1150,6 +1150,7 @@ export async function fetchCustomersForBusiness(businessId: string): Promise<Cus
 
   try {
     const client = getSupabase();
+    console.log('[DEBUG_FETCH] fetchCustomersForBusiness START', { businessId, timestamp: Date.now() });
     const { data, error } = await (client as any)
       .from('platform_customers')
       .select('*')
@@ -1157,12 +1158,15 @@ export async function fetchCustomersForBusiness(businessId: string): Promise<Cus
       .order('created_at', { ascending: false });
 
     if (error) {
+      console.error('[DEBUG_FETCH] Supabase returned ERROR', { businessId, errorMessage: error.message, errorCode: error.code, errorDetails: error.details, fullError: error });
       console.warn('Supabase fetch customers error:', error.message);
       return [];
     }
 
+    console.log('[DEBUG_FETCH] SUCCESS', { businessId, count: data?.length, timestamp: Date.now() });
     return (data as Customer[]) || [];
   } catch (err: any) {
+    console.error('[DEBUG_FETCH] EXCEPTION caught', { businessId, errMessage: err?.message, errName: err?.name, errStack: err?.stack, fullErr: err });
     console.warn('Supabase fetch customers exception:', err?.message || err);
     return [];
   }
