@@ -296,6 +296,17 @@ export default function CustomersSection({
     return c.name.toLowerCase().includes(q) || (c.phone && c.phone.includes(q));
   });
 
+  console.log('[DEBUG_RENDER] CustomersSection render', {
+    timestamp: Date.now(),
+    businessCustomersLength: businessCustomers.length,
+    displayCustomersLength: displayCustomers.length,
+    allFilteredCustomersLength: allFilteredCustomers.length,
+    filteredCustomersLength: filteredCustomers.length,
+    isInitialCustomersLoading,
+    storeCustomersLoading: store.customersLoading,
+    locallyDeletedCustomerIds,
+  });
+
   const effectiveActiveCustomer =
     displayCustomers.find((c) => c.id === selectedCustomerId) ||
     sortedChatCustomers[0] ||
@@ -553,7 +564,20 @@ export default function CustomersSection({
     try {
       const client = getSupabase();
 
-      // 1. Supprimer d'abord tous les messages lies a ce client
+      // 1. Detacher le client de toutes ses commandes dans platform_orders (evite violation FK)
+      const { error: orderDetachError } = await (client as any)
+        .from('platform_orders')
+        .update({ customer_id: null })
+        .eq('customer_id', customerId);
+
+      if (orderDetachError) {
+        return {
+          success: false,
+          error: `Erreur lors du detachement des commandes : ${orderDetachError.message}`,
+        };
+      }
+
+      // 2. Supprimer ensuite tous les messages lies a ce client
       const { error: msgError } = await (client as any)
         .from('platform_customer_messages')
         .delete()
@@ -567,7 +591,7 @@ export default function CustomersSection({
         };
       }
 
-      // 2. Supprimer ensuite le client de platform_customers
+      // 3. Supprimer enfin le client de platform_customers
       const { data: deletedCustomers, error: custError } = await (client as any)
         .from('platform_customers')
         .delete()
@@ -605,18 +629,7 @@ export default function CustomersSection({
 
     const res = await deleteCustomerPermanently(target.id);
     if (!res.success) {
-      const errLower = (res.error || '').toLowerCase();
-      if (
-        errLower.includes('foreign key') ||
-        errLower.includes('platform_orders') ||
-        errLower.includes('23503')
-      ) {
-        setDeleteCustomerPermanentlyError(
-          'Impossible de supprimer ce client : il a un historique de commandes associe. La suppression definitive briserait vos donnees financieres et statistiques. Vous pouvez neanmoins supprimer son historique de discussion sans le supprimer completement.'
-        );
-      } else {
-        setDeleteCustomerPermanentlyError(res.error || 'Erreur lors de la suppression du client.');
-      }
+      setDeleteCustomerPermanentlyError(res.error || 'Erreur lors de la suppression du client.');
       setIsDeletingCustomerPermanently(false);
       return;
     }

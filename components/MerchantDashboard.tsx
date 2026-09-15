@@ -1112,6 +1112,12 @@ export default function MerchantDashboard({
   const businessEvents = agentEvents.filter((e) => e.business_id === business.id);
   const businessCustomers = store.customers.filter((c) => c.business_id === business.id);
 
+  console.log('[DEBUG_RENDER] MerchantDashboard render', {
+    timestamp: Date.now(),
+    businessCustomersLength: businessCustomers.length,
+    storeCustomersRawLength: store.customers.length,
+  });
+
   // Filter agent events for manager attention only (anomalies, errors, relance failures, payment discrepancies)
   const attentionAgentEvents = businessEvents.filter((evt) => {
     const type = (evt.event_type || '').toLowerCase();

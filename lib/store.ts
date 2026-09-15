@@ -125,6 +125,11 @@ export class AppStore {
   listeners: Array<() => void> = [];
 
   constructor() {
+    console.log('[DEBUG_CONSTRUCTOR] AppStore constructor called', {
+      windowDefined: typeof window !== 'undefined',
+      timestamp: Date.now(),
+    });
+
     const hasSupabase =
       Boolean(process.env.NEXT_PUBLIC_SUPABASE_URL?.trim()) &&
       Boolean(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY?.trim());
@@ -139,6 +144,10 @@ export class AppStore {
     this.customers = Array.isArray(storedCustomers)
       ? storedCustomers.filter((c) => c && c.id !== 'cust_101' && c.id !== 'cust_102' && c.id !== 'cust_103')
       : [];
+    console.log('[DEBUG_CONSTRUCTOR] customers loaded from localStorage', {
+      count: this.customers.length,
+      rawLocalStorageValue: typeof window !== 'undefined' ? localStorage.getItem('cwa_customers') : 'SSR_NO_WINDOW',
+    });
     this.customersLoading = hasSupabase;
     this.customerMessages = loadFromStorage('cwa_customer_messages', {});
     this.orders = loadFromStorage(STORAGE_KEYS.ORDERS, INITIAL_ORDERS);
@@ -185,6 +194,11 @@ export class AppStore {
   }
 
   notify() {
+    console.log('[DEBUG_NOTIFY] notify() called', {
+      customersCountAtNotifyTime: this.customers.length,
+      stackTrace: new Error().stack,
+    });
+
     saveToStorage(STORAGE_KEYS.BUSINESSES, this.businesses);
     saveToStorage(STORAGE_KEYS.ACTIVE_BIZ, this.activeBusinessId);
     saveToStorage(STORAGE_KEYS.CATEGORIES, this.categories);
