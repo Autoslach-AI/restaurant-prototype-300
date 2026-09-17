@@ -25,8 +25,10 @@ import {
   User,
   Users,
   Settings,
-  Maximize2,
   Download,
+  FileSpreadsheet,
+  Presentation,
+  Music,
 } from 'lucide-react';
 import { Business, Customer, Order } from '@/lib/types';
 import { getStore } from '@/lib/store';
@@ -43,6 +45,59 @@ import {
   uploadStaffAvatar,
 } from '@/lib/supabase';
 import { MediaViewer, MediaViewerItem } from '@/components/MediaViewer';
+
+function getDocumentDetails(fileName?: string | null, mediaType?: string | null) {
+  const name = (fileName || '').toLowerCase();
+  const type = (mediaType || '').toLowerCase();
+
+  if (name.endsWith('.pdf') || type.includes('pdf')) {
+    return {
+      Icon: FileText,
+      badge: 'PDF',
+      accentColor: 'text-rose-600 bg-rose-50 border-rose-200',
+    };
+  }
+  if (name.match(/\.(doc|docx)$/i) || type.includes('word')) {
+    return {
+      Icon: FileText,
+      badge: 'DOCX',
+      accentColor: 'text-blue-600 bg-blue-50 border-blue-200',
+    };
+  }
+  if (name.match(/\.(xls|xlsx|csv)$/i) || type.includes('sheet') || type.includes('excel')) {
+    return {
+      Icon: FileSpreadsheet,
+      badge: 'XLS',
+      accentColor: 'text-emerald-600 bg-emerald-50 border-emerald-200',
+    };
+  }
+  if (name.match(/\.(ppt|pptx)$/i) || type.includes('presentation') || type.includes('powerpoint')) {
+    return {
+      Icon: Presentation,
+      badge: 'PPT',
+      accentColor: 'text-amber-600 bg-amber-50 border-amber-200',
+    };
+  }
+  if (type.startsWith('video') || name.match(/\.(mp4|webm|mov|mkv)$/i)) {
+    return {
+      Icon: Video,
+      badge: 'VIDÉO',
+      accentColor: 'text-purple-600 bg-purple-50 border-purple-200',
+    };
+  }
+  if (type.startsWith('audio') || name.match(/\.(mp3|wav|ogg|m4a)$/i)) {
+    return {
+      Icon: Music,
+      badge: 'AUDIO',
+      accentColor: 'text-indigo-600 bg-indigo-50 border-indigo-200',
+    };
+  }
+  return {
+    Icon: File,
+    badge: 'DOC',
+    accentColor: 'text-slate-600 bg-slate-100 border-slate-200',
+  };
+}
 
 export interface CustomersSectionProps {
   business: Business;
@@ -97,13 +152,16 @@ export default function CustomersSection({
 
   // Chat message & attachment states
   const [customerChatInput, setCustomerChatInput] = useState('');
-  const [customerPendingAttachment, setCustomerPendingAttachment] = useState<{
-    file: File;
-    previewUrl: string;
-    mediaType: 'image' | 'video' | 'audio' | 'document' | 'other';
-    name: string;
-    size: number;
-  } | null>(null);
+  const [customerPendingAttachments, setCustomerPendingAttachments] = useState<
+    Array<{
+      id: string;
+      file: File;
+      previewUrl: string;
+      mediaType: 'image' | 'video' | 'audio' | 'document' | 'other';
+      name: string;
+      size: number;
+    }>
+  >([]);
   const [customerChatSending, setCustomerChatSending] = useState(false);
   const [customerChatMediaUploading, setCustomerChatMediaUploading] = useState(false);
   const [customerChatError, setCustomerChatError] = useState<string | null>(null);
@@ -227,16 +285,6 @@ export default function CustomersSection({
       return (parts[0][0] + parts[1][0]).toUpperCase();
     }
     return name.slice(0, 2).toUpperCase();
-  };
-
-  const getAttachmentExtension = (name?: string | null, url?: string | null): string => {
-    const target = (name || url || '').trim();
-    const clean = target.split('?')[0].split('#')[0];
-    const lastDot = clean.lastIndexOf('.');
-    if (lastDot !== -1 && lastDot < clean.length - 1) {
-      return clean.substring(lastDot + 1).toLowerCase();
-    }
-    return '';
   };
 
   const businessOrders: Order[] = (store.orders || []).filter(
@@ -396,51 +444,93 @@ export default function CustomersSection({
   }, [effectiveActiveCustomer?.id, store.customerMessages[effectiveActiveCustomer?.id || '']?.length]);
 
   const handleCustomerFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
 
-    if (customerPendingAttachment?.previewUrl) {
-      URL.revokeObjectURL(customerPendingAttachment.previewUrl);
-    }
+    const fileList = Array.from(files);
+    const validAttachments: Array<{
+      id: string;
+      file: File;
+      previewUrl: string;
+      mediaType: 'image' | 'video' | 'audio' | 'document' | 'other';
+      name: string;
+      size: number;
+    }> = [];
+    const oversizedFiles: string[] = [];
 
-    const mime = file.type || '';
-    let mediaType: 'image' | 'video' | 'audio' | 'document' | 'other' = 'other';
-    if (mime.startsWith('image/')) mediaType = 'image';
-    else if (mime.startsWith('video/')) mediaType = 'video';
-    else if (mime.startsWith('audio/')) mediaType = 'audio';
-    else if (
-      mime.includes('pdf') ||
-      mime.includes('word') ||
-      mime.includes('document') ||
-      mime.includes('excel') ||
-      mime.includes('sheet') ||
-      mime.includes('text') ||
-      mime.includes('presentation') ||
-      file.name.match(/\.(pdf|docx?|xlsx?|pptx?|txt|csv)$/i)
-    ) {
-      mediaType = 'document';
-    }
+    fileList.forEach((file) => {
+      // Validation de taille (10 Mo par fichier)
+      if (file.size > 10 * 1024 * 1024) {
+        oversizedFiles.push(file.name);
+        return;
+      }
 
-    const previewUrl = URL.createObjectURL(file);
-    setCustomerPendingAttachment({
-      file,
-      previewUrl,
-      mediaType,
-      name: file.name,
-      size: file.size,
+      const mime = file.type || '';
+      let mediaType: 'image' | 'video' | 'audio' | 'document' | 'other' = 'other';
+      if (mime.startsWith('image/')) mediaType = 'image';
+      else if (mime.startsWith('video/')) mediaType = 'video';
+      else if (mime.startsWith('audio/')) mediaType = 'audio';
+      else if (
+        mime.includes('pdf') ||
+        mime.includes('word') ||
+        mime.includes('document') ||
+        mime.includes('excel') ||
+        mime.includes('sheet') ||
+        mime.includes('text') ||
+        mime.includes('presentation') ||
+        file.name.match(/\.(pdf|docx?|xlsx?|pptx?|txt|csv)$/i)
+      ) {
+        mediaType = 'document';
+      }
+
+      const previewUrl = URL.createObjectURL(file);
+      validAttachments.push({
+        id: `${Date.now()}-${Math.random().toString(36).substring(2, 9)}`,
+        file,
+        previewUrl,
+        mediaType,
+        name: file.name,
+        size: file.size,
+      });
     });
-    setCustomerChatError(null);
+
+    if (oversizedFiles.length > 0) {
+      setCustomerChatError(
+        `Fichier(s) supérieur(s) à 10 Mo ignoré(s) : ${oversizedFiles.join(', ')}`
+      );
+    } else {
+      setCustomerChatError(null);
+    }
+
+    if (validAttachments.length > 0) {
+      setCustomerPendingAttachments((prev) => [...prev, ...validAttachments]);
+    }
 
     if (customerFileInputRef.current) {
       customerFileInputRef.current.value = '';
     }
   };
 
-  const handleRemoveCustomerPendingAttachment = () => {
-    if (customerPendingAttachment?.previewUrl) {
-      URL.revokeObjectURL(customerPendingAttachment.previewUrl);
+  const handleRemoveCustomerPendingAttachment = (indexToRemove: number) => {
+    setCustomerPendingAttachments((prev) => {
+      const target = prev[indexToRemove];
+      if (target?.previewUrl) {
+        URL.revokeObjectURL(target.previewUrl);
+      }
+      return prev.filter((_, idx) => idx !== indexToRemove);
+    });
+    if (customerFileInputRef.current) {
+      customerFileInputRef.current.value = '';
     }
-    setCustomerPendingAttachment(null);
+  };
+
+  const handleClearAllCustomerPendingAttachments = () => {
+    customerPendingAttachments.forEach((att) => {
+      if (att.previewUrl) {
+        URL.revokeObjectURL(att.previewUrl);
+      }
+    });
+    setCustomerPendingAttachments([]);
     if (customerFileInputRef.current) {
       customerFileInputRef.current.value = '';
     }
@@ -451,56 +541,85 @@ export default function CustomersSection({
     if (!effectiveActiveCustomer?.id || customerChatSending) return;
 
     const text = customerChatInput.trim();
-    const pending = customerPendingAttachment;
+    const pendingList = [...customerPendingAttachments];
 
-    if (!text && !pending) return;
+    if (!text && pendingList.length === 0) return;
 
     setCustomerChatSending(true);
     setCustomerChatError(null);
 
-    let mediaUrl: string | undefined = undefined;
-    let mediaType: 'image' | 'video' | 'audio' | 'document' | 'other' | undefined = undefined;
-    let mediaName: string | undefined = undefined;
-    let mediaSize: number | undefined = undefined;
+    if (pendingList.length === 0) {
+      const res = await sendMessage({
+        business_id: business.id,
+        customer_id: effectiveActiveCustomer.id,
+        sender: 'merchant',
+        content: text || undefined,
+      });
 
-    if (pending) {
-      setCustomerChatMediaUploading(true);
-      const uploadRes = await uploadCustomerMedia(pending.file, business.id);
-      setCustomerChatMediaUploading(false);
-
-      if (!uploadRes.success || !uploadRes.url) {
-        setCustomerChatSending(false);
-        setCustomerChatError(uploadRes.error || "Echec de l'upload de la piece jointe");
-        return;
+      setCustomerChatSending(false);
+      if (res.success) {
+        setCustomerChatInput('');
+        customerMessagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+      } else {
+        setCustomerChatError(res.error || "Echec de l'envoi du message");
       }
-
-      mediaUrl = uploadRes.url;
-      mediaType = uploadRes.media_type;
-      mediaName = uploadRes.media_name;
-      mediaSize = uploadRes.media_size;
+      return;
     }
 
-    const res = await sendMessage({
-      business_id: business.id,
-      customer_id: effectiveActiveCustomer.id,
-      sender: 'merchant',
-      content: text || undefined,
-      media_url: mediaUrl,
-      media_type: mediaType,
-      media_name: mediaName,
-      media_size: mediaSize,
-    });
+    setCustomerChatMediaUploading(true);
+    let anySuccess = false;
+    let anyError: string | null = null;
 
-    setCustomerChatSending(false);
-    if (res.success) {
-      setCustomerChatInput('');
-      if (pending?.previewUrl) {
-        URL.revokeObjectURL(pending.previewUrl);
+    for (let i = 0; i < pendingList.length; i++) {
+      const pending = pendingList[i];
+      const uploadRes = await uploadCustomerMedia(pending.file, business.id);
+
+      if (!uploadRes.success || !uploadRes.url) {
+        anyError = uploadRes.error || `Echec de l'upload de ${pending.name}`;
+        break;
       }
-      setCustomerPendingAttachment(null);
+
+      // La légende texte saisie est associée au premier message envoyé
+      const messageContent = i === 0 && text ? text : undefined;
+
+      const res = await sendMessage({
+        business_id: business.id,
+        customer_id: effectiveActiveCustomer.id,
+        sender: 'merchant',
+        content: messageContent,
+        media_url: uploadRes.url,
+        media_type: uploadRes.media_type,
+        media_name: uploadRes.media_name,
+        media_size: uploadRes.media_size,
+      });
+
+      if (!res.success) {
+        anyError = res.error || `Echec de l'envoi du message pour ${pending.name}`;
+        break;
+      }
+      anySuccess = true;
+    }
+
+    setCustomerChatMediaUploading(false);
+    setCustomerChatSending(false);
+
+    // Révoquer les URLs de prévisualisation locales
+    pendingList.forEach((item) => {
+      if (item.previewUrl) {
+        URL.revokeObjectURL(item.previewUrl);
+      }
+    });
+    setCustomerPendingAttachments([]);
+    if (customerFileInputRef.current) {
+      customerFileInputRef.current.value = '';
+    }
+
+    if (anySuccess) {
+      setCustomerChatInput('');
       customerMessagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-    } else {
-      setCustomerChatError(res.error || "Echec de l'envoi du message");
+    }
+    if (anyError) {
+      setCustomerChatError(anyError);
     }
   };
 
@@ -870,6 +989,7 @@ export default function CustomersSection({
         ref={customerFileInputRef}
         onChange={handleCustomerFileSelect}
         className="hidden"
+        multiple
         accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.txt,.csv,.ppt,.pptx,audio/*,video/*"
       />
 
@@ -1550,130 +1670,20 @@ export default function CustomersSection({
                                     className="max-h-60 w-full object-cover rounded-xl"
                                   />
                                 </button>
-                              ) : msg.media_type === 'video' ? (
-                                <button
-                                  type="button"
-                                  onClick={(e) => {
-                                    if (isCustomerMessageSelectMode) {
-                                      e.stopPropagation();
-                                      handleToggleMessageSelection(msg.id);
-                                      return;
-                                    }
-                                    setActiveMediaViewer({
-                                      url: msg.media_url!,
-                                      mediaType: 'video',
-                                      name: msg.media_name || 'Vidéo',
-                                      size: msg.media_size,
-                                    });
-                                  }}
-                                  className={`w-full flex items-center gap-2.5 p-2.5 rounded-xl border transition-all text-left cursor-pointer ${
-                                    isSentByMerchant
-                                      ? 'bg-white/10 hover:bg-white/20 border-white/20 text-white'
-                                      : 'bg-slate-50 hover:bg-slate-100 border-slate-200 text-slate-800'
-                                  }`}
-                                  title={
-                                    isCustomerMessageSelectMode
-                                      ? 'Cliquer pour selectionner'
-                                      : 'Cliquer pour lire la vidéo'
-                                  }
-                                >
-                                  <Video className="w-5 h-5 shrink-0" />
-                                  <div className="flex-1 min-w-0">
-                                    <p className="text-xs font-bold truncate">
-                                      {msg.media_name || 'Vidéo'}
-                                    </p>
-                                    {msg.media_size ? (
-                                      <p className={`text-[10px] ${isSentByMerchant ? 'text-emerald-200' : 'text-slate-400'}`}>
-                                        {(msg.media_size / (1024 * 1024)).toFixed(1)} Mo
-                                      </p>
-                                    ) : null}
-                                  </div>
-                                  <ExternalLink className="w-4 h-4 shrink-0 opacity-70" />
-                                </button>
-                              ) : (() => {
-                                const ext = getAttachmentExtension(msg.media_name, msg.media_url);
-                                const isPdf = ext === 'pdf' || (msg.media_url && msg.media_url.toLowerCase().includes('.pdf'));
-                                const isOfficeDoc = ['doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx'].includes(ext);
-
-                                if (isPdf || isOfficeDoc) {
-                                  const iframeSrc = isPdf
-                                    ? msg.media_url
-                                    : `https://view.officeapps.live.com/op/embed.aspx?src=${encodeURIComponent(msg.media_url)}`;
+                              ) : (
+                                (() => {
+                                  const { Icon: DocIcon, badge, accentColor } = getDocumentDetails(
+                                    msg.media_name,
+                                    msg.media_type
+                                  );
+                                  const formattedSize = msg.media_size
+                                    ? msg.media_size > 1024 * 1024
+                                      ? `${(msg.media_size / (1024 * 1024)).toFixed(1)} Mo`
+                                      : `${Math.max(1, Math.round(msg.media_size / 1024))} Ko`
+                                    : null;
 
                                   return (
-                                    <div className="w-full max-w-[420px] sm:w-[400px] h-[500px] bg-white rounded-xl overflow-hidden border border-slate-200 shadow-xs flex flex-col text-slate-800">
-                                      {/* Document Card Header */}
-                                      <div className="px-3 py-2 bg-slate-50 border-b border-slate-200 flex items-center justify-between gap-2 shrink-0">
-                                        <div className="flex items-center space-x-2 min-w-0 flex-1">
-                                          <FileText className="w-4 h-4 text-[#1B4B4A] shrink-0" />
-                                          <span
-                                            className="text-xs font-bold truncate text-slate-800"
-                                            title={msg.media_name || (isPdf ? 'Document PDF' : 'Document Office')}
-                                          >
-                                            {msg.media_name || (isPdf ? 'Document PDF' : 'Document Office')}
-                                          </span>
-                                        </div>
-                                        <div className="flex items-center gap-1.5 shrink-0">
-                                          <button
-                                            type="button"
-                                            onClick={(e) => {
-                                              if (isCustomerMessageSelectMode) {
-                                                e.stopPropagation();
-                                                handleToggleMessageSelection(msg.id);
-                                                return;
-                                              }
-                                              e.stopPropagation();
-                                              setActiveMediaViewer({
-                                                url: msg.media_url!,
-                                                mediaType: isPdf ? 'pdf' : 'document',
-                                                name: msg.media_name || (isPdf ? 'Document PDF' : 'Document Office'),
-                                                size: msg.media_size,
-                                              });
-                                            }}
-                                            className="inline-flex items-center gap-1 px-2.5 py-1 bg-white hover:bg-slate-100 border border-slate-200 text-slate-700 hover:text-slate-900 rounded-lg text-[11px] font-bold transition-colors cursor-pointer shadow-2xs"
-                                            title="Ouvrir en plein écran"
-                                          >
-                                            <Maximize2 className="w-3.5 h-3.5" />
-                                            <span>Ouvrir en plein écran</span>
-                                          </button>
-                                          <a
-                                            href={msg.media_url}
-                                            download={msg.media_name || (isPdf ? 'document.pdf' : 'document')}
-                                            target="_blank"
-                                            rel="noopener noreferrer"
-                                            onClick={(e) => e.stopPropagation()}
-                                            className="inline-flex items-center gap-1 px-2.5 py-1 bg-[#1B4B4A] hover:bg-[#153B3A] text-white rounded-lg text-[11px] font-bold transition-colors cursor-pointer shadow-2xs"
-                                            title="Télécharger"
-                                          >
-                                            <Download className="w-3.5 h-3.5" />
-                                            <span>Télécharger</span>
-                                          </a>
-                                        </div>
-                                      </div>
-
-                                      {/* Document Embed Preview */}
-                                      <div className="flex-1 w-full bg-slate-100 relative">
-                                        <iframe
-                                          src={iframeSrc}
-                                          className="w-full h-full border-0 bg-white"
-                                          title={msg.media_name || (isPdf ? 'Document PDF' : 'Document Office')}
-                                        />
-                                      </div>
-                                    </div>
-                                  );
-                                }
-
-                                // 3. Pour tout autre format (txt, csv, etc.) : garde l'affichage actuel (carte icône + nom + taille + bouton télécharger)
-                                return (
-                                  <div
-                                    className={`w-full flex items-center justify-between gap-2.5 p-2.5 rounded-xl border transition-all ${
-                                      isSentByMerchant
-                                        ? 'bg-white/10 border-white/20 text-white'
-                                        : 'bg-slate-50 border-slate-200 text-slate-800'
-                                    }`}
-                                  >
-                                    <button
-                                      type="button"
+                                    <div
                                       onClick={(e) => {
                                         if (isCustomerMessageSelectMode) {
                                           e.stopPropagation();
@@ -1687,43 +1697,74 @@ export default function CustomersSection({
                                           size: msg.media_size,
                                         });
                                       }}
-                                      className="flex items-center gap-2.5 flex-1 min-w-0 text-left cursor-pointer"
+                                      className={`w-full flex items-center gap-2.5 p-2.5 rounded-xl border transition-all text-left cursor-pointer group select-none ${
+                                        isSentByMerchant
+                                          ? 'bg-white/10 hover:bg-white/15 border-white/20 text-white'
+                                          : 'bg-slate-50 hover:bg-slate-100/80 border-slate-200 text-slate-800'
+                                      }`}
                                       title={
                                         isCustomerMessageSelectMode
                                           ? 'Cliquer pour selectionner'
-                                          : 'Cliquer pour previsualiser ou telecharger'
+                                          : 'Cliquer pour ouvrir en plein écran'
                                       }
                                     >
-                                      <File className="w-5 h-5 shrink-0" />
+                                      <div
+                                        className={`w-9 h-9 rounded-lg flex items-center justify-center shrink-0 ${
+                                          isSentByMerchant
+                                            ? 'bg-white/15 text-white'
+                                            : `${accentColor} border`
+                                        }`}
+                                      >
+                                        <DocIcon className="w-4 h-4" />
+                                      </div>
+
                                       <div className="flex-1 min-w-0">
                                         <p className="text-xs font-bold truncate">
                                           {msg.media_name || 'Document joint'}
                                         </p>
-                                        {msg.media_size ? (
-                                          <p className={`text-[10px] ${isSentByMerchant ? 'text-emerald-200' : 'text-slate-400'}`}>
-                                            {(msg.media_size / (1024 * 1024)).toFixed(1)} Mo
-                                          </p>
-                                        ) : null}
+                                        <div
+                                          className={`text-[10px] flex items-center gap-1.5 mt-0.5 ${
+                                            isSentByMerchant ? 'text-emerald-200' : 'text-slate-400'
+                                          }`}
+                                        >
+                                          <span className="font-semibold uppercase tracking-wider text-[9px] opacity-90">
+                                            {badge}
+                                          </span>
+                                          {formattedSize && (
+                                            <>
+                                              <span>•</span>
+                                              <span>{formattedSize}</span>
+                                            </>
+                                          )}
+                                        </div>
                                       </div>
-                                    </button>
-                                    <a
-                                      href={msg.media_url}
-                                      download={msg.media_name || 'document'}
-                                      target="_blank"
-                                      rel="noopener noreferrer"
-                                      onClick={(e) => e.stopPropagation()}
-                                      className={`p-1.5 rounded-lg transition-colors cursor-pointer shrink-0 ${
-                                        isSentByMerchant
-                                          ? 'hover:bg-white/20 text-white'
-                                          : 'hover:bg-slate-200 text-slate-600'
-                                      }`}
-                                      title="Télécharger"
-                                    >
-                                      <Download className="w-4 h-4" />
-                                    </a>
-                                  </div>
-                                );
-                              })()}
+
+                                      <button
+                                        type="button"
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          const link = document.createElement('a');
+                                          link.href = msg.media_url!;
+                                          link.download = msg.media_name || 'document';
+                                          link.target = '_blank';
+                                          link.rel = 'noopener noreferrer';
+                                          document.body.appendChild(link);
+                                          link.click();
+                                          document.body.removeChild(link);
+                                        }}
+                                        className={`p-1.5 rounded-lg transition-colors cursor-pointer shrink-0 ${
+                                          isSentByMerchant
+                                            ? 'text-white/80 hover:text-white hover:bg-white/20'
+                                            : 'text-slate-400 hover:text-slate-700 hover:bg-slate-200/70'
+                                        }`}
+                                        title="Télécharger le fichier"
+                                      >
+                                        <Download className="w-4 h-4" />
+                                      </button>
+                                    </div>
+                                  );
+                                })()
+                              )}
                             </div>
                           )}
 
@@ -1787,65 +1828,89 @@ export default function CustomersSection({
                 </div>
               )}
 
-              {/* Pending Attachment Preview Box */}
-              {customerPendingAttachment && (
-                <div className="bg-slate-50 border border-slate-200/90 rounded-2xl p-2.5 flex items-center justify-between gap-3 shadow-2xs">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setActiveMediaViewer({
-                        url: customerPendingAttachment.previewUrl,
-                        mediaType: customerPendingAttachment.mediaType,
-                        name: customerPendingAttachment.name,
-                        size: customerPendingAttachment.size,
-                      });
-                    }}
-                    className="flex items-center space-x-3 min-w-0 flex-1 text-left hover:opacity-90 transition-opacity cursor-pointer group"
-                    title="Cliquer pour previsualiser le fichier"
-                  >
-                    {customerPendingAttachment.mediaType === 'image' ? (
-                      <div className="relative w-12 h-12 rounded-xl overflow-hidden border border-slate-200 bg-slate-100 shrink-0 group-hover:ring-2 group-hover:ring-[#1B4B4A]/20 transition-all">
-                        <img
-                          src={customerPendingAttachment.previewUrl}
-                          alt={customerPendingAttachment.name}
-                          className="w-full h-full object-cover"
-                        />
-                      </div>
-                    ) : customerPendingAttachment.mediaType === 'video' ? (
-                      <div className="w-12 h-12 rounded-xl border border-slate-800 bg-slate-900 text-white flex items-center justify-center shrink-0 group-hover:ring-2 group-hover:ring-[#1B4B4A]/20 transition-all">
-                        <Video className="w-5 h-5" />
-                      </div>
-                    ) : (
-                      <div className="w-12 h-12 rounded-xl border border-emerald-200 bg-emerald-50 text-[#1B4B4A] flex items-center justify-center shrink-0 group-hover:ring-2 group-hover:ring-[#1B4B4A]/20 transition-all">
-                        <FileText className="w-5 h-5" />
-                      </div>
-                    )}
+              {/* Pending Attachments Preview Box */}
+              {customerPendingAttachments.length > 0 && (
+                <div className="bg-slate-50 border border-slate-200/90 rounded-2xl p-2.5 space-y-2 shadow-2xs">
+                  <div className="flex items-center justify-between px-1">
+                    <span className="text-[11px] font-bold text-slate-700">
+                      {customerPendingAttachments.length}{' '}
+                      {customerPendingAttachments.length > 1
+                        ? 'pièces jointes prêtes à être envoyées'
+                        : 'pièce jointe prête à être envoyée'}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={handleClearAllCustomerPendingAttachments}
+                      disabled={customerChatSending || customerChatMediaUploading}
+                      className="text-[10px] font-semibold text-slate-500 hover:text-rose-600 transition-colors cursor-pointer"
+                    >
+                      Tout retirer
+                    </button>
+                  </div>
+                  <div className="flex items-center gap-2 overflow-x-auto pb-1 max-w-full">
+                    {customerPendingAttachments.map((att, idx) => (
+                      <div
+                        key={att.id || idx}
+                        className="relative group bg-white border border-slate-200 rounded-xl p-1.5 flex items-center gap-2 shrink-0 max-w-[220px] shadow-2xs hover:border-[#1B4B4A]/30 transition-all"
+                      >
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setActiveMediaViewer({
+                              url: att.previewUrl,
+                              mediaType: att.mediaType,
+                              name: att.name,
+                              size: att.size,
+                            });
+                          }}
+                          className="flex items-center gap-2 min-w-0 flex-1 text-left cursor-pointer"
+                          title="Cliquer pour prévisualiser"
+                        >
+                          {att.mediaType === 'image' ? (
+                            <div className="relative w-10 h-10 rounded-lg overflow-hidden border border-slate-200 bg-slate-100 shrink-0">
+                              <img
+                                src={att.previewUrl}
+                                alt={att.name}
+                                className="w-full h-full object-cover"
+                              />
+                            </div>
+                          ) : att.mediaType === 'video' ? (
+                            <div className="w-10 h-10 rounded-lg border border-slate-800 bg-slate-900 text-white flex items-center justify-center shrink-0">
+                              <Video className="w-4 h-4" />
+                            </div>
+                          ) : (
+                            <div className="w-10 h-10 rounded-lg border border-emerald-200 bg-emerald-50 text-[#1B4B4A] flex items-center justify-center shrink-0">
+                              <FileText className="w-4 h-4" />
+                            </div>
+                          )}
 
-                    <div className="min-w-0 flex-1">
-                      <p className="text-xs font-bold text-slate-900 truncate group-hover:text-[#1B4B4A] transition-colors">
-                        {customerPendingAttachment.name}
-                      </p>
-                      <p className="text-[10px] text-slate-500 font-medium flex items-center gap-1.5 mt-0.5">
-                        <span>
-                          {customerPendingAttachment.size > 1024 * 1024
-                            ? (customerPendingAttachment.size / (1024 * 1024)).toFixed(1) + ' Mo'
-                            : Math.max(1, Math.round(customerPendingAttachment.size / 1024)) + ' Ko'}
-                        </span>
-                        <span>•</span>
-                        <span className="text-emerald-700 font-semibold">En attente (cliquer pour voir)</span>
-                      </p>
-                    </div>
-                  </button>
+                          <div className="min-w-0 flex-1">
+                            <p className="text-[11px] font-bold text-slate-800 truncate group-hover:text-[#1B4B4A]">
+                              {att.name}
+                            </p>
+                            <p className="text-[9px] text-slate-400 font-medium">
+                              {att.size > 1024 * 1024
+                                ? (att.size / (1024 * 1024)).toFixed(1) + ' Mo'
+                                : Math.max(1, Math.round(att.size / 1024)) + ' Ko'}
+                            </p>
+                          </div>
+                        </button>
 
-                  <button
-                    type="button"
-                    onClick={handleRemoveCustomerPendingAttachment}
-                    disabled={customerChatSending || customerChatMediaUploading}
-                    className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-xl transition-all cursor-pointer disabled:opacity-50"
-                    title="Retirer la piece jointe"
-                  >
-                    <X className="w-4 h-4" />
-                  </button>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleRemoveCustomerPendingAttachment(idx);
+                          }}
+                          disabled={customerChatSending || customerChatMediaUploading}
+                          className="p-1 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer shrink-0"
+                          title="Retirer ce fichier"
+                        >
+                          <X className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
                 </div>
               )}
 
@@ -1856,11 +1921,11 @@ export default function CustomersSection({
                   onClick={() => customerFileInputRef.current?.click()}
                   disabled={customerChatMediaUploading || customerChatSending}
                   className={`p-2.5 rounded-xl transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed ${
-                    customerPendingAttachment
+                    customerPendingAttachments.length > 0
                       ? 'bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100'
                       : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
                   }`}
-                  title="Joindre un fichier (Image, PDF, document, max 10 Mo)"
+                  title="Joindre des fichiers (Images, PDF, documents, max 10 Mo par fichier)"
                 >
                   {customerChatMediaUploading ? (
                     <Loader2 className="w-5 h-5 animate-spin text-emerald-600" />
@@ -1873,7 +1938,7 @@ export default function CustomersSection({
                 <input
                   type="text"
                   placeholder={
-                    customerPendingAttachment
+                    customerPendingAttachments.length > 0
                       ? `Ajouter une legende pour ${activeCustomer.name} (optionnel)...`
                       : `Ecrire un message a ${activeCustomer.name}...`
                   }
@@ -1887,7 +1952,7 @@ export default function CustomersSection({
                 <button
                   type="submit"
                   disabled={
-                    (!customerChatInput.trim() && !customerPendingAttachment) ||
+                    (!customerChatInput.trim() && customerPendingAttachments.length === 0) ||
                     customerChatSending ||
                     customerChatMediaUploading
                   }
