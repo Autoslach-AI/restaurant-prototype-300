@@ -33,6 +33,8 @@ export function MediaViewer({ isOpen, onClose, media, item }: MediaViewerProps) 
   const currentMedia = item !== undefined ? item : media;
   const isCurrentlyOpen = isOpen !== undefined ? isOpen : Boolean(currentMedia);
   const [zoomLevel, setZoomLevel] = useState(1);
+  const [isCtrlPressed, setIsCtrlPressed] = useState(false);
+  const docViewerRef = useRef<HTMLDivElement | null>(null);
 
   // Free resizing state for the modal card
   const [modalSize, setModalSize] = useState<{ width: number; height: number } | null>(null);
@@ -45,13 +47,100 @@ export function MediaViewer({ isOpen, onClose, media, item }: MediaViewerProps) 
   } | null>(null);
   const modalCardRef = useRef<HTMLDivElement | null>(null);
 
+  // Robust format detection (safe even if currentMedia is undefined)
+  const fileName = currentMedia?.name || 'Fichier';
+  const lowerFileName = fileName.toLowerCase();
+  const rawUrl = currentMedia?.url || '';
+  const normalizedType = (currentMedia?.mediaType || '').toLowerCase();
+
+  const isPdf =
+    lowerFileName.endsWith('.pdf') ||
+    rawUrl.toLowerCase().includes('.pdf') ||
+    normalizedType === 'pdf' ||
+    normalizedType === 'application/pdf' ||
+    (normalizedType === 'document' && (lowerFileName.endsWith('.pdf') || rawUrl.startsWith('blob:')));
+
+  const isVideo =
+    (normalizedType === 'video' ||
+      normalizedType.startsWith('video/') ||
+      lowerFileName.match(/\.(mp4|webm|mov|ogg|m4v|3gp|avi|mkv)$/i) ||
+      rawUrl.match(/\.(mp4|webm|mov|ogg|m4v)(\?|$)/i)) &&
+    !isPdf;
+
+  const isAudio =
+    (normalizedType === 'audio' ||
+      normalizedType.startsWith('audio/') ||
+      lowerFileName.match(/\.(mp3|wav|ogg|m4a|aac|flac)$/i)) &&
+    !isPdf &&
+    !isVideo;
+
+  const isImage =
+    (normalizedType === 'image' ||
+      normalizedType.startsWith('image/') ||
+      lowerFileName.match(/\.(jpg|jpeg|png|gif|webp|svg|bmp|ico|heic|heif)$/i) ||
+      rawUrl.match(/\.(jpg|jpeg|png|gif|webp|svg)(\?|$)/i)) &&
+    !isPdf &&
+    !isVideo &&
+    !isAudio;
+
+  const isOfficeDoc =
+    (lowerFileName.match(/\.(doc|docx|xls|xlsx|ppt|pptx)$/i) ||
+      rawUrl.match(/\.(doc|docx|xls|xlsx|ppt|pptx)(\?|$)/i)) &&
+    !isPdf &&
+    !isVideo &&
+    !isAudio &&
+    !isImage;
+
   // Reset modal size and zoom when opening or switching media
+  const [prevMediaKey, setPrevMediaKey] = useState<string | null>(null);
+  const currentMediaKey = isCurrentlyOpen ? (currentMedia?.url || 'open') : null;
+  if (currentMediaKey !== prevMediaKey) {
+    setPrevMediaKey(currentMediaKey);
+    setModalSize(null);
+    setZoomLevel(1);
+  }
+
   useEffect(() => {
-    if (isCurrentlyOpen) {
-      setModalSize(null);
-      setZoomLevel(1);
-    }
-  }, [isCurrentlyOpen, currentMedia?.url]);
+    if (!isCurrentlyOpen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Control') setIsCtrlPressed(true);
+    };
+    const handleKeyUp = (e: KeyboardEvent) => {
+      if (e.key === 'Control') setIsCtrlPressed(false);
+    };
+    const handleBlur = () => setIsCtrlPressed(false);
+
+    window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('keyup', handleKeyUp);
+    window.addEventListener('blur', handleBlur);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('keyup', handleKeyUp);
+      window.removeEventListener('blur', handleBlur);
+    };
+  }, [isCurrentlyOpen]);
+
+  useEffect(() => {
+    if (!isCurrentlyOpen) return;
+    const el = docViewerRef.current;
+    if (!el) return;
+
+    const onNativeWheel = (e: WheelEvent) => {
+      if (e.ctrlKey) {
+        e.preventDefault();
+        if (e.deltaY < 0) {
+          setZoomLevel((prev) => Math.min(Number((prev + 0.1).toFixed(2)), 3));
+        } else if (e.deltaY > 0) {
+          setZoomLevel((prev) => Math.max(Number((prev - 0.1).toFixed(2)), 0.5));
+        }
+      }
+    };
+
+    el.addEventListener('wheel', onNativeWheel, { passive: false });
+    return () => {
+      el.removeEventListener('wheel', onNativeWheel);
+    };
+  }, [isCurrentlyOpen, isPdf, isOfficeDoc]);
 
   const handleResizeStart = useCallback(
     (
@@ -136,78 +225,13 @@ export function MediaViewer({ isOpen, onClose, media, item }: MediaViewerProps) 
 
   if (!isCurrentlyOpen || !currentMedia) return null;
 
-  const { url, mediaType, name, size } = currentMedia;
-
-  const fileName = name || 'Fichier';
-  const lowerFileName = fileName.toLowerCase();
-  const normalizedType = (mediaType || '').toLowerCase();
-
-  // Robust format detection
-  const isPdf =
-    lowerFileName.endsWith('.pdf') ||
-    url.toLowerCase().includes('.pdf') ||
-    normalizedType === 'pdf' ||
-    normalizedType === 'application/pdf' ||
-    (normalizedType === 'document' && (lowerFileName.endsWith('.pdf') || url.startsWith('blob:')));
-
-  const isVideo =
-    (normalizedType === 'video' ||
-      normalizedType.startsWith('video/') ||
-      lowerFileName.match(/\.(mp4|webm|mov|ogg|m4v|3gp|avi|mkv)$/i) ||
-      url.match(/\.(mp4|webm|mov|ogg|m4v)(\?|$)/i)) &&
-    !isPdf;
-
-  const isAudio =
-    (normalizedType === 'audio' ||
-      normalizedType.startsWith('audio/') ||
-      lowerFileName.match(/\.(mp3|wav|ogg|m4a|aac|flac)$/i)) &&
-    !isPdf &&
-    !isVideo;
-
-  const isImage =
-    (normalizedType === 'image' ||
-      normalizedType.startsWith('image/') ||
-      lowerFileName.match(/\.(jpg|jpeg|png|gif|webp|svg|bmp|ico|heic|heif)$/i) ||
-      url.match(/\.(jpg|jpeg|png|gif|webp|svg)(\?|$)/i)) &&
-    !isPdf &&
-    !isVideo &&
-    !isAudio;
-
-  const isOfficeDoc =
-    (lowerFileName.match(/\.(doc|docx|xls|xlsx|ppt|pptx)$/i) ||
-      url.match(/\.(doc|docx|xls|xlsx|ppt|pptx)(\?|$)/i)) &&
-    !isPdf &&
-    !isVideo &&
-    !isAudio &&
-    !isImage;
+  const { url, size } = currentMedia;
 
   const formattedSize = size
     ? size > 1024 * 1024
       ? `${(size / (1024 * 1024)).toFixed(1)} Mo`
       : `${Math.max(1, Math.round(size / 1024))} Ko`
     : null;
-
-  const docViewerRef = useRef<HTMLDivElement | null>(null);
-  const [isCtrlPressed, setIsCtrlPressed] = useState(false);
-
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Control') setIsCtrlPressed(true);
-    };
-    const handleKeyUp = (e: KeyboardEvent) => {
-      if (e.key === 'Control') setIsCtrlPressed(false);
-    };
-    const handleBlur = () => setIsCtrlPressed(false);
-
-    window.addEventListener('keydown', handleKeyDown);
-    window.addEventListener('keyup', handleKeyUp);
-    window.addEventListener('blur', handleBlur);
-    return () => {
-      window.removeEventListener('keydown', handleKeyDown);
-      window.removeEventListener('keyup', handleKeyUp);
-      window.removeEventListener('blur', handleBlur);
-    };
-  }, []);
 
   const handleDocWheel = (e: React.WheelEvent) => {
     if (e.ctrlKey) {
@@ -219,27 +243,6 @@ export function MediaViewer({ isOpen, onClose, media, item }: MediaViewerProps) 
       }
     }
   };
-
-  useEffect(() => {
-    const el = docViewerRef.current;
-    if (!el) return;
-
-    const onNativeWheel = (e: WheelEvent) => {
-      if (e.ctrlKey) {
-        e.preventDefault();
-        if (e.deltaY < 0) {
-          setZoomLevel((prev) => Math.min(Number((prev + 0.1).toFixed(2)), 3));
-        } else if (e.deltaY > 0) {
-          setZoomLevel((prev) => Math.max(Number((prev - 0.1).toFixed(2)), 0.5));
-        }
-      }
-    };
-
-    el.addEventListener('wheel', onNativeWheel, { passive: false });
-    return () => {
-      el.removeEventListener('wheel', onNativeWheel);
-    };
-  }, [isPdf, isOfficeDoc]);
 
   const handleDocZoomIn = () => setZoomLevel((prev) => Math.min(Number((prev + 0.1).toFixed(2)), 3));
   const handleDocZoomOut = () => setZoomLevel((prev) => Math.max(Number((prev - 0.1).toFixed(2)), 0.5));
