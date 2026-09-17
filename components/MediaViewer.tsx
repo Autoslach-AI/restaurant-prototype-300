@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef, useCallback } from 'react';
 import {
   X,
   Download,
@@ -32,6 +32,92 @@ export function MediaViewer({ isOpen, onClose, media, item }: MediaViewerProps) 
   const currentMedia = item !== undefined ? item : media;
   const isCurrentlyOpen = isOpen !== undefined ? isOpen : Boolean(currentMedia);
   const [zoomLevel, setZoomLevel] = useState(1);
+
+  // Free resizing state for the modal card
+  const [modalSize, setModalSize] = useState<{ width: number; height: number } | null>(null);
+  const resizeRef = useRef<{
+    corner: 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right';
+    startX: number;
+    startY: number;
+    startWidth: number;
+    startHeight: number;
+  } | null>(null);
+  const modalCardRef = useRef<HTMLDivElement | null>(null);
+
+  // Reset modal size when opening or switching media
+  useEffect(() => {
+    if (isCurrentlyOpen) {
+      setModalSize(null);
+    }
+  }, [isCurrentlyOpen, currentMedia?.url]);
+
+  const handleResizeStart = useCallback(
+    (
+      corner: 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right',
+      e: React.MouseEvent
+    ) => {
+      e.preventDefault();
+      e.stopPropagation();
+
+      const modalEl = modalCardRef.current;
+      if (!modalEl) return;
+
+      const rect = modalEl.getBoundingClientRect();
+      resizeRef.current = {
+        corner,
+        startX: e.clientX,
+        startY: e.clientY,
+        startWidth: rect.width,
+        startHeight: rect.height,
+      };
+
+      const handleMouseMove = (moveEvent: MouseEvent) => {
+        if (!resizeRef.current) return;
+        const { corner, startX, startY, startWidth, startHeight } = resizeRef.current;
+        const deltaX = moveEvent.clientX - startX;
+        const deltaY = moveEvent.clientY - startY;
+
+        let newWidth = startWidth;
+        let newHeight = startHeight;
+
+        // Since the modal is kept centered via flex items-center justify-center in the overlay,
+        // moving a corner by delta changes the width/height proportionally from center (2 * delta).
+        if (corner === 'bottom-right') {
+          newWidth = startWidth + deltaX * 2;
+          newHeight = startHeight + deltaY * 2;
+        } else if (corner === 'bottom-left') {
+          newWidth = startWidth - deltaX * 2;
+          newHeight = startHeight + deltaY * 2;
+        } else if (corner === 'top-right') {
+          newWidth = startWidth + deltaX * 2;
+          newHeight = startHeight - deltaY * 2;
+        } else if (corner === 'top-left') {
+          newWidth = startWidth - deltaX * 2;
+          newHeight = startHeight - deltaY * 2;
+        }
+
+        const minWidth = 320;
+        const minHeight = 320;
+        const maxWidth = Math.max(window.innerWidth - 32, minWidth);
+        const maxHeight = Math.max(window.innerHeight - 32, minHeight);
+
+        setModalSize({
+          width: Math.min(Math.max(newWidth, minWidth), maxWidth),
+          height: Math.min(Math.max(newHeight, minHeight), maxHeight),
+        });
+      };
+
+      const handleMouseUp = () => {
+        resizeRef.current = null;
+        window.removeEventListener('mousemove', handleMouseMove);
+        window.removeEventListener('mouseup', handleMouseUp);
+      };
+
+      window.addEventListener('mousemove', handleMouseMove);
+      window.addEventListener('mouseup', handleMouseUp);
+    },
+    []
+  );
 
   useEffect(() => {
     if (isCurrentlyOpen) {
@@ -111,9 +197,56 @@ export function MediaViewer({ isOpen, onClose, media, item }: MediaViewerProps) 
       aria-modal="true"
     >
       <div
-        className="relative w-full max-w-4xl max-h-[92vh] flex flex-col bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl overflow-hidden text-white"
+        ref={modalCardRef}
+        style={
+          modalSize
+            ? {
+                width: `${modalSize.width}px`,
+                height: `${modalSize.height}px`,
+                maxWidth: 'none',
+                maxHeight: 'none',
+              }
+            : undefined
+        }
+        className={`relative w-full ${
+          !modalSize ? 'max-w-4xl max-h-[92vh]' : ''
+        } flex flex-col bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl overflow-hidden text-white`}
         onClick={(e) => e.stopPropagation()}
       >
+        {/* Resize Handles (4 corners) */}
+        {/* Top-Left */}
+        <div
+          onMouseDown={(e) => handleResizeStart('top-left', e)}
+          className="absolute top-0 left-0 w-4 h-4 cursor-nwse-resize z-50 group flex items-start justify-start p-0.5"
+          title="Redimensionner"
+        >
+          <div className="w-2 h-2 border-t-2 border-l-2 border-slate-500/40 group-hover:border-teal-400 transition-colors rounded-tl-sm" />
+        </div>
+        {/* Top-Right */}
+        <div
+          onMouseDown={(e) => handleResizeStart('top-right', e)}
+          className="absolute top-0 right-0 w-4 h-4 cursor-nesw-resize z-50 group flex items-start justify-end p-0.5"
+          title="Redimensionner"
+        >
+          <div className="w-2 h-2 border-t-2 border-r-2 border-slate-500/40 group-hover:border-teal-400 transition-colors rounded-tr-sm" />
+        </div>
+        {/* Bottom-Left */}
+        <div
+          onMouseDown={(e) => handleResizeStart('bottom-left', e)}
+          className="absolute bottom-0 left-0 w-4 h-4 cursor-nesw-resize z-50 group flex items-end justify-start p-0.5"
+          title="Redimensionner"
+        >
+          <div className="w-2 h-2 border-b-2 border-l-2 border-slate-500/40 group-hover:border-teal-400 transition-colors rounded-bl-sm" />
+        </div>
+        {/* Bottom-Right */}
+        <div
+          onMouseDown={(e) => handleResizeStart('bottom-right', e)}
+          className="absolute bottom-0 right-0 w-4 h-4 cursor-nwse-resize z-50 group flex items-end justify-end p-0.5"
+          title="Redimensionner"
+        >
+          <div className="w-2 h-2 border-b-2 border-r-2 border-slate-500/40 group-hover:border-teal-400 transition-colors rounded-br-sm" />
+        </div>
+
         {/* Header Bar */}
         <div className="flex items-center justify-between px-4 py-3 border-b border-slate-800 bg-slate-900/90 shrink-0">
           <div className="flex items-center space-x-3 min-w-0 flex-1 mr-3">
@@ -203,10 +336,10 @@ export function MediaViewer({ isOpen, onClose, media, item }: MediaViewerProps) 
         </div>
 
         {/* Content Preview Area */}
-        <div className="flex-1 min-h-[260px] max-h-[78vh] overflow-auto flex items-center justify-center p-3 sm:p-6 bg-slate-950/60 select-none">
+        <div className={`flex-1 min-h-[260px] ${!modalSize ? 'max-h-[78vh]' : ''} overflow-auto flex items-center justify-center p-3 sm:p-6 bg-slate-950/60 select-none`}>
           {/* 1. PDF Document Viewer (Inline) */}
           {isPdf ? (
-            <div className="w-full h-[74vh] flex flex-col bg-slate-900 rounded-xl overflow-hidden border border-slate-800 shadow-xl">
+            <div className={`w-full ${!modalSize ? 'h-[74vh]' : 'h-full min-h-[260px]'} flex flex-col bg-slate-900 rounded-xl overflow-hidden border border-slate-800 shadow-xl`}>
               <object
                 data={url}
                 type="application/pdf"
@@ -238,7 +371,7 @@ export function MediaViewer({ isOpen, onClose, media, item }: MediaViewerProps) 
             </div>
           ) : isOfficeDoc ? (
             /* Office Documents Viewer (Word, Excel, PowerPoint) via Office Online */
-            <div className="w-full h-[74vh] flex flex-col bg-slate-900 rounded-xl overflow-hidden border border-slate-800 shadow-xl">
+            <div className={`w-full ${!modalSize ? 'h-[74vh]' : 'h-full min-h-[260px]'} flex flex-col bg-slate-900 rounded-xl overflow-hidden border border-slate-800 shadow-xl`}>
               <iframe
                 src={`https://view.officeapps.live.com/op/embed.aspx?src=${encodeURIComponent(url)}`}
                 className="w-full h-full border-none bg-white rounded-xl"
