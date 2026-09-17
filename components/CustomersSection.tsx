@@ -43,6 +43,7 @@ import {
   insertCustomer,
   updateCustomer,
   uploadStaffAvatar,
+  getDownloadUrl,
 } from '@/lib/supabase';
 import { MediaViewer, MediaViewerItem } from '@/components/MediaViewer';
 
@@ -1744,7 +1745,7 @@ export default function CustomersSection({
                                         onClick={(e) => {
                                           e.stopPropagation();
                                           const link = document.createElement('a');
-                                          link.href = msg.media_url!;
+                                          link.href = getDownloadUrl(msg.media_url!, msg.media_name || 'document');
                                           link.download = msg.media_name || 'document';
                                           link.target = '_blank';
                                           link.rel = 'noopener noreferrer';

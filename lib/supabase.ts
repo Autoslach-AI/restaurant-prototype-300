@@ -1452,6 +1452,16 @@ export async function uploadCustomerMedia(
 }
 
 /**
+ * Construit une URL de téléchargement forcé pour Supabase Storage
+ * en ajoutant le paramètre ?download=nom_du_fichier
+ */
+export function getDownloadUrl(url: string, filename: string): string {
+  if (!url) return '';
+  const separator = url.includes('?') ? '&' : '?';
+  return `${url}${separator}download=${encodeURIComponent(filename)}`;
+}
+
+/**
  * Mark a message as read in platform_customer_messages in Supabase.
  */
 export async function markMessageAsRead(

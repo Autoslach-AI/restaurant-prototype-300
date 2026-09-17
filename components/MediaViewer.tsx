@@ -13,6 +13,7 @@ import {
   Music,
   ImageIcon,
 } from 'lucide-react';
+import { getDownloadUrl } from '@/lib/supabase';
 
 export interface MediaViewerItem {
   url: string;
@@ -371,7 +372,7 @@ export function MediaViewer({ isOpen, onClose, media, item }: MediaViewerProps) 
 
             {url && (
               <a
-                href={url}
+                href={getDownloadUrl(url, fileName)}
                 target="_blank"
                 rel="noopener noreferrer"
                 download={fileName}
@@ -507,7 +508,7 @@ export function MediaViewer({ isOpen, onClose, media, item }: MediaViewerProps) 
               </div>
               <div className="flex items-center gap-3 pt-2 w-full">
                 <a
-                  href={url}
+                  href={getDownloadUrl(url, fileName)}
                   target="_blank"
                   rel="noopener noreferrer"
                   download={fileName}
