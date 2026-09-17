@@ -85,6 +85,14 @@ export function MediaViewer({ isOpen, onClose, media, item }: MediaViewerProps) 
     !isVideo &&
     !isAudio;
 
+  const isOfficeDoc =
+    (lowerFileName.match(/\.(doc|docx|xls|xlsx|ppt|pptx)$/i) ||
+      url.match(/\.(doc|docx|xls|xlsx|ppt|pptx)(\?|$)/i)) &&
+    !isPdf &&
+    !isVideo &&
+    !isAudio &&
+    !isImage;
+
   const formattedSize = size
     ? size > 1024 * 1024
       ? `${(size / (1024 * 1024)).toFixed(1)} Mo`
@@ -227,6 +235,15 @@ export function MediaViewer({ isOpen, onClose, media, item }: MediaViewerProps) 
                   </div>
                 </iframe>
               </object>
+            </div>
+          ) : isOfficeDoc ? (
+            /* Office Documents Viewer (Word, Excel, PowerPoint) via Office Online */
+            <div className="w-full h-[74vh] flex flex-col bg-slate-900 rounded-xl overflow-hidden border border-slate-800 shadow-xl">
+              <iframe
+                src={`https://view.officeapps.live.com/op/embed.aspx?src=${encodeURIComponent(url)}`}
+                className="w-full h-full border-none bg-white rounded-xl"
+                title={fileName}
+              />
             </div>
           ) : isVideo ? (
             /* 2. Native Video Player (Supports both local blob URLs & remote storage URLs) */

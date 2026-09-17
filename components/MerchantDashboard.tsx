@@ -156,6 +156,8 @@ interface MerchantDashboardProps {
   products: Product[];
   orders: Order[];
   agentEvents: AgentEvent[];
+  customers?: Customer[];
+  isCustomersLoading?: boolean;
   onUpdateOrderStatus: (orderId: string, status: OrderStatus) => void;
   onCancelOrder: (orderId: string, reason: string) => Promise<void>;
   onProcessPayment: (orderId: string, reference: string) => void;
@@ -197,6 +199,8 @@ export default function MerchantDashboard({
   products,
   orders,
   agentEvents,
+  customers: propCustomers,
+  isCustomersLoading,
   onUpdateOrderStatus,
   onCancelOrder,
   onProcessPayment,
@@ -1110,12 +1114,13 @@ export default function MerchantDashboard({
   const businessProducts = products.filter((p) => p.business_id === business.id);
   const businessCategories = categories.filter((c) => c.business_id === business.id);
   const businessEvents = agentEvents.filter((e) => e.business_id === business.id);
-  const businessCustomers = store.customers.filter((c) => c.business_id === business.id);
+  const effectiveCustomers = propCustomers !== undefined ? propCustomers : store.customers;
+  const businessCustomers = (effectiveCustomers || []).filter((c) => c.business_id === business.id);
 
   console.log('[DEBUG_RENDER] MerchantDashboard render', {
     timestamp: Date.now(),
     businessCustomersLength: businessCustomers.length,
-    storeCustomersRawLength: store.customers.length,
+    storeCustomersRawLength: (effectiveCustomers || []).length,
   });
 
   // Filter agent events for manager attention only (anomalies, errors, relance failures, payment discrepancies)
@@ -3875,6 +3880,7 @@ export default function MerchantDashboard({
           <CustomersSection
             business={business}
             businessCustomers={businessCustomers}
+            isCustomersLoading={isCustomersLoading}
             cropModalOpen={cropModalOpen}
             setCropModalOpen={setCropModalOpen}
             cropImageSrc={cropImageSrc}

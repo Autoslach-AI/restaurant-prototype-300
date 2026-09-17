@@ -143,6 +143,8 @@ export default function HomePage() {
   const products = store.products;
   const orders = store.orders;
   const agentEvents = store.agentEvents;
+  const customers = store.customers;
+  const isCustomersLoading = store.customersLoading;
   const cart = store.cart;
   const waMessages = store.waMessages;
 
@@ -409,6 +411,8 @@ export default function HomePage() {
           products={products}
           orders={orders}
           agentEvents={agentEvents}
+          customers={customers}
+          isCustomersLoading={isCustomersLoading}
           onUpdateOrderStatus={handleUpdateOrderStatus}
           onCancelOrder={handleCancelOrder}
           onProcessPayment={(orderId, ref) => store.processPayment(orderId, ref)}

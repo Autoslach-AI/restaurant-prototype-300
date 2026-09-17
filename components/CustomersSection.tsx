@@ -24,6 +24,9 @@ import {
   Camera,
   User,
   Users,
+  Settings,
+  Maximize2,
+  Download,
 } from 'lucide-react';
 import { Business, Customer, Order } from '@/lib/types';
 import { getStore } from '@/lib/store';
@@ -36,6 +39,7 @@ import {
   markCustomerAsFavorite,
   deleteMessage,
   insertCustomer,
+  updateCustomer,
   uploadStaffAvatar,
 } from '@/lib/supabase';
 import { MediaViewer, MediaViewerItem } from '@/components/MediaViewer';
@@ -139,7 +143,23 @@ export default function CustomersSection({
   const [customerSaving, setCustomerSaving] = useState(false);
   const [customerModalError, setCustomerModalError] = useState<string | null>(null);
 
+  // Customer edit modal states
+  const [isEditCustomerModalOpen, setIsEditCustomerModalOpen] = useState(false);
+  const [editingCustomer, setEditingCustomer] = useState<Customer | null>(null);
+  const [editCustomerPhotoUrl, setEditCustomerPhotoUrl] = useState('');
+  const [editCustomerName, setEditCustomerName] = useState('');
+  const [editCustomerPhone, setEditCustomerPhone] = useState('');
+  const [editCustomerChannel, setEditCustomerChannel] = useState<'whatsapp' | 'app'>('whatsapp');
+  const [editCustomerNotes, setEditCustomerNotes] = useState('');
+  const [editCustomerSaving, setEditCustomerSaving] = useState(false);
+  const [editCustomerModalError, setEditCustomerModalError] = useState<string | null>(null);
+
   // Loading state to prevent initial 0-customer flash
+  const isCustomersLoadingEffective =
+    propIsCustomersLoading !== undefined
+      ? propIsCustomersLoading
+      : store.customersLoading;
+
   const [isInitialCustomersLoading, setIsInitialCustomersLoading] = useState<boolean>(() => {
     if (propIsCustomersLoading !== undefined) return propIsCustomersLoading;
     if (businessCustomers.length > 0) return false;
@@ -148,6 +168,11 @@ export default function CustomersSection({
   });
 
   useEffect(() => {
+    if (propIsCustomersLoading === true) {
+      setIsInitialCustomersLoading(true);
+      return;
+    }
+
     if (businessCustomers.length > 0 || propIsCustomersLoading === false) {
       const immediateTimer = setTimeout(() => {
         setIsInitialCustomersLoading(false);
@@ -182,14 +207,18 @@ export default function CustomersSection({
     const handleCroppedPhoto = (e: Event) => {
       const customEvt = e as CustomEvent<string>;
       if (customEvt.detail) {
-        setNewCustomerPhotoUrl(customEvt.detail);
+        if (isEditCustomerModalOpen) {
+          setEditCustomerPhotoUrl(customEvt.detail);
+        } else {
+          setNewCustomerPhotoUrl(customEvt.detail);
+        }
       }
     };
     window.addEventListener('customer_photo_cropped', handleCroppedPhoto);
     return () => {
       window.removeEventListener('customer_photo_cropped', handleCroppedPhoto);
     };
-  }, []);
+  }, [isEditCustomerModalOpen]);
 
   const getInitials = (name?: string) => {
     if (!name) return 'CL';
@@ -198,6 +227,16 @@ export default function CustomersSection({
       return (parts[0][0] + parts[1][0]).toUpperCase();
     }
     return name.slice(0, 2).toUpperCase();
+  };
+
+  const getAttachmentExtension = (name?: string | null, url?: string | null): string => {
+    const target = (name || url || '').trim();
+    const clean = target.split('?')[0].split('#')[0];
+    const lastDot = clean.lastIndexOf('.');
+    if (lastDot !== -1 && lastDot < clean.length - 1) {
+      return clean.substring(lastDot + 1).toLowerCase();
+    }
+    return '';
   };
 
   const businessOrders: Order[] = (store.orders || []).filter(
@@ -254,7 +293,8 @@ export default function CustomersSection({
     return c.name.toLowerCase().includes(q) || (c.phone && c.phone.includes(q));
   });
 
-  // Liste triee pour la vue Chat : Favoris d abord, puis tri secondaire par activite recente
+  // Liste triee pour la vue Chat : uniquement les clients avec au moins 1 message echange,
+  // favoris d'abord, puis tri secondaire par activite recente
   const sortedChatCustomers = useMemo(() => {
     const getActivityMs = (c: Customer): number => {
       const custMsgs = store.getCustomerMessages(c.id);
@@ -274,7 +314,12 @@ export default function CustomersSection({
       return 0;
     };
 
-    return [...filteredCustomers].sort((a, b) => {
+    const chatEligibleCustomers = filteredCustomers.filter((c) => {
+      const msgs = store.getCustomerMessages(c.id);
+      return Array.isArray(msgs) && msgs.length > 0;
+    });
+
+    return [...chatEligibleCustomers].sort((a, b) => {
       const aFav = a.is_favorite ? 1 : 0;
       const bFav = b.is_favorite ? 1 : 0;
       if (aFav !== bFav) {
@@ -760,6 +805,63 @@ export default function CustomersSection({
     }
   };
 
+  const handleOpenEditCustomerModal = (customer: Customer) => {
+    setEditingCustomer(customer);
+    setEditCustomerName(customer.name || '');
+    setEditCustomerPhone(customer.phone || '');
+    setEditCustomerChannel(customer.channel_preference || 'whatsapp');
+    setEditCustomerNotes(customer.notes || '');
+    setEditCustomerPhotoUrl(customer.avatar_url || '');
+    setEditCustomerModalError(null);
+    setIsEditCustomerModalOpen(true);
+  };
+
+  const handleEditCustomerSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingCustomer) return;
+    if (!editCustomerName.trim() || !editCustomerPhone.trim()) {
+      setEditCustomerModalError('Veuillez renseigner le nom et le numero de telephone.');
+      return;
+    }
+
+    setEditCustomerSaving(true);
+    setEditCustomerModalError(null);
+
+    try {
+      const updates = {
+        name: editCustomerName.trim(),
+        phone: editCustomerPhone.trim(),
+        channel_preference: editCustomerChannel,
+        notes: editCustomerNotes.trim() || undefined,
+        avatar_url: editCustomerPhotoUrl || undefined,
+      };
+
+      const res = await updateCustomer(editingCustomer.id, updates);
+
+      if (!res.success) {
+        setEditCustomerModalError(res.error || "Une erreur est survenue lors de la mise à jour du client.");
+        return;
+      }
+
+      // Mettre a jour le store localement
+      getStore().updateCustomer(editingCustomer.id, {
+        name: updates.name,
+        phone: updates.phone,
+        channel_preference: updates.channel_preference,
+        notes: updates.notes,
+        avatar_url: updates.avatar_url,
+      });
+
+      setEditCustomerModalError(null);
+      setIsEditCustomerModalOpen(false);
+      setEditingCustomer(null);
+    } catch (err: any) {
+      setEditCustomerModalError(err?.message || "Erreur inattendue lors de la modification du client.");
+    } finally {
+      setEditCustomerSaving(false);
+    }
+  };
+
   return (
     <div className="bg-white rounded-3xl border border-slate-200/80 shadow-2xs overflow-hidden flex flex-col md:flex-row min-h-[680px] h-[calc(100vh-220px)]">
       {/* Hidden File Input for Customer Media Upload */}
@@ -778,7 +880,7 @@ export default function CustomersSection({
           <div className="flex items-center justify-between">
             <h3 className="font-extrabold text-slate-900 text-base tracking-tight flex items-center gap-2">
               <span>Clients & Messagerie</span>
-              {isInitialCustomersLoading || store.customersLoading ? (
+              {isInitialCustomersLoading || isCustomersLoadingEffective ? (
                 <span className="px-2 py-0.5 bg-slate-100 text-slate-500 border border-slate-200/80 rounded-full text-[10px] font-medium flex items-center gap-1">
                   <Loader2 className="w-2.5 h-2.5 animate-spin text-slate-400" />
                   <span>...</span>
@@ -884,7 +986,7 @@ export default function CustomersSection({
                     : 'text-slate-600 hover:text-slate-900'
                 }`}
               >
-                Tous ({isInitialCustomersLoading || store.customersLoading ? '...' : displayCustomers.length})
+                Tous ({isInitialCustomersLoading || isCustomersLoadingEffective ? '...' : displayCustomers.length})
               </button>
               <button
                 onClick={() => setCustomerFilter('unread')}
@@ -922,7 +1024,7 @@ export default function CustomersSection({
 
         {/* Scrollable List: Chat vs Liste complete */}
         <div className="flex-1 overflow-y-auto divide-y divide-slate-100 bg-white">
-          {isInitialCustomersLoading || store.customersLoading ? (
+          {isInitialCustomersLoading || isCustomersLoadingEffective ? (
             <div className="p-8 text-center text-slate-400 text-xs font-medium flex flex-col items-center justify-center gap-2">
               <Loader2 className="w-5 h-5 animate-spin text-slate-400" />
               <span>Chargement des clients...</span>
@@ -1183,7 +1285,7 @@ export default function CustomersSection({
         const activeCustomer = effectiveActiveCustomer;
 
         if (!activeCustomer) {
-          if (isInitialCustomersLoading || store.customersLoading) {
+          if (isInitialCustomersLoading || isCustomersLoadingEffective) {
             return (
               <div className="flex-1 bg-white flex flex-col items-center justify-center p-8 text-center">
                 <Loader2 className="w-8 h-8 text-slate-300 animate-spin mb-2" />
@@ -1283,13 +1385,13 @@ export default function CustomersSection({
                     )}
                   </div>
                   <div className="min-w-0">
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-1.5">
                       <h3 className="font-extrabold text-slate-900 text-base truncate leading-tight">
                         {activeCustomer.name}
                       </h3>
                       <button
                         onClick={() => handleToggleCustomerFavorite(activeCustomer.id, activeCustomer.is_favorite)}
-                        className="p-1 text-slate-400 hover:text-slate-700 transition-colors cursor-pointer"
+                        className="p-1 text-slate-400 hover:text-slate-700 transition-colors cursor-pointer rounded-lg hover:bg-slate-100"
                         title={activeCustomer.is_favorite ? 'Retirer des favoris' : 'Marquer comme favori'}
                       >
                         <Bookmark
@@ -1299,6 +1401,14 @@ export default function CustomersSection({
                               : 'text-slate-400 hover:text-slate-600'
                           }`}
                         />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleOpenEditCustomerModal(activeCustomer)}
+                        className="p-1 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-lg transition-colors cursor-pointer"
+                        title="Modifier le profil du client"
+                      >
+                        <Settings className="w-4 h-4 text-slate-400 hover:text-slate-700" />
                       </button>
                     </div>
                   </div>
@@ -1440,7 +1550,7 @@ export default function CustomersSection({
                                     className="max-h-60 w-full object-cover rounded-xl"
                                   />
                                 </button>
-                              ) : (
+                              ) : msg.media_type === 'video' ? (
                                 <button
                                   type="button"
                                   onClick={(e) => {
@@ -1451,8 +1561,8 @@ export default function CustomersSection({
                                     }
                                     setActiveMediaViewer({
                                       url: msg.media_url!,
-                                      mediaType: msg.media_type || 'document',
-                                      name: msg.media_name || 'Document joint',
+                                      mediaType: 'video',
+                                      name: msg.media_name || 'Vidéo',
                                       size: msg.media_size,
                                     });
                                   }}
@@ -1464,13 +1574,13 @@ export default function CustomersSection({
                                   title={
                                     isCustomerMessageSelectMode
                                       ? 'Cliquer pour selectionner'
-                                      : 'Cliquer pour previsualiser ou telecharger'
+                                      : 'Cliquer pour lire la vidéo'
                                   }
                                 >
-                                  <File className="w-5 h-5 shrink-0" />
+                                  <Video className="w-5 h-5 shrink-0" />
                                   <div className="flex-1 min-w-0">
                                     <p className="text-xs font-bold truncate">
-                                      {msg.media_name || 'Document joint'}
+                                      {msg.media_name || 'Vidéo'}
                                     </p>
                                     {msg.media_size ? (
                                       <p className={`text-[10px] ${isSentByMerchant ? 'text-emerald-200' : 'text-slate-400'}`}>
@@ -1480,7 +1590,140 @@ export default function CustomersSection({
                                   </div>
                                   <ExternalLink className="w-4 h-4 shrink-0 opacity-70" />
                                 </button>
-                              )}
+                              ) : (() => {
+                                const ext = getAttachmentExtension(msg.media_name, msg.media_url);
+                                const isPdf = ext === 'pdf' || (msg.media_url && msg.media_url.toLowerCase().includes('.pdf'));
+                                const isOfficeDoc = ['doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx'].includes(ext);
+
+                                if (isPdf || isOfficeDoc) {
+                                  const iframeSrc = isPdf
+                                    ? msg.media_url
+                                    : `https://view.officeapps.live.com/op/embed.aspx?src=${encodeURIComponent(msg.media_url)}`;
+
+                                  return (
+                                    <div className="w-full max-w-[420px] sm:w-[400px] h-[500px] bg-white rounded-xl overflow-hidden border border-slate-200 shadow-xs flex flex-col text-slate-800">
+                                      {/* Document Card Header */}
+                                      <div className="px-3 py-2 bg-slate-50 border-b border-slate-200 flex items-center justify-between gap-2 shrink-0">
+                                        <div className="flex items-center space-x-2 min-w-0 flex-1">
+                                          <FileText className="w-4 h-4 text-[#1B4B4A] shrink-0" />
+                                          <span
+                                            className="text-xs font-bold truncate text-slate-800"
+                                            title={msg.media_name || (isPdf ? 'Document PDF' : 'Document Office')}
+                                          >
+                                            {msg.media_name || (isPdf ? 'Document PDF' : 'Document Office')}
+                                          </span>
+                                        </div>
+                                        <div className="flex items-center gap-1.5 shrink-0">
+                                          <button
+                                            type="button"
+                                            onClick={(e) => {
+                                              if (isCustomerMessageSelectMode) {
+                                                e.stopPropagation();
+                                                handleToggleMessageSelection(msg.id);
+                                                return;
+                                              }
+                                              e.stopPropagation();
+                                              setActiveMediaViewer({
+                                                url: msg.media_url!,
+                                                mediaType: isPdf ? 'pdf' : 'document',
+                                                name: msg.media_name || (isPdf ? 'Document PDF' : 'Document Office'),
+                                                size: msg.media_size,
+                                              });
+                                            }}
+                                            className="inline-flex items-center gap-1 px-2.5 py-1 bg-white hover:bg-slate-100 border border-slate-200 text-slate-700 hover:text-slate-900 rounded-lg text-[11px] font-bold transition-colors cursor-pointer shadow-2xs"
+                                            title="Ouvrir en plein écran"
+                                          >
+                                            <Maximize2 className="w-3.5 h-3.5" />
+                                            <span>Ouvrir en plein écran</span>
+                                          </button>
+                                          <a
+                                            href={msg.media_url}
+                                            download={msg.media_name || (isPdf ? 'document.pdf' : 'document')}
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            onClick={(e) => e.stopPropagation()}
+                                            className="inline-flex items-center gap-1 px-2.5 py-1 bg-[#1B4B4A] hover:bg-[#153B3A] text-white rounded-lg text-[11px] font-bold transition-colors cursor-pointer shadow-2xs"
+                                            title="Télécharger"
+                                          >
+                                            <Download className="w-3.5 h-3.5" />
+                                            <span>Télécharger</span>
+                                          </a>
+                                        </div>
+                                      </div>
+
+                                      {/* Document Embed Preview */}
+                                      <div className="flex-1 w-full bg-slate-100 relative">
+                                        <iframe
+                                          src={iframeSrc}
+                                          className="w-full h-full border-0 bg-white"
+                                          title={msg.media_name || (isPdf ? 'Document PDF' : 'Document Office')}
+                                        />
+                                      </div>
+                                    </div>
+                                  );
+                                }
+
+                                // 3. Pour tout autre format (txt, csv, etc.) : garde l'affichage actuel (carte icône + nom + taille + bouton télécharger)
+                                return (
+                                  <div
+                                    className={`w-full flex items-center justify-between gap-2.5 p-2.5 rounded-xl border transition-all ${
+                                      isSentByMerchant
+                                        ? 'bg-white/10 border-white/20 text-white'
+                                        : 'bg-slate-50 border-slate-200 text-slate-800'
+                                    }`}
+                                  >
+                                    <button
+                                      type="button"
+                                      onClick={(e) => {
+                                        if (isCustomerMessageSelectMode) {
+                                          e.stopPropagation();
+                                          handleToggleMessageSelection(msg.id);
+                                          return;
+                                        }
+                                        setActiveMediaViewer({
+                                          url: msg.media_url!,
+                                          mediaType: msg.media_type || 'document',
+                                          name: msg.media_name || 'Document joint',
+                                          size: msg.media_size,
+                                        });
+                                      }}
+                                      className="flex items-center gap-2.5 flex-1 min-w-0 text-left cursor-pointer"
+                                      title={
+                                        isCustomerMessageSelectMode
+                                          ? 'Cliquer pour selectionner'
+                                          : 'Cliquer pour previsualiser ou telecharger'
+                                      }
+                                    >
+                                      <File className="w-5 h-5 shrink-0" />
+                                      <div className="flex-1 min-w-0">
+                                        <p className="text-xs font-bold truncate">
+                                          {msg.media_name || 'Document joint'}
+                                        </p>
+                                        {msg.media_size ? (
+                                          <p className={`text-[10px] ${isSentByMerchant ? 'text-emerald-200' : 'text-slate-400'}`}>
+                                            {(msg.media_size / (1024 * 1024)).toFixed(1)} Mo
+                                          </p>
+                                        ) : null}
+                                      </div>
+                                    </button>
+                                    <a
+                                      href={msg.media_url}
+                                      download={msg.media_name || 'document'}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      onClick={(e) => e.stopPropagation()}
+                                      className={`p-1.5 rounded-lg transition-colors cursor-pointer shrink-0 ${
+                                        isSentByMerchant
+                                          ? 'hover:bg-white/20 text-white'
+                                          : 'hover:bg-slate-200 text-slate-600'
+                                      }`}
+                                      title="Télécharger"
+                                    >
+                                      <Download className="w-4 h-4" />
+                                    </a>
+                                  </div>
+                                );
+                              })()}
                             </div>
                           )}
 
@@ -2082,6 +2325,219 @@ export default function CustomersSection({
           </div>
         </div>
       )}
+
+      {/* Customer Edit Modal */}
+      <AnimatePresence>
+        {isEditCustomerModalOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-xs">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.94, y: 8 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.94, y: 8 }}
+              transition={{ duration: 0.18, ease: 'easeOut' }}
+              className="bg-white rounded-3xl max-w-md w-full p-6 border border-slate-200 shadow-2xl text-slate-800 flex flex-col max-h-[85vh] overflow-hidden"
+            >
+              <div className="flex items-center justify-between pb-4 border-b border-slate-100 shrink-0">
+                <div className="flex items-center space-x-2.5">
+                  <div className="w-8 h-8 rounded-xl bg-[#1B4B4A]/10 text-[#1B4B4A] flex items-center justify-center">
+                    <Settings className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <h3 className="font-extrabold text-slate-900 text-base">Modifier le Client</h3>
+                    <p className="text-[11px] text-slate-500">Mise à jour du profil et des informations</p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsEditCustomerModalOpen(false);
+                    setEditingCustomer(null);
+                    setEditCustomerModalError(null);
+                  }}
+                  className="text-slate-400 hover:text-slate-700 p-1 rounded-full transition-colors cursor-pointer"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <form onSubmit={handleEditCustomerSubmit} className="flex-1 overflow-y-auto pr-1 space-y-4 text-xs pt-4">
+                {/* Photo Upload using shared image cropper */}
+                <div className="flex flex-col items-center justify-center pb-2">
+                  <div className="relative flex flex-col items-center">
+                    <input
+                      type="file"
+                      accept="image/*"
+                      id="edit-customer-photo-input"
+                      className="hidden"
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (!file) return;
+                        const reader = new FileReader();
+                        reader.onload = () => {
+                          if (typeof reader.result === 'string') {
+                            setCropImageSrc(reader.result);
+                            setCropTarget('customer_create');
+                            setCropModalOpen(true);
+                          }
+                        };
+                        reader.readAsDataURL(file);
+                        e.target.value = '';
+                      }}
+                    />
+                    <label
+                      htmlFor="edit-customer-photo-input"
+                      className="relative cursor-pointer flex flex-col items-center justify-center w-20 h-20 rounded-full border-2 border-dashed border-emerald-400 bg-white hover:bg-emerald-50/50 transition-all overflow-hidden shadow-xs group"
+                    >
+                      {editCustomerPhotoUrl ? (
+                        <>
+                          <img
+                            src={editCustomerPhotoUrl}
+                            alt="Aperçu photo"
+                            className="w-full h-full object-cover"
+                          />
+                          <div className="absolute inset-0 bg-black/40 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+                            <Camera className="w-5 h-5 text-white" />
+                          </div>
+                        </>
+                      ) : (
+                        <div className="flex flex-col items-center justify-center text-slate-400 group-hover:text-emerald-600">
+                          {editCustomerName.trim() ? (
+                            <span className="font-extrabold text-emerald-700 text-base uppercase">
+                              {editCustomerName.trim().substring(0, 2)}
+                            </span>
+                          ) : (
+                            <User className="w-7 h-7 text-slate-400 group-hover:text-emerald-600 transition-colors" />
+                          )}
+                          <div className="absolute bottom-0 inset-x-0 bg-slate-900/60 py-0.5 text-[9px] text-white font-bold text-center">
+                            Modifier
+                          </div>
+                        </div>
+                      )}
+                    </label>
+                    <div className="flex items-center gap-2 mt-1.5">
+                      <span className="text-[11px] text-slate-500 font-medium">
+                        {editCustomerPhotoUrl ? 'Cliquer pour changer la photo' : 'Photo de profil (optionnel)'}
+                      </span>
+                      {editCustomerPhotoUrl && (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.preventDefault();
+                            setEditCustomerPhotoUrl('');
+                          }}
+                          className="text-[11px] font-bold text-red-600 hover:text-red-700 hover:underline cursor-pointer"
+                        >
+                          Supprimer
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="font-extrabold text-slate-700 block mb-1">
+                    Nom complet <span className="text-rose-500">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={editCustomerName}
+                    onChange={(e) => setEditCustomerName(e.target.value)}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-slate-900 font-medium focus:outline-none focus:border-emerald-500 shadow-2xs"
+                    placeholder="ex: Aminata Fall, Moussa Diop..."
+                  />
+                </div>
+
+                <div>
+                  <label className="font-extrabold text-slate-700 block mb-1">
+                    Numéro de téléphone <span className="text-rose-500">*</span>
+                  </label>
+                  <input
+                    type="tel"
+                    required
+                    value={editCustomerPhone}
+                    onChange={(e) => setEditCustomerPhone(e.target.value)}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-slate-900 font-mono focus:outline-none focus:border-emerald-500 shadow-2xs"
+                    placeholder="+221 77 000 00 00"
+                  />
+                </div>
+
+                <div>
+                  <label className="font-extrabold text-slate-700 block mb-1">
+                    Préférence de canal
+                  </label>
+                  <div className="grid grid-cols-2 gap-3">
+                    <button
+                      type="button"
+                      onClick={() => setEditCustomerChannel('whatsapp')}
+                      className={`p-3 rounded-xl border flex items-center justify-center space-x-2 font-bold transition-all cursor-pointer ${
+                        editCustomerChannel === 'whatsapp'
+                          ? 'bg-emerald-50 border-emerald-300 text-emerald-800 shadow-2xs'
+                          : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'
+                      }`}
+                    >
+                      <MessageSquare className="w-4 h-4 text-emerald-600" />
+                      <span>WhatsApp</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setEditCustomerChannel('app')}
+                      className={`p-3 rounded-xl border flex items-center justify-center space-x-2 font-bold transition-all cursor-pointer ${
+                        editCustomerChannel === 'app'
+                          ? 'bg-[#1B4B4A]/10 border-[#1B4B4A]/30 text-[#1B4B4A] shadow-2xs'
+                          : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'
+                      }`}
+                    >
+                      <Users className="w-4 h-4 text-[#1B4B4A]" />
+                      <span>Application</span>
+                    </button>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="font-extrabold text-slate-700 block mb-1">
+                    Notes internes (optionnel)
+                  </label>
+                  <textarea
+                    rows={2}
+                    value={editCustomerNotes}
+                    onChange={(e) => setEditCustomerNotes(e.target.value)}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-slate-900 focus:outline-none focus:border-emerald-500 shadow-2xs"
+                    placeholder="ex: Client VIP, préfère être livré après 19h..."
+                  />
+                </div>
+
+                {editCustomerModalError && (
+                  <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-rose-800 text-xs font-semibold">
+                    {editCustomerModalError}
+                  </div>
+                )}
+
+                <div className="pt-2 sticky bottom-0 bg-white pb-1 border-t border-slate-100 mt-2">
+                  <button
+                    type="submit"
+                    disabled={editCustomerSaving || !editCustomerName.trim() || !editCustomerPhone.trim()}
+                    className={`w-full py-3 text-white font-extrabold text-xs rounded-xl transition-all shadow-sm flex items-center justify-center space-x-2 ${
+                      editCustomerSaving || !editCustomerName.trim() || !editCustomerPhone.trim()
+                        ? 'bg-slate-400 cursor-not-allowed opacity-60'
+                        : 'bg-[#1B4B4A] hover:bg-[#153B3A] cursor-pointer active:scale-98'
+                    }`}
+                  >
+                    {editCustomerSaving ? (
+                      <>
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                        <span>Mise à jour du client...</span>
+                      </>
+                    ) : (
+                      <span>Enregistrer les modifications</span>
+                    )}
+                  </button>
+                </div>
+              </form>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
 
       {/* Media Viewer Component */}
       <MediaViewer

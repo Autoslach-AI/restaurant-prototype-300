@@ -1580,6 +1580,76 @@ export async function markCustomerAsFavorite(
 }
 
 /**
+ * Update an existing customer profile in platform_customers.
+ * Modifiable fields: name, phone, channel_preference, notes, avatar_url.
+ */
+export async function updateCustomer(
+  customerId: string,
+  updates: {
+    name?: string;
+    phone?: string;
+    channel_preference?: 'whatsapp' | 'app';
+    notes?: string;
+    avatar_url?: string;
+  }
+): Promise<{ success: boolean; customer?: Customer; error?: string }> {
+  const store = getStore();
+  const updatePayload: Record<string, any> = {};
+
+  if (updates.name !== undefined) {
+    updatePayload.name = updates.name.trim();
+  }
+  if (updates.phone !== undefined) {
+    updatePayload.phone = updates.phone.trim();
+    updatePayload.whatsapp_id = updates.phone.trim();
+  }
+  if (updates.channel_preference !== undefined) {
+    updatePayload.channel_preference = updates.channel_preference;
+  }
+  if (updates.notes !== undefined) {
+    updatePayload.notes = updates.notes ? updates.notes.trim() : null;
+  }
+  if (updates.avatar_url !== undefined) {
+    updatePayload.avatar_url = updates.avatar_url || null;
+  }
+
+  const hasCredentials =
+    Boolean(process.env.NEXT_PUBLIC_SUPABASE_URL?.trim()) &&
+    Boolean(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY?.trim());
+
+  if (!hasCredentials) {
+    store.updateCustomerLocally(customerId, updatePayload);
+    return { success: true };
+  }
+
+  try {
+    const client = getSupabase();
+    const { data: updatedRows, error } = await (client as any)
+      .from('platform_customers')
+      .update(updatePayload)
+      .eq('id', customerId)
+      .select();
+
+    if (error) {
+      console.warn('Supabase update customer error:', error.message);
+      return { success: false, error: error.message };
+    }
+
+    if (!updatedRows || updatedRows.length === 0) {
+      console.warn('Supabase update customer: 0 rows affected');
+      return { success: false, error: 'Client introuvable ou mise à jour échouée.' };
+    }
+
+    const updatedCustomer = updatedRows[0] as Customer;
+    store.updateCustomerLocally(customerId, updatedCustomer);
+    return { success: true, customer: updatedCustomer };
+  } catch (err: any) {
+    console.warn('Supabase update customer exception:', err?.message || err);
+    return { success: false, error: err?.message || 'Erreur de connexion à la base de données' };
+  }
+}
+
+/**
  * Upload customer avatar image to Supabase Storage ('platform-customer-avatars' or fallback bucket).
  * Handles File, Blob, and base64 Data URLs.
  * Returns public HTTPS URL.

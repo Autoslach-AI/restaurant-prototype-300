@@ -125,6 +125,9 @@ export class AppStore {
   listeners: Array<() => void> = [];
 
   constructor() {
+    (this as any)._debugId = Math.random().toString(36).slice(2, 8);
+    console.log('[DEBUG_SINGLETON] NEW AppStore instance created', { debugId: (this as any)._debugId });
+
     console.log('[DEBUG_CONSTRUCTOR] AppStore constructor called', {
       windowDefined: typeof window !== 'undefined',
       timestamp: Date.now(),
@@ -665,6 +668,10 @@ export class AppStore {
       this.customers[idx] = { ...this.customers[idx], ...data };
       this.notify();
     }
+  }
+
+  updateCustomer(customerId: string, data: Partial<Customer>) {
+    this.updateCustomerLocally(customerId, data);
   }
 
   setCustomerMessages(customerId: string, messages: CustomerMessage[]) {
@@ -1233,8 +1240,22 @@ export function getStore(): AppStore {
   if (typeof window === 'undefined') {
     return new AppStore();
   }
+
+  const win = window as any;
+  if (win.__APP_STORE_INSTANCE__) {
+    storeInstance = win.__APP_STORE_INSTANCE__ as AppStore;
+    return storeInstance;
+  }
+
   if (!storeInstance) {
     storeInstance = new AppStore();
   }
-  return storeInstance;
+  win.__APP_STORE_INSTANCE__ = storeInstance;
+
+  console.log('[DEBUG_SINGLETON] getStore() called', {
+    storeInstanceExists: storeInstance !== null,
+    instanceId: storeInstance ? (storeInstance as any)._debugId : 'NONE_YET',
+  });
+
+  return storeInstance as AppStore;
 }
