@@ -44,10 +44,11 @@ export function MediaViewer({ isOpen, onClose, media, item }: MediaViewerProps) 
   } | null>(null);
   const modalCardRef = useRef<HTMLDivElement | null>(null);
 
-  // Reset modal size when opening or switching media
+  // Reset modal size and zoom when opening or switching media
   useEffect(() => {
     if (isCurrentlyOpen) {
       setModalSize(null);
+      setZoomLevel(1);
     }
   }, [isCurrentlyOpen, currentMedia?.url]);
 
@@ -184,6 +185,64 @@ export function MediaViewer({ isOpen, onClose, media, item }: MediaViewerProps) 
       ? `${(size / (1024 * 1024)).toFixed(1)} Mo`
       : `${Math.max(1, Math.round(size / 1024))} Ko`
     : null;
+
+  const docViewerRef = useRef<HTMLDivElement | null>(null);
+  const [isCtrlPressed, setIsCtrlPressed] = useState(false);
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Control') setIsCtrlPressed(true);
+    };
+    const handleKeyUp = (e: KeyboardEvent) => {
+      if (e.key === 'Control') setIsCtrlPressed(false);
+    };
+    const handleBlur = () => setIsCtrlPressed(false);
+
+    window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('keyup', handleKeyUp);
+    window.addEventListener('blur', handleBlur);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('keyup', handleKeyUp);
+      window.removeEventListener('blur', handleBlur);
+    };
+  }, []);
+
+  const handleDocWheel = (e: React.WheelEvent) => {
+    if (e.ctrlKey) {
+      if (e.cancelable) e.preventDefault();
+      if (e.deltaY < 0) {
+        setZoomLevel((prev) => Math.min(Number((prev + 0.1).toFixed(2)), 3));
+      } else if (e.deltaY > 0) {
+        setZoomLevel((prev) => Math.max(Number((prev - 0.1).toFixed(2)), 0.5));
+      }
+    }
+  };
+
+  useEffect(() => {
+    const el = docViewerRef.current;
+    if (!el) return;
+
+    const onNativeWheel = (e: WheelEvent) => {
+      if (e.ctrlKey) {
+        e.preventDefault();
+        if (e.deltaY < 0) {
+          setZoomLevel((prev) => Math.min(Number((prev + 0.1).toFixed(2)), 3));
+        } else if (e.deltaY > 0) {
+          setZoomLevel((prev) => Math.max(Number((prev - 0.1).toFixed(2)), 0.5));
+        }
+      }
+    };
+
+    el.addEventListener('wheel', onNativeWheel, { passive: false });
+    return () => {
+      el.removeEventListener('wheel', onNativeWheel);
+    };
+  }, [isPdf, isOfficeDoc]);
+
+  const handleDocZoomIn = () => setZoomLevel((prev) => Math.min(Number((prev + 0.1).toFixed(2)), 3));
+  const handleDocZoomOut = () => setZoomLevel((prev) => Math.max(Number((prev - 0.1).toFixed(2)), 0.5));
+  const handleDocResetZoom = () => setZoomLevel(1);
 
   const handleZoomIn = () => setZoomLevel((prev) => Math.min(prev + 0.25, 3));
   const handleZoomOut = () => setZoomLevel((prev) => Math.max(prev - 0.25, 0.5));
@@ -336,18 +395,23 @@ export function MediaViewer({ isOpen, onClose, media, item }: MediaViewerProps) 
         </div>
 
         {/* Content Preview Area */}
-        <div className={`flex-1 min-h-[260px] ${!modalSize ? 'max-h-[78vh]' : ''} overflow-auto flex items-center justify-center p-3 sm:p-6 bg-slate-950/60 select-none`}>
+        <div className={`flex-1 min-h-[260px] ${!modalSize ? 'max-h-[78vh]' : ''} overflow-auto ${(isPdf || isOfficeDoc) && zoomLevel > 1 ? 'flex items-start justify-start' : 'flex items-center justify-center'} p-3 sm:p-6 bg-slate-950/60 select-none`}>
           {/* 1. PDF Document Viewer (Inline) */}
           {isPdf ? (
-            <div className={`w-full ${!modalSize ? 'h-[74vh]' : 'h-full min-h-[260px]'} flex flex-col bg-slate-900 rounded-xl overflow-hidden border border-slate-800 shadow-xl`}>
+            <div
+              ref={docViewerRef}
+              onWheel={handleDocWheel}
+              style={{ transform: `scale(${zoomLevel})`, transformOrigin: 'top left' }}
+              className={`w-full ${!modalSize ? 'h-[74vh]' : 'h-full min-h-[260px]'} flex flex-col bg-slate-900 rounded-xl overflow-hidden border border-slate-800 shadow-xl shrink-0`}
+            >
               <object
                 data={url}
                 type="application/pdf"
-                className="w-full h-full rounded-xl bg-white"
+                className={`w-full h-full rounded-xl bg-white ${isCtrlPressed ? 'pointer-events-none' : ''}`}
               >
                 <iframe
                   src={url}
-                  className="w-full h-full border-none bg-white"
+                  className={`w-full h-full border-none bg-white ${isCtrlPressed ? 'pointer-events-none' : ''}`}
                   title={fileName}
                 >
                   <div className="p-6 text-center text-slate-300 flex flex-col items-center justify-center h-full space-y-3">
@@ -371,10 +435,15 @@ export function MediaViewer({ isOpen, onClose, media, item }: MediaViewerProps) 
             </div>
           ) : isOfficeDoc ? (
             /* Office Documents Viewer (Word, Excel, PowerPoint) via Office Online */
-            <div className={`w-full ${!modalSize ? 'h-[74vh]' : 'h-full min-h-[260px]'} flex flex-col bg-slate-900 rounded-xl overflow-hidden border border-slate-800 shadow-xl`}>
+            <div
+              ref={docViewerRef}
+              onWheel={handleDocWheel}
+              style={{ transform: `scale(${zoomLevel})`, transformOrigin: 'top left' }}
+              className={`w-full ${!modalSize ? 'h-[74vh]' : 'h-full min-h-[260px]'} flex flex-col bg-slate-900 rounded-xl overflow-hidden border border-slate-800 shadow-xl shrink-0`}
+            >
               <iframe
                 src={`https://view.officeapps.live.com/op/embed.aspx?src=${encodeURIComponent(url)}`}
-                className="w-full h-full border-none bg-white rounded-xl"
+                className={`w-full h-full border-none bg-white rounded-xl ${isCtrlPressed ? 'pointer-events-none' : ''}`}
                 title={fileName}
               />
             </div>
@@ -451,6 +520,42 @@ export function MediaViewer({ isOpen, onClose, media, item }: MediaViewerProps) 
             </div>
           )}
         </div>
+
+        {/* Document Zoom Controls (PDF & Office Online) */}
+        {(isPdf || isOfficeDoc) && (
+          <div className="absolute bottom-4 right-4 z-40 flex items-center gap-1 bg-slate-900/95 backdrop-blur-md px-2.5 py-1.5 rounded-xl border border-slate-700/80 shadow-xl select-none">
+            <button
+              type="button"
+              onClick={handleDocZoomOut}
+              disabled={zoomLevel <= 0.5}
+              className="p-1 text-slate-300 hover:text-white hover:bg-slate-800 disabled:opacity-40 disabled:hover:bg-transparent rounded-lg transition-colors cursor-pointer"
+              title="Dézoomer (-10%)"
+            >
+              <ZoomOut className="w-3.5 h-3.5" />
+            </button>
+            <span className="text-xs font-bold text-slate-200 tabular-nums min-w-[42px] text-center px-1">
+              {Math.round(zoomLevel * 100)}%
+            </span>
+            <button
+              type="button"
+              onClick={handleDocZoomIn}
+              disabled={zoomLevel >= 3}
+              className="p-1 text-slate-300 hover:text-white hover:bg-slate-800 disabled:opacity-40 disabled:hover:bg-transparent rounded-lg transition-colors cursor-pointer"
+              title="Zoomer (+10%)"
+            >
+              <ZoomIn className="w-3.5 h-3.5" />
+            </button>
+            <button
+              type="button"
+              onClick={handleDocResetZoom}
+              disabled={zoomLevel === 1}
+              className="p-1 text-slate-300 hover:text-white hover:bg-slate-800 disabled:opacity-40 disabled:hover:bg-transparent rounded-lg transition-colors cursor-pointer ml-0.5 border-l border-slate-700/60 pl-1.5"
+              title="Réinitialiser le zoom"
+            >
+              <RotateCcw className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );
