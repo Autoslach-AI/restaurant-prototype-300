@@ -123,9 +123,12 @@ export const TeamSection: React.FC<TeamSectionProps> = ({
 
           <button
             onClick={() => {
-              const csvHeader = "Employee,Téléphone,Rôle,Position,Permissions,Hire Date,Status\n";
-              const csvRows = displayTeamRows.map((e) => `"${e.name}","${e.phone}","${e.role}","${e.position}","${e.permissions}","${e.hireDate}","${e.status}"`).join("\n");
-              const blob = new Blob([csvHeader + csvRows], { type: 'text/csv;charset=utf-8;' });
+              const escapeCsvField = (value: unknown) => `"${String(value ?? '').replace(/"/g, '""')}"`;
+              const csvHeader = ['Employee', 'Téléphone', 'Rôle', 'Position', 'Permissions', 'Hire Date', 'Status'].map(escapeCsvField).join(';') + '\n';
+              const csvRows = displayTeamRows.map((e) =>
+                [e.name, e.phone, e.role, e.position, e.permissions, e.hireDate, e.status].map(escapeCsvField).join(';')
+              ).join('\n');
+              const blob = new Blob(['\uFEFF' + csvHeader + csvRows], { type: 'text/csv;charset=utf-8;' });
               const url = URL.createObjectURL(blob);
               const link = document.createElement("a");
               link.setAttribute("href", url);

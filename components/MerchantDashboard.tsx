@@ -1281,6 +1281,12 @@ export default function MerchantDashboard({
     rawStaff: s,
   }));
 
+  console.log('[DEBUG_TEAM] allTeamRows', {
+    timestamp: Date.now(),
+    count: allTeamRows.length,
+    ids: allTeamRows.map((r) => ({ id: r.id, name: r.name })),
+  });
+
   const todayAttendanceCounts = {
     all: businessStaff.filter((s) => !s.revoked).length,
     present: businessStaff.filter((s) => !s.revoked && todayAttendanceMap[s.id]?.status === 'present').length,

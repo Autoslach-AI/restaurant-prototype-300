@@ -63,6 +63,14 @@ export const AttendanceSection: React.FC<AttendanceSectionProps> = ({
   });
   const [attendanceReasonSaving, setAttendanceReasonSaving] = useState(false);
 
+  useEffect(() => {
+    console.log('[DEBUG_ATTENDANCE] todayAttendanceMap', {
+      timestamp: Date.now(),
+      keys: Object.keys(todayAttendanceMap),
+      entries: todayAttendanceMap,
+    });
+  }, [todayAttendanceMap]);
+
   // Load 30-day attendance history for selected member
   useEffect(() => {
     let isMounted = true;
