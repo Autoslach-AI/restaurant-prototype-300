@@ -44,6 +44,7 @@ import {
   checkOrderRelance,
   triggerPostDeliveryFollowUp,
 } from './agent-engine';
+import { updateOrderPaymentInSupabase } from './supabase';
 
 export interface WhatsAppMessage {
   id: string;
@@ -431,13 +432,19 @@ export class AppStore {
     const order = this.orders.find((o) => o.id === orderId);
     if (!order) return false;
 
+    const wasPending = order.status === 'pending';
     order.payment_status = 'paid';
     order.payment_reference = paymentReference;
     if (paymentMethod) order.payment_method = paymentMethod;
-    if (order.status === 'pending') {
+    if (wasPending) {
       order.status = 'confirmed';
     }
     order.updated_at = new Date().toISOString();
+
+    // Persist payment & status to Supabase platform_orders
+    updateOrderPaymentInSupabase(orderId, paymentReference, wasPending).catch((err) => {
+      console.warn('Supabase updateOrderPaymentInSupabase error:', err);
+    });
 
     const biz = this.businesses.find((b) => b.id === order.business_id) || this.getActiveBusiness();
 

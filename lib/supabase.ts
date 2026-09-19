@@ -2223,6 +2223,59 @@ export async function updateOrderPaymentStatus(
 }
 
 /**
+ * 5b. Update order payment and confirmation status in platform_orders.
+ * Sets payment_status = 'paid', payment_reference, and status = 'confirmed' (if was pending).
+ */
+export async function updateOrderPaymentInSupabase(
+  orderId: string,
+  paymentReference: string,
+  shouldConfirm: boolean = false
+): Promise<{ success: boolean; error?: string }> {
+  const now = new Date().toISOString();
+
+  const hasCredentials =
+    Boolean(process.env.NEXT_PUBLIC_SUPABASE_URL?.trim()) &&
+    Boolean(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY?.trim());
+
+  if (!hasCredentials) {
+    return { success: true };
+  }
+
+  try {
+    const client = getSupabase();
+    const updatePayload: Record<string, any> = {
+      payment_status: 'paid',
+      payment_reference: paymentReference,
+      updated_at: now,
+    };
+    if (shouldConfirm) {
+      updatePayload.status = 'confirmed';
+    }
+
+    const { data: updatedRows, error } = await (client as any)
+      .from('platform_orders')
+      .update(updatePayload)
+      .eq('id', orderId)
+      .select();
+
+    if (error) {
+      console.warn('Supabase update order payment error:', error.message);
+      return { success: false, error: error.message };
+    }
+
+    if (!updatedRows || updatedRows.length === 0) {
+      console.warn('Supabase update order payment: 0 rows affected');
+      return { success: false, error: 'Commande introuvable ou paiement non modifié.' };
+    }
+
+    return { success: true };
+  } catch (err: any) {
+    console.warn('Supabase update order payment exception:', err?.message || err);
+    return { success: false, error: err?.message || 'Erreur de connexion à la base de données' };
+  }
+}
+
+/**
  * 6. Cancel an order in platform_orders with a reason.
  * Sets status = 'cancelled', cancellation_reason = reason, and updated_at = now().
  * Strict anti-false-success check on updatedRows.

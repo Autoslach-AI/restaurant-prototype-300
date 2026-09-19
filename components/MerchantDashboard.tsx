@@ -37,8 +37,6 @@ import {
   Phone,
   Key,
   Bell,
-  Eye,
-  EyeOff,
   Menu,
   ArrowLeft,
   ArrowUpRight,
@@ -48,7 +46,6 @@ import {
   MessageSquareWarning,
   TrendingDown,
   Percent,
-  Truck,
   Navigation,
   Store,
   Star,
@@ -91,7 +88,6 @@ import {
   insertStaffMember,
   revokeStaffMember,
   reactivateStaffMember,
-  deleteStaffMember,
   fetchCustomersForBusiness,
   fetchExpensesForBusiness,
   fetchExpenseCategoriesForBusiness,
@@ -100,11 +96,6 @@ import {
   insertExpense,
   updateExpense,
   deleteExpense,
-  fetchDeliveryZonesForBusiness,
-  insertDeliveryZone,
-  updateDeliveryZone,
-  toggleDeliveryZoneActive,
-  deleteDeliveryZone,
   fetchBusinessById,
   updateBusinessConfig,
   supabase,
@@ -118,7 +109,6 @@ import {
   OrderStatus,
   StaffPermissions,
   Staff,
-  DeliveryZone,
   AttendanceRecord,
   AttendanceStatus,
   Customer,
@@ -149,6 +139,9 @@ import {
 } from 'recharts';
 import AgentAssistantSection from './AgentAssistantSection';
 import ProfileSection from './ProfileSection';
+import SettingsSection from './SettingsSection';
+import { TeamSection } from './TeamSection';
+import { AttendanceSection } from './AttendanceSection';
 
 interface MerchantDashboardProps {
   business: Business;
@@ -218,7 +211,6 @@ export default function MerchantDashboard({
   const [activeTab, setActiveTab] = useState<TabType>('overview');
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [activityPeriod, setActivityPeriod] = useState<'jour' | 'semaine' | 'mois' | 'annee'>('semaine');
-  const [showSecretKey, setShowSecretKey] = useState(false);
   const [selectedCustomerId, setSelectedCustomerId] = useState<string | null>(null);
   const [customerFilter, setCustomerFilter] = useState<'all' | 'unread' | 'favorites' | 'recurrent' | 'inactive'>('all');
 
@@ -442,29 +434,8 @@ export default function MerchantDashboard({
   // Conversion filter
   const [conversionPeriod, setConversionPeriod] = useState<'week' | 'month' | 'year' | 'all'>('month');
 
-  // Team page state
-  const [teamSearch, setTeamSearch] = useState('');
-  const [teamDeptFilter, setTeamDeptFilter] = useState<string>('all');
-  const [selectedTeamMemberIds, setSelectedTeamMemberIds] = useState<string[]>([]);
-  const [teamSortActive, setTeamSortActive] = useState<boolean>(true);
-
   // Attendance / Pointage state
   const [todayAttendanceMap, setTodayAttendanceMap] = useState<Record<string, AttendanceRecord>>({});
-  const [attendanceFilter, setAttendanceFilter] = useState<string>('all');
-  const [selectedAttendanceMember, setSelectedAttendanceMember] = useState<(typeof allTeamRows)[number] | null>(null);
-  const [attendanceHistoryFilter, setAttendanceHistoryFilter] = useState<string>('all');
-  const [attendance30DaysRecords, setAttendance30DaysRecords] = useState<AttendanceRecord[]>([]);
-  const [attendanceReasonModal, setAttendanceReasonModal] = useState<{
-    isOpen: boolean;
-    staff: Staff | null;
-    status: 'absent' | 'late';
-    reason: string;
-  }>({
-    isOpen: false,
-    staff: null,
-    status: 'absent',
-    reason: '',
-  });
 
   // Product modal
   const [isProductModalOpen, setIsProductModalOpen] = useState(false);
@@ -509,8 +480,6 @@ export default function MerchantDashboard({
   const [revocationReasonInput, setRevocationReasonInput] = useState('');
   const [revokingLoading, setRevokingLoading] = useState(false);
   const [reactivatingStaffId, setReactivatingStaffId] = useState<string | null>(null);
-  const [deletingStaffMemberState, setDeletingStaffMemberState] = useState<Staff | null>(null);
-  const [deletingLoading, setDeletingLoading] = useState(false);
   const [viewingReasonStaff, setViewingReasonStaff] = useState<Staff | null>(null);
   const [invitePhotoUrl, setInvitePhotoUrl] = useState('');
   const [invitePhotoUploading, setInvitePhotoUploading] = useState(false);
@@ -545,18 +514,6 @@ export default function MerchantDashboard({
     staff: false,
     finance: false,
   });
-
-  // Team Member Slide-over detail panel
-  const [selectedTeamMemberForDetail, setSelectedTeamMemberForDetail] = useState<(typeof allTeamRows)[number] | null>(null);
-
-  // Delivery Zone Modal state & Supabase data
-  const [deliveryZones, setDeliveryZones] = useState<DeliveryZone[]>(() => store.getDeliveryZones(business.id));
-  const [isDeliveryZonesLoading, setIsDeliveryZonesLoading] = useState(false);
-  const [isZoneSaving, setIsZoneSaving] = useState(false);
-  const [isZoneDeleting, setIsZoneDeleting] = useState(false);
-  const [isZoneModalOpen, setIsZoneModalOpen] = useState(false);
-  const [editingZone, setEditingZone] = useState<Partial<DeliveryZone> | null>(null);
-  const [deletingZone, setDeletingZone] = useState<DeliveryZone | null>(null);
 
   // Order Cancellation Reason Modal state
   const [isCancelModalOpen, setIsCancelModalOpen] = useState(false);
@@ -666,39 +623,6 @@ export default function MerchantDashboard({
       }
     }
     loadExpensesData();
-    return () => {
-      isMounted = false;
-    };
-  }, [business?.id, activeTab]);
-
-  // Load delivery zones effect (Supabase)
-  const loadDeliveryZones = async () => {
-    if (!business?.id) return;
-    setIsDeliveryZonesLoading(true);
-    try {
-      const zones = await fetchDeliveryZonesForBusiness(business.id);
-      setDeliveryZones(zones || []);
-    } catch (err) {
-      console.error('Error fetching delivery zones:', err);
-    } finally {
-      setIsDeliveryZonesLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    let isMounted = true;
-    async function loadZones() {
-      if (!business?.id) return;
-      try {
-        const zones = await fetchDeliveryZonesForBusiness(business.id);
-        if (isMounted) {
-          setDeliveryZones(zones || []);
-        }
-      } catch (err) {
-        console.error('Error loading delivery zones:', err);
-      }
-    }
-    loadZones();
     return () => {
       isMounted = false;
     };
@@ -885,145 +809,6 @@ export default function MerchantDashboard({
     }
   };
 
-  // Load 30-day attendance history for selected member
-  useEffect(() => {
-    let isMounted = true;
-    async function load30DaysHistory() {
-      if (!business?.id || !selectedAttendanceMember) return;
-      const endDateStr = todayStr;
-      const startDateObj = new Date();
-      startDateObj.setDate(startDateObj.getDate() - 29);
-      const startDateStr = startDateObj.toISOString().split('T')[0];
-
-      const records = await fetchAttendanceRecords(business.id, startDateStr, endDateStr);
-      if (!isMounted) return;
-      setAttendance30DaysRecords(records);
-    }
-    load30DaysHistory();
-    return () => {
-      isMounted = false;
-    };
-  }, [business?.id, selectedAttendanceMember, todayStr]);
-
-  const last30DaysList = React.useMemo(() => {
-    if (!selectedAttendanceMember) return [];
-    const days = [];
-    const today = new Date();
-    for (let i = 0; i < 30; i++) {
-      const d = new Date(today);
-      d.setDate(d.getDate() - i);
-      const dateStr = d.toISOString().split('T')[0];
-
-      const rec30 = attendance30DaysRecords.find(
-        (r) => r.staff_id === selectedAttendanceMember.id && r.date === dateStr
-      );
-      const recToday = dateStr === todayStr ? todayAttendanceMap[selectedAttendanceMember.id] : null;
-      const effectiveRecord = recToday || rec30;
-
-      days.push({
-        dateStr,
-        dateObj: d,
-        status: (effectiveRecord?.status as 'present' | 'absent' | 'late' | 'unmarked') || 'unmarked',
-        reason: effectiveRecord?.reason || null,
-      });
-    }
-    return days;
-  }, [selectedAttendanceMember, attendance30DaysRecords, todayAttendanceMap, todayStr]);
-
-  const historySummary = React.useMemo(() => {
-    let present = 0;
-    let absent = 0;
-    let late = 0;
-    let unmarked = 0;
-
-    last30DaysList.forEach((item) => {
-      if (item.status === 'present') present++;
-      else if (item.status === 'absent') absent++;
-      else if (item.status === 'late') late++;
-      else unmarked++;
-    });
-
-    return { present, absent, late, unmarked };
-  }, [last30DaysList]);
-
-  const filtered30DaysList = React.useMemo(() => {
-    if (attendanceHistoryFilter === 'all') return last30DaysList;
-    return last30DaysList.filter((item) => item.status === attendanceHistoryFilter);
-  }, [last30DaysList, attendanceHistoryFilter]);
-
-  const formatDateFr = (dateStr: string) => {
-    try {
-      const parts = dateStr.split('-');
-      if (parts.length !== 3) return dateStr;
-      const year = parseInt(parts[0], 10);
-      const month = parseInt(parts[1], 10) - 1;
-      const day = parseInt(parts[2], 10);
-      const date = new Date(year, month, day);
-      const formatted = date.toLocaleDateString('fr-FR', {
-        weekday: 'long',
-        day: 'numeric',
-        month: 'long',
-        year: 'numeric',
-      });
-      return formatted.charAt(0).toUpperCase() + formatted.slice(1);
-    } catch {
-      return dateStr;
-    }
-  };
-
-  const handleMarkAttendanceStatus = async (
-    staffId: string,
-    status: 'present' | 'absent' | 'late',
-    reason?: string | null
-  ) => {
-    if (!canMarkAttendance) return;
-    const trimmedReason = reason?.trim() || null;
-
-    const optimisticRecord: AttendanceRecord = {
-      id: todayAttendanceMap[staffId]?.id || `temp_${staffId}_${todayStr}`,
-      business_id: business.id,
-      staff_id: staffId,
-      date: todayStr,
-      status,
-      reason: trimmedReason,
-      created_at: new Date().toISOString(),
-    };
-    setTodayAttendanceMap((prev) => ({ ...prev, [staffId]: optimisticRecord }));
-
-    const saved = await upsertAttendanceRecord({
-      business_id: business.id,
-      staff_id: staffId,
-      date: todayStr,
-      status,
-      reason: trimmedReason,
-    });
-
-    if (saved) {
-      setTodayAttendanceMap((prev) => ({ ...prev, [staffId]: saved }));
-    }
-  };
-
-  const handleOpenAttendanceReasonModal = (staff: Staff, status: 'absent' | 'late') => {
-    if (!canMarkAttendance) return;
-    const existing = todayAttendanceMap[staff.id];
-    setAttendanceReasonModal({
-      isOpen: true,
-      staff,
-      status,
-      reason: existing?.reason || '',
-    });
-  };
-
-  const handleSaveAttendanceReasonModal = async () => {
-    if (!attendanceReasonModal.staff) return;
-    await handleMarkAttendanceStatus(
-      attendanceReasonModal.staff.id,
-      attendanceReasonModal.status,
-      attendanceReasonModal.reason
-    );
-    setAttendanceReasonModal({ isOpen: false, staff: null, status: 'absent', reason: '' });
-  };
-
   // Settings modification detection
   const currentGw = store.getPaymentGateway(business.id);
   const currentChs = store.getPaymentChannels(business.id);
@@ -1098,11 +883,6 @@ export default function MerchantDashboard({
   // Message template editor states
   const [templates, setTemplates] = useState(business.config.message_templates);
 
-  // Webhook tester form
-  const [testOrderId, setTestOrderId] = useState('');
-  const [testPaymentRef, setTestPaymentRef] = useState(() => 'WAVE_REF_' + Math.floor(100000 + Math.random() * 900000));
-  const [webhookLogs, setWebhookLogs] = useState<string[]>([]);
-
   // Shared Image Cropper state for Profile, Staff Invite & Customer Create
   const [cropModalOpen, setCropModalOpen] = useState(false);
   const [cropImageSrc, setCropImageSrc] = useState<string | null>(null);
@@ -1118,7 +898,6 @@ export default function MerchantDashboard({
   const businessCustomers = (effectiveCustomers || []).filter((c) => c.business_id === business.id);
 
   console.log('[DEBUG_RENDER] MerchantDashboard render', {
-    timestamp: Date.now(),
     businessCustomersLength: businessCustomers.length,
     storeCustomersRawLength: (effectiveCustomers || []).length,
   });
@@ -1502,49 +1281,13 @@ export default function MerchantDashboard({
     rawStaff: s,
   }));
 
-  const uniqueTeamRoles = Array.from(new Set(allTeamRows.map((r) => r.role).filter(Boolean)));
-
   const todayAttendanceCounts = {
-    all: allTeamRows.length,
-    present: allTeamRows.filter((r) => todayAttendanceMap[r.id]?.status === 'present').length,
-    absent: allTeamRows.filter((r) => todayAttendanceMap[r.id]?.status === 'absent').length,
-    late: allTeamRows.filter((r) => todayAttendanceMap[r.id]?.status === 'late').length,
-    unmarked: allTeamRows.filter((r) => !todayAttendanceMap[r.id]?.status).length,
+    all: businessStaff.filter((s) => !s.revoked).length,
+    present: businessStaff.filter((s) => !s.revoked && todayAttendanceMap[s.id]?.status === 'present').length,
+    absent: businessStaff.filter((s) => !s.revoked && todayAttendanceMap[s.id]?.status === 'absent').length,
+    late: businessStaff.filter((s) => !s.revoked && todayAttendanceMap[s.id]?.status === 'late').length,
+    unmarked: businessStaff.filter((s) => !s.revoked && !todayAttendanceMap[s.id]?.status).length,
   };
-
-  const displayTeamRows = allTeamRows.filter((emp) => {
-    if (teamDeptFilter !== 'all' && emp.role !== teamDeptFilter) return false;
-
-    if (teamSearch.trim()) {
-      const q = teamSearch.toLowerCase();
-      return (
-        emp.name.toLowerCase().includes(q) ||
-        emp.phone.toLowerCase().includes(q) ||
-        emp.role.toLowerCase().includes(q) ||
-        emp.position.toLowerCase().includes(q) ||
-        emp.permissions.toLowerCase().includes(q)
-      );
-    }
-    return true;
-  });
-
-  const displayAttendanceRows = allTeamRows.filter((emp) => {
-    const attStatus = todayAttendanceMap[emp.id]?.status;
-    if (attendanceFilter === 'present' && attStatus !== 'present') return false;
-    if (attendanceFilter === 'absent' && attStatus !== 'absent') return false;
-    if (attendanceFilter === 'late' && attStatus !== 'late') return false;
-    if (attendanceFilter === 'unmarked' && attStatus) return false;
-
-    if (teamSearch.trim()) {
-      const q = teamSearch.toLowerCase();
-      return (
-        emp.name.toLowerCase().includes(q) ||
-        emp.phone.toLowerCase().includes(q) ||
-        emp.role.toLowerCase().includes(q)
-      );
-    }
-    return true;
-  });
 
   const handleProductSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -1707,39 +1450,9 @@ export default function MerchantDashboard({
     }
   };
 
-  const handleDeleteStaffConfirm = async () => {
-    if (!deletingStaffMemberState) return;
-    setDeletingLoading(true);
-    try {
-      const res = await deleteStaffMember(deletingStaffMemberState.id);
-      if (!res.success) {
-        alert(res.error || "Une erreur est survenue lors de la suppression.");
-        return;
-      }
-      setDeletingStaffMemberState(null);
-    } catch (err: any) {
-      alert(err?.message || "Erreur de communication avec la base de données.");
-    } finally {
-      setDeletingLoading(false);
-    }
-  };
-
   const handleSaveProfile = (e: React.FormEvent) => {
     e.preventDefault();
     alert('Modifications enregistrées sur votre compte personnel !');
-  };
-
-  const runWebhookTest = async () => {
-    if (!testOrderId) {
-      alert('Veuillez sélectionner un identifiant de commande.');
-      return;
-    }
-
-    const logEntry = `[${new Date().toLocaleTimeString()}] Call POST /api/webhooks/payment -> Order #${testOrderId}, Ref: ${testPaymentRef}`;
-    setWebhookLogs((prev) => [logEntry, ...prev]);
-
-    onProcessPayment(testOrderId, testPaymentRef);
-    setTestPaymentRef('WAVE_REF_' + Math.floor(100000 + Math.random() * 900000));
   };
 
   // Sidebar Menu Items Configuration
@@ -3898,840 +3611,28 @@ export default function MerchantDashboard({
 
         {/* TAB 4.5: ÉQUIPE */}
         {hasPermission('team') && activeTab === 'team' && (
-          <div className="space-y-6">
-            {/* Header Controls Bar */}
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white p-4 rounded-2xl border border-slate-200/80 shadow-2xs">
-              <div className="flex items-center space-x-3 flex-1 max-w-md">
-                <div className="relative w-full">
-                  <Search className="w-4 h-4 absolute left-3.5 top-3 text-slate-400" />
-                  <input
-                    type="text"
-                    placeholder="Rechercher un employé, numéro, poste..."
-                    value={teamSearch}
-                    onChange={(e) => setTeamSearch(e.target.value)}
-                    className="w-full bg-slate-50 hover:bg-slate-100/80 focus:bg-white border border-slate-200/80 rounded-xl pl-10 pr-4 py-2 text-xs text-slate-900 placeholder:text-slate-400 focus:outline-none focus:border-emerald-500 transition-all font-medium"
-                  />
-                </div>
-                {/* Dynamic Role filter */}
-                <select
-                  value={teamDeptFilter}
-                  onChange={(e) => setTeamDeptFilter(e.target.value)}
-                  className="bg-slate-50 hover:bg-slate-100/80 border border-slate-200/80 text-slate-700 text-xs rounded-xl px-3 py-2 font-medium focus:outline-none cursor-pointer shrink-0"
-                >
-                  <option value="all">Tous les rôles</option>
-                  {uniqueTeamRoles.map((roleTitle) => (
-                    <option key={roleTitle} value={roleTitle}>
-                      {roleTitle}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              {/* Toolbar Action Buttons matching image */}
-              <div className="flex items-center space-x-2 shrink-0">
-                <button
-                  onClick={() => setTeamSortActive(!teamSortActive)}
-                  className={`px-3.5 py-2 rounded-xl border text-xs font-medium flex items-center space-x-1.5 transition-all cursor-pointer ${
-                    teamSortActive
-                      ? 'bg-slate-900 text-white border-slate-900 shadow-2xs'
-                      : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
-                  }`}
-                  title="Trier la liste"
-                >
-                  <ListFilter className="w-3.5 h-3.5" />
-                  <span>Sort</span>
-                  <span className="px-1.5 py-0.2 text-[10px] rounded-full bg-slate-700 text-white font-bold ml-1">
-                    1
-                  </span>
-                </button>
-
-                <button
-                  onClick={() => {
-                    const csvHeader = "Employee,Téléphone,Rôle,Position,Permissions,Hire Date,Status\n";
-                    const csvRows = displayTeamRows.map((e) => `"${e.name}","${e.phone}","${e.role}","${e.position}","${e.permissions}","${e.hireDate}","${e.status}"`).join("\n");
-                    const blob = new Blob([csvHeader + csvRows], { type: 'text/csv;charset=utf-8;' });
-                    const url = URL.createObjectURL(blob);
-                    const link = document.createElement("a");
-                    link.setAttribute("href", url);
-                    link.setAttribute("download", "equipe_export.csv");
-                    document.body.appendChild(link);
-                    link.click();
-                    document.body.removeChild(link);
-                  }}
-                  className="px-3.5 py-2 rounded-xl border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 text-xs font-medium flex items-center space-x-1.5 transition-all cursor-pointer shadow-2xs"
-                  title="Exporter la liste en CSV"
-                >
-                  <FileText className="w-3.5 h-3.5 text-slate-500" />
-                  <span>Export</span>
-                  <ChevronRight className="w-3 h-3 text-slate-400 rotate-90" />
-                </button>
-
-                <button
-                  onClick={() => setIsInviteModalOpen(true)}
-                  className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white font-medium text-xs rounded-xl flex items-center space-x-1.5 transition-all shadow-2xs cursor-pointer"
-                >
-                  <Plus className="w-3.5 h-3.5" />
-                  <span>Ajouter un membre</span>
-                </button>
-              </div>
-            </div>
-
-            {/* Table Card - Fond Blanc */}
-            <div className="bg-white rounded-2xl border border-slate-200/80 overflow-hidden shadow-2xs">
-              <div className="overflow-x-auto">
-                <table className="w-full text-left text-xs text-slate-700 border-collapse">
-                  <thead className="bg-slate-50/80 text-slate-500 font-medium text-[11px] border-b border-slate-200/80">
-                    <tr>
-                      <th className="py-3 px-3.5 w-10 text-center">
-                        <input
-                          type="checkbox"
-                          checked={displayTeamRows.length > 0 && selectedTeamMemberIds.length === displayTeamRows.length}
-                          onChange={(e) => {
-                            if (e.target.checked) {
-                              setSelectedTeamMemberIds(displayTeamRows.map((r) => r.id));
-                            } else {
-                              setSelectedTeamMemberIds([]);
-                            }
-                          }}
-                          className="rounded border-slate-300 text-slate-900 focus:ring-slate-900 cursor-pointer"
-                        />
-                      </th>
-                      <th className="py-3 px-3.5 font-medium text-slate-600">Avatar</th>
-                      <th className="py-3 px-3.5 font-medium text-slate-600">Employee</th>
-                      <th className="py-3 px-3.5 font-medium text-slate-600">Téléphone</th>
-                      <th className="py-3 px-3.5 font-medium text-slate-600">Rôle</th>
-                      <th className="py-3 px-3.5 font-medium text-slate-600">Position</th>
-                      <th className="py-3 px-3.5 font-medium text-slate-600">Permissions</th>
-                      <th className="py-3 px-3.5 font-medium text-slate-600 text-right">Salaire</th>
-                      <th className="py-3 px-3.5 font-medium text-slate-600">Hire Date</th>
-                      <th className="py-3 px-3.5 font-medium text-slate-600">Status</th>
-                      <th className="py-3 px-3.5 font-medium text-slate-600 text-center">Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100">
-                    {displayTeamRows.map((emp) => {
-                      const isChecked = selectedTeamMemberIds.includes(emp.id);
-                      return (
-                        <tr
-                          key={emp.id}
-                          onClick={() => setSelectedTeamMemberForDetail(emp)}
-                          className={`hover:bg-slate-50/80 transition-colors cursor-pointer ${isChecked ? 'bg-slate-50/90' : ''}`}
-                        >
-                          <td className="py-3.5 px-3.5 text-center" onClick={(e) => e.stopPropagation()}>
-                            <input
-                              type="checkbox"
-                              checked={isChecked}
-                              onChange={(e) => {
-                                if (e.target.checked) {
-                                  setSelectedTeamMemberIds([...selectedTeamMemberIds, emp.id]);
-                                } else {
-                                  setSelectedTeamMemberIds(selectedTeamMemberIds.filter((id) => id !== emp.id));
-                                }
-                              }}
-                              className="rounded border-slate-300 text-slate-900 focus:ring-slate-900 cursor-pointer"
-                            />
-                          </td>
-
-                          <td className="py-3.5 px-3.5">
-                            {(() => {
-                              const photoSrc = emp.photo_url || emp.avatar_url;
-                              return photoSrc ? (
-                                <Image
-                                  src={photoSrc}
-                                  alt={emp.name}
-                                  width={32}
-                                  height={32}
-                                  className="w-8 h-8 rounded-full object-cover border border-slate-200/80 shadow-2xs"
-                                  referrerPolicy="no-referrer"
-                                />
-                              ) : (
-                                <div className="w-8 h-8 rounded-full bg-slate-100 border border-slate-200 text-slate-700 flex items-center justify-center text-xs font-black shrink-0 shadow-2xs">
-                                  {getInitials(emp.name)}
-                                </div>
-                              );
-                            })()}
-                          </td>
-
-                          <td className="py-3.5 px-3.5 font-medium text-slate-900 whitespace-nowrap">
-                            {emp.name}
-                          </td>
-
-                          <td
-                            className="py-3.5 px-3.5 font-normal text-blue-600 hover:text-blue-700 hover:underline whitespace-nowrap cursor-pointer"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setSelectedTeamMemberForDetail(emp);
-                            }}
-                          >
-                            {emp.phone}
-                          </td>
-
-                          <td className="py-3.5 px-3.5 text-slate-700 font-normal whitespace-nowrap">
-                            {emp.role}
-                          </td>
-
-                          <td className="py-3.5 px-3.5 text-slate-700 font-normal whitespace-nowrap">
-                            {emp.position}
-                          </td>
-
-                          <td className="py-3.5 px-3.5 font-normal text-slate-900 whitespace-nowrap">
-                            {emp.permissions}
-                          </td>
-
-                          <td className="py-3.5 px-3.5 font-bold text-slate-900 text-right whitespace-nowrap">
-                            {activeStaff.role === 'owner'
-                              ? typeof emp.salary === 'number'
-                                ? `${emp.salary.toLocaleString('fr-FR')} ${business.currency || 'FCFA'}`
-                                : emp.salary
-                              : '—'}
-                          </td>
-
-                          <td className="py-3.5 px-3.5 text-slate-600 font-normal whitespace-nowrap">
-                            {emp.hireDate}
-                          </td>
-
-                          <td className="py-3.5 px-3.5 whitespace-nowrap">
-                            {emp.status === 'active' && (
-                              <span className="inline-flex items-center space-x-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-medium bg-emerald-50 text-emerald-800 border border-emerald-200/80">
-                                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0" />
-                                <span>Active</span>
-                              </span>
-                            )}
-                            {emp.status === 'inactive' && (
-                              <span className="inline-flex items-center space-x-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-medium bg-rose-50 text-rose-800 border border-rose-200/80">
-                                <span className="w-1.5 h-1.5 rounded-full bg-rose-500 shrink-0" />
-                                <span>Inactive</span>
-                              </span>
-                            )}
-                            {(emp.status === 'on_leave' || emp.status === 'on leave') && (
-                              <span className="inline-flex items-center space-x-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-medium bg-amber-50 text-amber-900 border border-amber-200/80">
-                                <span className="w-1.5 h-1.5 rounded-full bg-amber-500 shrink-0" />
-                                <span>On leave</span>
-                              </span>
-                            )}
-                          </td>
-
-                          <td className="py-3.5 px-3.5 text-center whitespace-nowrap text-slate-300">
-                            —
-                          </td>
-                        </tr>
-                      );
-                    })}
-                    {displayTeamRows.length === 0 && (
-                      <tr>
-                        <td colSpan={11} className="py-12 text-center text-slate-400 text-xs">
-                          Aucun membre de l&apos;équipe ne correspond aux critères.
-                        </td>
-                      </tr>
-                    )}
-                  </tbody>
-                </table>
-              </div>
-
-              {/* Bottom bar summary */}
-              <div className="px-4 py-3 bg-slate-50/60 border-t border-slate-100 flex items-center justify-between text-xs text-slate-500">
-                <span>Total : <strong className="font-medium text-slate-700">{displayTeamRows.length}</strong> membre(s)</span>
-                {selectedTeamMemberIds.length > 0 && (
-                  <span className="text-slate-700 font-medium">{selectedTeamMemberIds.length} sélectionné(s)</span>
-                )}
-              </div>
-            </div>
-
-            {/* Slide-over Panel: Détails Membre d'Équipe */}
-            <AnimatePresence>
-              {selectedTeamMemberForDetail && (
-                <div className="fixed inset-0 z-50 overflow-hidden flex justify-end">
-                  {/* Dark Backdrop Overlay */}
-                  <motion.div
-                    initial={{ opacity: 0 }}
-                    animate={{ opacity: 1 }}
-                    exit={{ opacity: 0 }}
-                    transition={{ duration: 0.25, ease: 'easeOut' }}
-                    className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs cursor-pointer"
-                    onClick={() => setSelectedTeamMemberForDetail(null)}
-                  />
-
-                  {/* Slide-in Panel */}
-                  <motion.div
-                    initial={{ x: '100%', opacity: 0 }}
-                    animate={{ x: 0, opacity: 1 }}
-                    exit={{ x: '100%', opacity: 0 }}
-                    transition={{ duration: 0.28, ease: [0.16, 1, 0.3, 1] }}
-                    className="relative z-10 w-full max-w-lg bg-white shadow-2xl border-l border-slate-200/80 flex flex-col h-full overflow-y-auto"
-                  >
-                    <div className="p-6 space-y-5">
-                      {/* En-tête avec bouton Fermer (X) */}
-                      <div className="flex items-start justify-between pb-4 border-b border-slate-100">
-                        <div className="flex items-center space-x-3.5 min-w-0 pr-2">
-                          {(selectedTeamMemberForDetail.photo_url || selectedTeamMemberForDetail.avatar_url || selectedTeamMemberForDetail.rawStaff.photo_url || selectedTeamMemberForDetail.rawStaff.avatar_url) ? (
-                            <Image
-                              src={selectedTeamMemberForDetail.photo_url || selectedTeamMemberForDetail.avatar_url || selectedTeamMemberForDetail.rawStaff.photo_url || selectedTeamMemberForDetail.rawStaff.avatar_url!}
-                              alt={selectedTeamMemberForDetail.name}
-                              width={48}
-                              height={48}
-                              className="w-12 h-12 rounded-full object-cover border border-slate-200/80 shrink-0"
-                              referrerPolicy="no-referrer"
-                            />
-                          ) : (
-                            <div className="w-12 h-12 rounded-full bg-emerald-100 border border-emerald-200 text-emerald-800 flex items-center justify-center font-black text-lg shrink-0">
-                              {getInitials(selectedTeamMemberForDetail.name)}
-                            </div>
-                          )}
-                          <div className="flex-1 min-w-0">
-                            <div className="flex items-center space-x-2 flex-wrap">
-                              <h3 className="font-extrabold text-slate-900 text-lg truncate">
-                                {selectedTeamMemberForDetail.name}
-                              </h3>
-                              <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-emerald-50 text-emerald-800 border border-emerald-200">
-                                Active
-                              </span>
-                            </div>
-                            <p className="text-xs font-semibold text-emerald-600 mt-0.5">
-                              {selectedTeamMemberForDetail.role}
-                            </p>
-                          </div>
-                        </div>
-                        <button
-                          onClick={() => setSelectedTeamMemberForDetail(null)}
-                          className="p-2 rounded-2xl text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors shrink-0 cursor-pointer"
-                          title="Fermer le panneau"
-                        >
-                          <X className="w-5 h-5" />
-                        </button>
-                      </div>
-
-                      {/* Mini-statistiques / Infos clés */}
-                      <div className="grid grid-cols-2 gap-3 bg-slate-50/90 p-3.5 rounded-2xl border border-slate-200/80">
-                        <div>
-                          <span className="text-[10px] font-extrabold text-slate-400 uppercase tracking-wider block mb-0.5">
-                            Téléphone
-                          </span>
-                          <span className="text-xs font-bold text-slate-800 font-mono break-all">
-                            {selectedTeamMemberForDetail.phone}
-                          </span>
-                        </div>
-                        <div>
-                          <span className="text-[10px] font-extrabold text-slate-400 uppercase tracking-wider block mb-0.5">
-                            Email
-                          </span>
-                          <span className="text-xs font-bold text-slate-800 break-all">
-                            {selectedTeamMemberForDetail.email || selectedTeamMemberForDetail.rawStaff.email || '-'}
-                          </span>
-                        </div>
-                        <div>
-                          <span className="text-[10px] font-extrabold text-slate-400 uppercase tracking-wider block mb-0.5">
-                            Salaire
-                          </span>
-                          <span className="text-xs font-black text-slate-900 tabular-nums">
-                            {activeStaff.role === 'owner'
-                              ? typeof selectedTeamMemberForDetail.salary === 'number'
-                                ? `${selectedTeamMemberForDetail.salary.toLocaleString('fr-FR')} ${business.currency || 'FCFA'}`
-                                : selectedTeamMemberForDetail.salary
-                              : '—'}
-                          </span>
-                        </div>
-                        <div>
-                          <span className="text-[10px] font-extrabold text-slate-400 uppercase tracking-wider block mb-0.5">
-                            Type de compte
-                          </span>
-                          <span className="text-xs font-bold text-slate-800">
-                            {selectedTeamMemberForDetail.rawRole === 'owner' ? 'Gérant (Owner)' : 'Collaborateur'}
-                          </span>
-                        </div>
-                        <div>
-                          <span className="text-[10px] font-extrabold text-slate-400 uppercase tracking-wider block mb-0.5">
-                            Position
-                          </span>
-                          <span className="text-xs font-bold text-slate-800">
-                            {selectedTeamMemberForDetail.position || '-'}
-                          </span>
-                        </div>
-                        <div>
-                          <span className="text-[10px] font-extrabold text-slate-400 uppercase tracking-wider block mb-0.5">
-                            Date d&apos;embauche
-                          </span>
-                          <span className="text-xs font-bold text-slate-800">
-                            {selectedTeamMemberForDetail.hireDate}
-                          </span>
-                        </div>
-                      </div>
-
-                      {/* Permissions d'accès */}
-                      <div className="bg-slate-50/90 p-4 rounded-2xl border border-slate-200/80 space-y-3">
-                        <span className="text-[10px] font-extrabold text-slate-400 uppercase tracking-wider block">
-                          Permissions d&apos;accès système
-                        </span>
-                        <div className="grid grid-cols-2 gap-2">
-                          {Object.entries(selectedTeamMemberForDetail.rawStaff.permissions || {}).map(([key, enabled]) => {
-                            const permLabels: Record<string, string> = {
-                              orders: 'Commandes',
-                              products: 'Produits',
-                              customers: 'Clients',
-                              agent: 'Agent WA',
-                              settings: 'Paramètres',
-                              staff: 'Équipe',
-                            };
-                            return (
-                              <div
-                                key={key}
-                                className={`p-2.5 rounded-xl border flex items-center justify-between text-xs font-medium ${
-                                  enabled
-                                    ? 'bg-emerald-50/80 border-emerald-200 text-emerald-900'
-                                    : 'bg-white border-slate-200/60 text-slate-400 opacity-60'
-                                }`}
-                              >
-                                <span>{permLabels[key] || key}</span>
-                                {enabled ? (
-                                  <Check className="w-3.5 h-3.5 text-emerald-600 font-bold" />
-                                ) : (
-                                  <X className="w-3.5 h-3.5 text-slate-300" />
-                                )}
-                              </div>
-                            );
-                          })}
-                        </div>
-                      </div>
-
-                      {/* Bouton d'action vers Paramètres */}
-                      <div className="pt-2">
-                        <button
-                          onClick={() => {
-                            setSelectedTeamMemberForDetail(null);
-                            setActiveTab('settings');
-                          }}
-                          className="w-full py-3 bg-slate-900 hover:bg-slate-800 text-white font-extrabold text-xs rounded-xl transition-all shadow-2xs flex items-center justify-center space-x-2 cursor-pointer"
-                        >
-                          <Settings className="w-3.5 h-3.5" />
-                          <span>Gérer ce membre dans les Paramètres</span>
-                        </button>
-                      </div>
-                    </div>
-                  </motion.div>
-                </div>
-              )}
-            </AnimatePresence>
-          </div>
+          <TeamSection
+            business={business}
+            activeStaff={activeStaff}
+            allTeamRows={allTeamRows}
+            setIsInviteModalOpen={setIsInviteModalOpen}
+            setActiveTab={setActiveTab}
+            getInitials={getInitials}
+          />
         )}
 
         {/* TAB 4.6: POINTAGE DÉDIÉ */}
         {hasPermission('attendance') && activeTab === 'attendance' && (
-          <div className="space-y-6">
-            {/* Header Title & Date Banner */}
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white p-5 rounded-2xl border border-slate-200/80 shadow-2xs">
-              <div>
-                <div className="flex items-center space-x-2.5">
-                  <Clock className="w-5 h-5 text-emerald-600 shrink-0" />
-                  <h2 className="text-base font-black text-slate-900">
-                    Pointage & Suivi de Présence du Jour
-                  </h2>
-                  <span className="px-3 py-1 rounded-full text-xs font-bold bg-emerald-50 text-emerald-800 border border-emerald-200/80 shadow-2xs">
-                    {new Date().toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}
-                  </span>
-                </div>
-                <p className="text-xs text-slate-500 mt-1">
-                  Enregistrement et suivi quotidien du pointage des membres de l&apos;équipe.
-                  {!canMarkAttendance && (
-                    <span className="text-amber-700 font-bold ml-1">
-                      (Mode lecture seule - réservé aux gérants et responsables)
-                    </span>
-                  )}
-                </p>
-              </div>
-
-              {/* Controls: Dropdown Filter + Search Bar */}
-              <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3 w-full sm:w-auto">
-                {/* Dropdown Menu Statut avec compteurs */}
-                <div className="relative">
-                  <select
-                    value={attendanceFilter}
-                    onChange={(e) => setAttendanceFilter(e.target.value)}
-                    className="w-full sm:w-auto bg-slate-50 hover:bg-slate-100/80 focus:bg-white border border-slate-200/80 rounded-xl px-3.5 py-2 text-xs text-slate-900 font-extrabold focus:outline-none focus:border-emerald-500 transition-all cursor-pointer shadow-2xs"
-                  >
-                    <option value="all">Statut : Tous ({todayAttendanceCounts.all})</option>
-                    <option value="present">Statut : Présents ({todayAttendanceCounts.present})</option>
-                    <option value="absent">Statut : Absents ({todayAttendanceCounts.absent})</option>
-                    <option value="late">Statut : Retards ({todayAttendanceCounts.late})</option>
-                    <option value="unmarked">Statut : Non pointés ({todayAttendanceCounts.unmarked})</option>
-                  </select>
-                </div>
-
-                {/* Search Bar for Attendance Page */}
-                <div className="relative w-full sm:w-64">
-                  <Search className="w-4 h-4 absolute left-3.5 top-2.5 text-slate-400" />
-                  <input
-                    type="text"
-                    placeholder="Rechercher par nom, rôle..."
-                    value={teamSearch}
-                    onChange={(e) => setTeamSearch(e.target.value)}
-                    className="w-full bg-slate-50 hover:bg-slate-100/80 focus:bg-white border border-slate-200/80 rounded-xl pl-10 pr-4 py-2 text-xs text-slate-900 placeholder:text-slate-400 focus:outline-none focus:border-emerald-500 transition-all font-medium"
-                  />
-                </div>
-              </div>
-            </div>
-
-            {/* Attendance Table Card */}
-            <div className="bg-white rounded-2xl border border-slate-200/80 overflow-hidden shadow-2xs">
-              <div className="overflow-x-auto">
-                <table className="w-full text-left text-xs text-slate-700 border-collapse">
-                  <thead className="bg-slate-50/80 text-slate-500 font-medium text-[11px] border-b border-slate-200/80">
-                    <tr>
-                      <th className="py-3 px-3.5 font-medium text-slate-600">Avatar</th>
-                      <th className="py-3 px-3.5 font-medium text-slate-600">Membre</th>
-                      <th className="py-3 px-3.5 font-medium text-slate-600">Email</th>
-                      <th className="py-3 px-3.5 font-medium text-slate-600">Téléphone</th>
-                      <th className="py-3 px-3.5 font-bold text-slate-900 bg-emerald-50/50">Pointage du Jour</th>
-                      <th className="py-3 px-3.5 font-medium text-slate-600">Rôle</th>
-                      <th className="py-3 px-3.5 font-medium text-slate-600">Position</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100">
-                    {displayAttendanceRows.map((emp) => {
-                      const att = todayAttendanceMap[emp.id];
-                      const status = att?.status;
-                      const reason = att?.reason;
-
-                      return (
-                        <tr
-                          key={emp.id}
-                          onClick={() => setSelectedAttendanceMember(emp)}
-                          className="hover:bg-slate-50/80 transition-colors cursor-pointer"
-                        >
-                          <td className="py-3.5 px-3.5">
-                            {(() => {
-                              const photoSrc = emp.photo_url || emp.avatar_url;
-                              return photoSrc ? (
-                                <Image
-                                  src={photoSrc}
-                                  alt={emp.name}
-                                  width={32}
-                                  height={32}
-                                  className="w-8 h-8 rounded-full object-cover border border-slate-200/80 shadow-2xs"
-                                  referrerPolicy="no-referrer"
-                                />
-                              ) : (
-                                <div className="w-8 h-8 rounded-full bg-slate-100 border border-slate-200 text-slate-700 flex items-center justify-center text-xs font-black shrink-0 shadow-2xs">
-                                  {getInitials(emp.name)}
-                                </div>
-                              );
-                            })()}
-                          </td>
-
-                          <td className="py-3.5 px-3.5 font-bold text-slate-900 whitespace-nowrap">
-                            {emp.name}
-                          </td>
-
-                          <td className="py-3.5 px-3.5 font-normal text-slate-600 whitespace-nowrap">
-                            {emp.email}
-                          </td>
-
-                          <td className="py-3.5 px-3.5 font-normal text-slate-700 whitespace-nowrap">
-                            {emp.phone}
-                          </td>
-
-                          {/* Pointage Cell */}
-                          <td className="py-3.5 px-3.5 whitespace-nowrap bg-emerald-50/10" onClick={(e) => e.stopPropagation()}>
-                            <div className="flex items-center space-x-2">
-                              {/* Integrated Status Dropdown Select */}
-                              {canMarkAttendance ? (
-                                <select
-                                  value={status || ''}
-                                  onChange={(e) => {
-                                    const val = e.target.value;
-                                    if (val === 'present') {
-                                      handleMarkAttendanceStatus(emp.id, 'present');
-                                    } else if (val === 'late') {
-                                      handleOpenAttendanceReasonModal(emp.rawStaff, 'late');
-                                    } else if (val === 'absent') {
-                                      handleOpenAttendanceReasonModal(emp.rawStaff, 'absent');
-                                    }
-                                  }}
-                                  className={`px-3 py-1.5 rounded-xl text-xs font-bold border focus:outline-none transition-all cursor-pointer shadow-2xs ${
-                                    status === 'present'
-                                      ? 'bg-emerald-50 text-emerald-800 border-emerald-300 hover:bg-emerald-100'
-                                      : status === 'late'
-                                      ? 'bg-amber-50 text-amber-800 border-amber-300 hover:bg-amber-100'
-                                      : status === 'absent'
-                                      ? 'bg-rose-50 text-rose-800 border-rose-300 hover:bg-rose-100'
-                                      : 'bg-slate-100 text-slate-600 border-slate-200 hover:bg-slate-200/70'
-                                  }`}
-                                >
-                                  <option value="" disabled className="text-slate-400 bg-white">
-                                    ― Choisir statut (Non pointé)
-                                  </option>
-                                  <option value="present" className="text-emerald-800 font-bold bg-white">
-                                    ✓ Présent
-                                  </option>
-                                  <option value="late" className="text-amber-800 font-bold bg-white">
-                                    ⏰ Retard
-                                  </option>
-                                  <option value="absent" className="text-rose-800 font-bold bg-white">
-                                    ✕ Absent
-                                  </option>
-                                </select>
-                              ) : (
-                                <span
-                                  className={`inline-flex items-center space-x-1.5 px-2.5 py-1 rounded-lg text-xs font-bold border shadow-2xs ${
-                                    status === 'present'
-                                      ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
-                                      : status === 'late'
-                                      ? 'bg-amber-50 text-amber-800 border-amber-200'
-                                      : status === 'absent'
-                                      ? 'bg-rose-50 text-rose-800 border-rose-200'
-                                      : 'bg-slate-100 text-slate-500 border-slate-200'
-                                  }`}
-                                >
-                                  {status === 'present' && <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />}
-                                  {status === 'late' && <Clock className="w-3.5 h-3.5 text-amber-600 shrink-0" />}
-                                  {status === 'absent' && <X className="w-3.5 h-3.5 text-rose-600 shrink-0" />}
-                                  <span>
-                                    {status === 'present'
-                                      ? 'Présent'
-                                      : status === 'late'
-                                      ? 'Retard'
-                                      : status === 'absent'
-                                      ? 'Absent'
-                                      : 'Non pointé'}
-                                  </span>
-                                </span>
-                              )}
-
-                              {/* Justification Pill Badge for Late or Absent */}
-                              {(status === 'late' || status === 'absent') && (
-                                reason && reason.trim() ? (
-                                  <span
-                                    className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-sky-50 text-sky-800 border border-sky-200/80 shadow-2xs cursor-help"
-                                    title={`Motif : ${reason}`}
-                                  >
-                                    <span>Justifié</span>
-                                  </span>
-                                ) : (
-                                  <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-amber-50 text-amber-800 border border-amber-200/80 shadow-2xs">
-                                    <span>Non justifié</span>
-                                  </span>
-                                )
-                              )}
-                            </div>
-                          </td>
-
-                          <td className="py-3.5 px-3.5 text-slate-700 font-normal whitespace-nowrap">
-                            {emp.role}
-                          </td>
-
-                          <td className="py-3.5 px-3.5 text-slate-700 font-normal whitespace-nowrap">
-                            {emp.position}
-                          </td>
-                        </tr>
-                      );
-                    })}
-
-                    {displayAttendanceRows.length === 0 && (
-                      <tr>
-                        <td colSpan={7} className="py-12 text-center text-slate-400 text-xs font-medium">
-                          Aucun membre trouvé dans cette catégorie de pointage.
-                        </td>
-                      </tr>
-                    )}
-                  </tbody>
-                </table>
-              </div>
-
-              {/* Bottom Bar Summary */}
-              <div className="px-4 py-3 bg-slate-50/60 border-t border-slate-100 flex items-center justify-between text-xs text-slate-500">
-                <span>Affichés : <strong className="font-bold text-slate-700">{displayAttendanceRows.length}</strong> membre(s) sur {allTeamRows.length}</span>
-                <span className="text-slate-500">Pointage enregistré sur Supabase (table <code className="text-emerald-700 font-mono text-[10px] bg-emerald-50 px-1 py-0.5 rounded">attendance</code>)</span>
-              </div>
-            </div>
-
-            {/* Slide-over Panel: Historique de Pointage Membre (30 derniers jours) */}
-            <AnimatePresence>
-              {selectedAttendanceMember && (
-                <div className="fixed inset-0 z-50 overflow-hidden flex justify-end">
-                  {/* Dark Backdrop Overlay */}
-                  <motion.div
-                    initial={{ opacity: 0 }}
-                    animate={{ opacity: 1 }}
-                    exit={{ opacity: 0 }}
-                    transition={{ duration: 0.25, ease: 'easeOut' }}
-                    className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs cursor-pointer"
-                    onClick={() => setSelectedAttendanceMember(null)}
-                  />
-
-                  {/* Slide-in Panel */}
-                  <motion.div
-                    initial={{ x: '100%', opacity: 0 }}
-                    animate={{ x: 0, opacity: 1 }}
-                    exit={{ x: '100%', opacity: 0 }}
-                    transition={{ duration: 0.28, ease: [0.16, 1, 0.3, 1] }}
-                    className="relative z-10 w-full max-w-lg bg-white shadow-2xl border-l border-slate-200/80 flex flex-col h-full overflow-y-auto"
-                  >
-                    <div className="p-6 space-y-5 flex-1">
-                      {/* En-tête avec Avatar, Nom, Rôle et Bouton Fermer */}
-                      <div className="flex items-start justify-between pb-4 border-b border-slate-100">
-                        <div className="flex items-center space-x-3.5 min-w-0 pr-2">
-                          {(selectedAttendanceMember.photo_url || selectedAttendanceMember.avatar_url || selectedAttendanceMember.rawStaff?.photo_url || selectedAttendanceMember.rawStaff?.avatar_url) ? (
-                            <Image
-                              src={selectedAttendanceMember.photo_url || selectedAttendanceMember.avatar_url || selectedAttendanceMember.rawStaff?.photo_url || selectedAttendanceMember.rawStaff?.avatar_url!}
-                              alt={selectedAttendanceMember.name}
-                              width={48}
-                              height={48}
-                              className="w-12 h-12 rounded-full object-cover border border-slate-200/80 shrink-0 shadow-2xs"
-                              referrerPolicy="no-referrer"
-                            />
-                          ) : (
-                            <div className="w-12 h-12 rounded-full bg-emerald-100 border border-emerald-200 text-emerald-800 flex items-center justify-center font-black text-lg shrink-0 shadow-2xs">
-                              {getInitials(selectedAttendanceMember.name)}
-                            </div>
-                          )}
-                          <div className="flex-1 min-w-0">
-                            <h3 className="font-extrabold text-slate-900 text-lg truncate">
-                              {selectedAttendanceMember.name}
-                            </h3>
-                            <p className="text-xs font-semibold text-emerald-600 mt-0.5">
-                              {selectedAttendanceMember.role} • <span className="text-slate-500 font-normal">{selectedAttendanceMember.email}</span>
-                            </p>
-                          </div>
-                        </div>
-                        <button
-                          onClick={() => setSelectedAttendanceMember(null)}
-                          className="p-2 rounded-2xl text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors shrink-0 cursor-pointer"
-                          title="Fermer le panneau"
-                        >
-                          <X className="w-5 h-5" />
-                        </button>
-                      </div>
-
-                      {/* Mini-résumé factuel sur 30 jours */}
-                      <div className="bg-slate-50/90 p-4 rounded-2xl border border-slate-200/80 space-y-2.5">
-                        <div className="flex items-center justify-between">
-                          <span className="text-[11px] font-extrabold text-slate-500 uppercase tracking-wider">
-                            Récapitulatif (30 derniers jours)
-                          </span>
-                          <span className="text-xs font-bold text-slate-600">30 jours glissants</span>
-                        </div>
-                        <div className="grid grid-cols-4 gap-2 pt-1">
-                          <div className="p-2.5 bg-emerald-50/80 border border-emerald-200/80 rounded-xl text-center shadow-2xs">
-                            <span className="text-emerald-800 text-base font-black block">{historySummary.present}</span>
-                            <span className="text-[10px] font-bold text-emerald-700">Présent(s)</span>
-                          </div>
-                          <div className="p-2.5 bg-amber-50/80 border border-amber-200/80 rounded-xl text-center shadow-2xs">
-                            <span className="text-amber-800 text-base font-black block">{historySummary.late}</span>
-                            <span className="text-[10px] font-bold text-amber-700">Retard(s)</span>
-                          </div>
-                          <div className="p-2.5 bg-rose-50/80 border border-rose-200/80 rounded-xl text-center shadow-2xs">
-                            <span className="text-rose-800 text-base font-black block">{historySummary.absent}</span>
-                            <span className="text-[10px] font-bold text-rose-700">Absent(s)</span>
-                          </div>
-                          <div className="p-2.5 bg-slate-100 border border-slate-200 rounded-xl text-center shadow-2xs">
-                            <span className="text-slate-700 text-base font-black block">{historySummary.unmarked}</span>
-                            <span className="text-[10px] font-bold text-slate-600">Non pointé</span>
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* Section Historique + Filtre interne */}
-                      <div className="space-y-3">
-                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-100 pb-3">
-                          <div className="flex items-center space-x-2">
-                            <Calendar className="w-4 h-4 text-emerald-600 shrink-0" />
-                            <h4 className="font-extrabold text-slate-900 text-xs sm:text-sm">
-                              Historique de présence — 30 derniers jours
-                            </h4>
-                          </div>
-
-                          {/* Filtre de statut interne */}
-                          <select
-                            value={attendanceHistoryFilter}
-                            onChange={(e) => setAttendanceHistoryFilter(e.target.value)}
-                            className="bg-white border border-slate-200 rounded-xl px-2.5 py-1 text-xs font-bold text-slate-800 focus:outline-none focus:border-emerald-500 cursor-pointer shadow-2xs"
-                          >
-                            <option value="all">Tous les statuts ({last30DaysList.length})</option>
-                            <option value="present">Présents ({historySummary.present})</option>
-                            <option value="late">Retards ({historySummary.late})</option>
-                            <option value="absent">Absents ({historySummary.absent})</option>
-                            <option value="unmarked">Non pointés ({historySummary.unmarked})</option>
-                          </select>
-                        </div>
-
-                        {/* Liste chronologique (du plus récent au plus ancien) */}
-                        <div className="space-y-2.5 max-h-[380px] overflow-y-auto pr-1">
-                          {filtered30DaysList.length === 0 ? (
-                            <div className="text-center py-8 bg-slate-50 rounded-2xl border border-slate-100 text-slate-400 text-xs">
-                              Aucun jour ne correspond au filtre sélectionné.
-                            </div>
-                          ) : (
-                            filtered30DaysList.map((item) => {
-                              const isToday = item.dateStr === todayStr;
-                              return (
-                                <div
-                                  key={item.dateStr}
-                                  className={`p-3 rounded-xl border transition-all flex flex-col gap-1.5 ${
-                                    isToday
-                                      ? 'bg-emerald-50/40 border-emerald-200 shadow-2xs'
-                                      : 'bg-white border-slate-200/70 hover:bg-slate-50/60'
-                                  }`}
-                                >
-                                  <div className="flex items-center justify-between">
-                                    <div className="flex items-center space-x-2">
-                                      <span className="text-xs font-bold text-slate-900">
-                                        {formatDateFr(item.dateStr)}
-                                      </span>
-                                      {isToday && (
-                                        <span className="px-2 py-0.5 rounded-full text-[9px] font-black bg-emerald-100 text-emerald-800 uppercase tracking-wider">
-                                          Aujourd&apos;hui
-                                        </span>
-                                      )}
-                                    </div>
-
-                                    {/* Badge Statut */}
-                                    {item.status === 'present' && (
-                                      <span className="inline-flex items-center space-x-1 px-2.5 py-0.5 rounded-lg text-xs font-bold bg-emerald-50 text-emerald-800 border border-emerald-200/80">
-                                        <CheckCircle2 className="w-3 h-3 text-emerald-600" />
-                                        <span>Présent</span>
-                                      </span>
-                                    )}
-                                    {item.status === 'late' && (
-                                      <span className="inline-flex items-center space-x-1 px-2.5 py-0.5 rounded-lg text-xs font-bold bg-amber-50 text-amber-800 border border-amber-200/80">
-                                        <Clock className="w-3 h-3 text-amber-600" />
-                                        <span>Retard</span>
-                                      </span>
-                                    )}
-                                    {item.status === 'absent' && (
-                                      <span className="inline-flex items-center space-x-1 px-2.5 py-0.5 rounded-lg text-xs font-bold bg-rose-50 text-rose-800 border border-rose-200/80">
-                                        <X className="w-3 h-3 text-rose-600" />
-                                        <span>Absent</span>
-                                      </span>
-                                    )}
-                                    {item.status === 'unmarked' && (
-                                      <span className="inline-flex items-center px-2.5 py-0.5 rounded-lg text-xs font-medium bg-slate-100 text-slate-500 border border-slate-200/80">
-                                        Non pointé
-                                      </span>
-                                    )}
-                                  </div>
-
-                                  {/* Motif si disponible */}
-                                  {item.reason && item.reason.trim() !== '' && (
-                                    <div className="mt-0.5 p-2 rounded-lg bg-slate-50 border border-slate-200/60 text-[11px] text-slate-700 italic">
-                                      <strong className="font-semibold text-slate-900 not-italic">Motif : </strong>
-                                      &ldquo;{item.reason}&rdquo;
-                                    </div>
-                                  )}
-                                </div>
-                              );
-                            })
-                          )}
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Footer / Readonly Notice */}
-                    <div className="p-3.5 bg-slate-50 border-t border-slate-200/80 text-[11px] text-slate-500 text-center font-medium">
-                      🔒 Historique en lecture seule. Pour modifier le pointage d&apos;aujourd&apos;hui, utilisez le tableau principal.
-                    </div>
-                  </motion.div>
-                </div>
-              )}
-            </AnimatePresence>
-          </div>
+          <AttendanceSection
+            business={business}
+            canMarkAttendance={canMarkAttendance}
+            allTeamRows={allTeamRows}
+            todayAttendanceMap={todayAttendanceMap}
+            setTodayAttendanceMap={setTodayAttendanceMap}
+            todayAttendanceCounts={todayAttendanceCounts}
+            getInitials={getInitials}
+            todayStr={todayStr}
+          />
         )}
 
         {/* TAB 5: AGENT PAGE (CLAUDE.AI STYLE RESTRUCTURED WITH BRAND DESIGN) */}
@@ -4744,661 +3645,50 @@ export default function MerchantDashboard({
         )}
         {/* TAB 6: PARAMÈTRES (STORE SETTINGS, OWNER ONLY) */}
         {hasPermission('settings') && activeTab === 'settings' && (
-          <div className="space-y-6">
-            <div className="bg-white p-6 rounded-3xl border border-slate-200/80 shadow-2xs">
-              <div className="flex items-center justify-between pb-4 border-b border-slate-100">
-                <span className="text-xs font-black text-slate-800 uppercase tracking-wider">Réglages Généraux</span>
-                <span className="px-3 py-1 bg-amber-50 text-amber-800 border border-amber-200 rounded-full text-[10px] font-black uppercase">
-                  Réservé au Gérant
-                </span>
-              </div>
-
-              {/* Profile Form */}
-              <form onSubmit={handleSaveAllSettings} className="mt-6 space-y-4 max-w-xl">
-                <div>
-                  <label className="text-xs font-extrabold text-slate-700 block mb-1">Nom du commerce</label>
-                  <input
-                    type="text"
-                    value={bizName}
-                    onChange={(e) => setBizName(e.target.value)}
-                    disabled={isBizLoading || isBizSaving}
-                    className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs text-slate-900 font-medium focus:outline-none focus:border-emerald-500 shadow-2xs disabled:opacity-60"
-                  />
-                </div>
-
-                <div>
-                  <label className="text-xs font-extrabold text-slate-700 block mb-1">Numéro WhatsApp Business</label>
-                  <input
-                    type="text"
-                    value={bizWhatsapp}
-                    onChange={(e) => setBizWhatsapp(e.target.value)}
-                    disabled={isBizLoading || isBizSaving}
-                    className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs text-slate-900 font-mono focus:outline-none focus:border-emerald-500 shadow-2xs disabled:opacity-60"
-                  />
-                </div>
-
-                <div>
-                  <label className="text-xs font-extrabold text-slate-700 block mb-1">Devise (Currency)</label>
-                  <input
-                    type="text"
-                    value={bizCurrency}
-                    onChange={(e) => setBizCurrency(e.target.value)}
-                    disabled={isBizLoading || isBizSaving}
-                    className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs text-slate-900 font-bold focus:outline-none focus:border-emerald-500 shadow-2xs disabled:opacity-60"
-                  />
-                </div>
-              </form>
-            </div>
-
-            {/* Delivery Zones Table (delivery_zones) */}
-            <div className="bg-white p-6 rounded-3xl border border-slate-200/80 shadow-2xs space-y-4">
-              <div className="flex items-center justify-between pb-4 border-b border-slate-100">
-                <div>
-                  <h3 className="text-base font-extrabold text-slate-900 flex items-center space-x-2">
-                    <Truck className="w-5 h-5 text-emerald-600" />
-                    <span>Zones de Livraison (`delivery_zones`)</span>
-                  </h3>
-                  <p className="text-xs text-slate-500 mt-0.5">
-                    Définissez les zones de livraison et leurs frais fixes associés pour le storefront client.
-                  </p>
-                </div>
-                <button
-                  onClick={() => {
-                    setEditingZone({ business_id: business.id, name: '', fee: 1000, active: true });
-                    setIsZoneModalOpen(true);
-                  }}
-                  className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs rounded-xl flex items-center space-x-2 transition-all shadow-sm shadow-emerald-500/10"
-                >
-                  <Plus className="w-4 h-4" />
-                  <span>Ajouter une Zone</span>
-                </button>
-              </div>
-
-              <div className="overflow-x-auto">
-                <table className="w-full text-left text-xs text-slate-700">
-                  <thead className="bg-slate-50/90 text-slate-500 uppercase font-black text-[10px] border-b border-slate-200/80">
-                    <tr>
-                      <th className="py-3 px-4">Zone</th>
-                      <th className="py-3 px-4">Frais Fixe</th>
-                      <th className="py-3 px-4">Statut</th>
-                      <th className="py-3 px-4 text-right">Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100">
-                    {deliveryZones.map((zone) => (
-                      <tr key={zone.id} className="hover:bg-slate-50/80 transition-colors">
-                        <td className="py-3.5 px-4 font-extrabold text-slate-900">{zone.name}</td>
-                        <td className="py-3.5 px-4 font-black text-emerald-700">
-                          {zone.fee.toLocaleString()} {business.currency}
-                        </td>
-                        <td className="py-3.5 px-4">
-                          <button
-                            type="button"
-                            onClick={async () => {
-                              const res = await toggleDeliveryZoneActive(zone.id, zone.active);
-                              if (res.success) {
-                                if (res.zone) {
-                                  setDeliveryZones((prev) => prev.map((z) => (z.id === zone.id ? res.zone! : z)));
-                                } else {
-                                  await loadDeliveryZones();
-                                }
-                              } else {
-                                alert(`Erreur lors du changement de statut de la zone : ${res.error || 'Échec'}`);
-                              }
-                            }}
-                            className={`px-2.5 py-1 rounded-full text-[10px] font-black uppercase transition-all cursor-pointer ${
-                              zone.active
-                                ? 'bg-emerald-100 text-emerald-800 border border-emerald-200'
-                                : 'bg-slate-100 text-slate-500 border border-slate-200'
-                            }`}
-                          >
-                            {zone.active ? 'Actif' : 'Inactif'}
-                          </button>
-                        </td>
-                        <td className="py-3.5 px-4 text-right space-x-2">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setEditingZone(zone);
-                              setIsZoneModalOpen(true);
-                            }}
-                            className="px-3 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-lg transition-colors cursor-pointer"
-                          >
-                            Éditer
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => setDeletingZone(zone)}
-                            className="px-3 py-1 bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold text-xs rounded-lg border border-rose-200 transition-colors cursor-pointer"
-                          >
-                            Supprimer
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
-                    {deliveryZones.length === 0 && (
-                      <tr>
-                        <td colSpan={4} className="py-8 text-center text-slate-400 text-xs">
-                          {isDeliveryZonesLoading ? 'Chargement des zones...' : 'Aucune zone de livraison définie.'}
-                        </td>
-                      </tr>
-                    )}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-
-            {/* Payment Aggregator & Channels Section */}
-            <div className="bg-white p-6 rounded-3xl border border-slate-200/80 shadow-2xs space-y-6">
-              <div className="pb-4 border-b border-slate-100">
-                <h3 className="text-base font-extrabold text-slate-900 flex items-center space-x-2">
-                  <CreditCard className="w-5 h-5 text-emerald-600" />
-                  <span>Agrégateur de Paiement</span>
-                </h3>
-                <p className="text-xs text-slate-500 mt-0.5">
-                  Configurez votre plateforme d&apos;encaissement globale (PayDunya ou CinetPay) pour recevoir vos fonds directement.
-                </p>
-              </div>
-
-              {/* 1. Payment Gateway Configuration */}
-              <div className="p-5 bg-slate-50/70 border border-slate-200/80 rounded-2xl space-y-4">
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                  {/* Provider Select */}
-                  <div>
-                    <label className="block text-xs font-extrabold text-slate-700 mb-1.5">
-                      Agrégateur actif
-                    </label>
-                    <select
-                      value={gwProvider}
-                      onChange={(e) => setGwProvider(e.target.value as 'paydunya' | 'cinetpay')}
-                      className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2.5 text-xs font-extrabold text-slate-900 focus:outline-none focus:border-emerald-500 shadow-2xs cursor-pointer"
-                    >
-                      <option value="paydunya">PayDunya (Sénégal & UEMOA)</option>
-                      <option value="cinetpay">CinetPay (Afrique de l&apos;Ouest &amp; Centrale)</option>
-                    </select>
-                  </div>
-
-                  {/* Public API Key */}
-                  <div>
-                    <label className="block text-xs font-extrabold text-slate-700 mb-1.5">
-                      Clé API publique (Master Key)
-                    </label>
-                    <input
-                      type="text"
-                      value={gwPublicKey}
-                      onChange={(e) => setGwPublicKey(e.target.value)}
-                      placeholder={gwProvider === 'paydunya' ? 'Ex: pk_live_891203...' : 'Ex: 198273645...'}
-                      className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold text-slate-900 focus:outline-none focus:border-emerald-500 shadow-2xs"
-                    />
-                  </div>
-
-                  {/* Secret API Key with Toggle */}
-                  <div>
-                    <label className="block text-xs font-extrabold text-slate-700 mb-1.5">
-                      Clé API secrète (PrivateKey / Secret)
-                    </label>
-                    <div className="relative">
-                      <input
-                        type={showSecretKey ? 'text' : 'password'}
-                        value={gwSecretKey}
-                        onChange={(e) => setGwSecretKey(e.target.value)}
-                        placeholder="••••••••••••••••••••"
-                        className="w-full bg-white border border-slate-200 rounded-xl pl-3 pr-10 py-2 text-xs font-bold text-slate-900 focus:outline-none focus:border-emerald-500 shadow-2xs"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => setShowSecretKey(!showSecretKey)}
-                        className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 transition-colors p-1"
-                        title={showSecretKey ? 'Masquer la clé' : 'Afficher la clé'}
-                      >
-                        {showSecretKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                      </button>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="flex items-center space-x-2 text-[11px] text-slate-500 bg-white/80 p-2.5 rounded-xl border border-slate-200/60">
-                  <ShieldCheck className="w-4 h-4 text-emerald-600 shrink-0" />
-                  <span>
-                    Les clés secrètes sont transmises en toute sécurité. Les transactions pour <strong>Wave</strong>, <strong>Orange Money</strong> et <strong>Carte bancaire</strong> seront traitées via <strong>{gwProvider === 'paydunya' ? 'PayDunya' : 'CinetPay'}</strong>.
-                  </span>
-                </div>
-              </div>
-
-              {/* 2. Payment Channels Available to Customers */}
-              <div className="space-y-3">
-                <div className="flex items-center justify-between">
-                  <h4 className="text-xs font-extrabold text-slate-700 uppercase tracking-wider">
-                    Méthodes de paiement proposées aux clients (`payment_channels`)
-                  </h4>
-                  <span className="text-[11px] font-bold text-slate-500">
-                    {currentChs.filter((c) => channelStates[c.id] ?? c.enabled).length} sur 3 actives
-                  </span>
-                </div>
-
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                  {currentChs.map((channel) => {
-                    const isEnabled = channelStates[channel.id] ?? channel.enabled;
-                    return (
-                      <div
-                        key={channel.id}
-                        className={`p-4 rounded-2xl border transition-all ${
-                          isEnabled
-                            ? 'border-emerald-200 bg-emerald-50/20 shadow-2xs'
-                            : 'border-slate-200 bg-slate-50/50 opacity-70'
-                        }`}
-                      >
-                        <div className="flex items-center justify-between">
-                          <div className="flex items-center space-x-3">
-                            <div
-                              className={`w-10 h-10 rounded-2xl flex items-center justify-center font-black text-xs shadow-2xs ${
-                                channel.id === 'wave'
-                                  ? 'bg-sky-500 text-white'
-                                  : channel.id === 'orange_money'
-                                  ? 'bg-amber-500 text-white'
-                                  : 'bg-indigo-600 text-white'
-                              }`}
-                            >
-                              {channel.id === 'wave'
-                                ? 'W'
-                                : channel.id === 'orange_money'
-                                ? 'OM'
-                                : 'CB'}
-                            </div>
-                            <div>
-                              <span className="font-extrabold text-slate-900 text-sm block">{channel.name}</span>
-                              <span className="text-[10px] font-bold text-slate-400">
-                                {isEnabled ? 'Proposé en caisse' : 'Désactivé'}
-                              </span>
-                            </div>
-                          </div>
-
-                          <button
-                            type="button"
-                            onClick={() =>
-                              setChannelStates((prev) => ({
-                                ...prev,
-                                [channel.id]: !isEnabled,
-                              }))
-                            }
-                            className={`px-3 py-1.5 rounded-full text-[10px] font-black uppercase transition-all cursor-pointer ${
-                              isEnabled
-                                ? 'bg-emerald-600 text-white shadow-xs'
-                                : 'bg-slate-200 text-slate-600 hover:bg-slate-300'
-                            }`}
-                          >
-                            {isEnabled ? 'Actif' : 'Inactif'}
-                          </button>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            </div>
-
-            {/* Staff Team Management */}
-            <div className="bg-white p-6 rounded-3xl border border-slate-200/80 shadow-2xs">
-              <div className="flex items-center justify-between pb-4 border-b border-slate-100">
-                <div>
-                  <h3 className="text-base font-extrabold text-slate-900">Équipe & Membres du Staff ({businessStaff.length})</h3>
-                  <p className="text-xs text-slate-500 mt-0.5">
-                    Gérez les collaborateurs et attribuez des autorisations sur les sections du Dashboard.
-                  </p>
-                </div>
-                <button
-                  onClick={() => {
-                    setEditingStaffId(null);
-                    setInviteName('');
-                    setInviteEmail('');
-                    setInvitePhone('');
-                    setInviteRoleTitle('');
-                    setInviteSalary(250000);
-                    setInvitePhotoUrl('');
-                    setInvitePerms({
-                      orders: true,
-                      products: true,
-                      customers: true,
-                      agent: false,
-                      settings: false,
-                      staff: false,
-                      finance: false,
-                    });
-                    setIsInviteModalOpen(true);
-                  }}
-                  className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs rounded-xl flex items-center space-x-2 transition-all shadow-sm shadow-emerald-500/10 cursor-pointer"
-                >
-                  <UserPlus className="w-4 h-4" />
-                  <span>Inviter un Collaborateur</span>
-                </button>
-              </div>
-
-              {/* Staff Tabs Filter (Actifs / Révoqués) */}
-              <div className="flex items-center space-x-2 mt-4 pb-2 border-b border-slate-100">
-                <button
-                  type="button"
-                  onClick={() => setStaffTab('active')}
-                  className={`px-3.5 py-1.5 rounded-xl font-bold text-xs transition-all flex items-center space-x-1.5 cursor-pointer ${
-                    staffTab === 'active'
-                      ? 'bg-slate-900 text-white shadow-xs'
-                      : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-                  }`}
-                >
-                  <span>Actifs</span>
-                  <span
-                    className={`px-1.5 py-0.5 rounded-full text-[10px] font-black ${
-                      staffTab === 'active' ? 'bg-emerald-500 text-white' : 'bg-slate-200 text-slate-700'
-                    }`}
-                  >
-                    {businessStaff.filter((s) => !s.revoked).length}
-                  </span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => setStaffTab('revoked')}
-                  className={`px-3.5 py-1.5 rounded-xl font-bold text-xs transition-all flex items-center space-x-1.5 cursor-pointer ${
-                    staffTab === 'revoked'
-                      ? 'bg-slate-900 text-white shadow-xs'
-                      : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-                  }`}
-                >
-                  <span>Révoqués</span>
-                  <span
-                    className={`px-1.5 py-0.5 rounded-full text-[10px] font-black ${
-                      staffTab === 'revoked' ? 'bg-rose-500 text-white' : 'bg-slate-200 text-slate-700'
-                    }`}
-                  >
-                    {businessStaff.filter((s) => s.revoked === true).length}
-                  </span>
-                </button>
-              </div>
-
-              <div className="mt-4 overflow-x-auto">
-                <table className="w-full text-left text-xs text-slate-700">
-                  <thead className="bg-slate-50/90 text-slate-500 uppercase font-black text-[10px] border-b border-slate-200/80">
-                    <tr>
-                      <th className="py-3.5 px-4">Membre</th>
-                      <th className="py-3.5 px-4">Rôle</th>
-                      <th className="py-3.5 px-4">Permissions Actives</th>
-                      {staffTab === 'revoked' && <th className="py-3.5 px-4">Raison</th>}
-                      <th className="py-3.5 px-4 text-right">Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100">
-                    {businessStaff
-                      .filter((s) => (staffTab === 'active' ? !s.revoked : s.revoked === true))
-                      .length === 0 ? (
-                      <tr>
-                        <td colSpan={staffTab === 'revoked' ? 5 : 4} className="py-8 text-center text-slate-400 text-xs italic">
-                          {staffTab === 'active' ? 'Aucun membre actif.' : 'Aucun membre révoqué.'}
-                        </td>
-                      </tr>
-                    ) : (
-                      businessStaff
-                        .filter((s) => (staffTab === 'active' ? !s.revoked : s.revoked === true))
-                        .map((staff) => (
-                          <tr key={staff.id} className="hover:bg-slate-50/80 transition-colors">
-                            <td className="py-4 px-4 font-extrabold text-slate-900">
-                              <div className="flex items-center space-x-2.5">
-                                {staff.photo_url || staff.avatar_url ? (
-                                  <button
-                                    type="button"
-                                    onClick={() => setZoomedPhotoUrl(staff.photo_url || staff.avatar_url || '')}
-                                    className="w-8 h-8 rounded-full overflow-hidden shrink-0 border border-slate-200 hover:ring-2 hover:ring-emerald-500 transition-all cursor-pointer"
-                                    title="Cliquer pour agrandir la photo"
-                                  >
-                                    <img
-                                      src={staff.photo_url || staff.avatar_url}
-                                      alt={staff.name}
-                                      className="w-full h-full object-cover"
-                                    />
-                                  </button>
-                                ) : (
-                                  <div className="w-8 h-8 rounded-full bg-emerald-100 border border-emerald-300 text-emerald-700 flex items-center justify-center font-black shrink-0">
-                                    {staff.name.charAt(0)}
-                                  </div>
-                                )}
-                                <div>
-                                  <span className="block">{staff.name}</span>
-                                  <span className="text-[10px] text-slate-500 font-mono">{staff.email}</span>
-                                </div>
-                              </div>
-                            </td>
-
-                            <td className="py-4 px-4">
-                              <span
-                                className={`px-2.5 py-1 rounded-full text-[10px] font-extrabold uppercase ${
-                                  staff.role === 'owner'
-                                    ? 'bg-amber-50 text-amber-800 border border-amber-200'
-                                    : 'bg-cyan-50 text-cyan-800 border border-cyan-200'
-                                }`}
-                              >
-                                {staff.role === 'owner' ? 'Gérant (Owner)' : 'Collaborateur'}
-                              </span>
-                            </td>
-
-                            <td className="py-4 px-4">
-                              <div className="flex flex-wrap gap-1">
-                                {Object.entries(staff.permissions).map(([perm, val]) => (
-                                  <span
-                                    key={perm}
-                                    className={`px-2 py-0.5 rounded text-[10px] font-extrabold uppercase ${
-                                      val
-                                        ? 'bg-emerald-50 text-emerald-800 border border-emerald-200'
-                                        : 'bg-slate-100 text-slate-400 line-through'
-                                    }`}
-                                  >
-                                    {perm}
-                                  </span>
-                                ))}
-                              </div>
-                            </td>
-
-                            {staffTab === 'revoked' && (
-                              <td className="py-4 px-4">
-                                {staff.revocation_reason && activeStaff.role === 'owner' ? (
-                                  <button
-                                    type="button"
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      setViewingReasonStaff(staff);
-                                    }}
-                                    className="text-[10px] bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200/80 px-2.5 py-1 rounded-md font-medium flex items-center space-x-1 cursor-pointer transition-colors max-w-[200px] group"
-                                    title="Cliquer pour voir la raison complète"
-                                  >
-                                    <span className="truncate text-slate-600">
-                                      {staff.revocation_reason.length > 28
-                                        ? staff.revocation_reason.slice(0, 28) + '...'
-                                        : staff.revocation_reason}
-                                    </span>
-                                    <Info className="w-3 h-3 text-slate-400 group-hover:text-slate-700 shrink-0 ml-0.5" />
-                                  </button>
-                                ) : (
-                                  <span className="text-slate-400 text-[11px] italic">-</span>
-                                )}
-                              </td>
-                            )}
-
-                            <td className="py-4 px-4 text-right">
-                              <div className="flex items-center justify-end space-x-2">
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setEditingStaffId(staff.id);
-                                    setInviteName(staff.name);
-                                    setInviteEmail(staff.email);
-                                    setInvitePhone(staff.phone || '');
-                                    setInviteRoleTitle(staff.role_title || '');
-                                    setInviteSalary(staff.salary ?? 250000);
-                                    setInvitePhotoUrl(staff.photo_url || staff.avatar_url || '');
-                                    setInvitePerms({ ...staff.permissions });
-                                    setIsInviteModalOpen(true);
-                                  }}
-                                  className="p-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl border border-slate-200 transition-colors cursor-pointer flex items-center justify-center"
-                                  title="Éditer les informations du membre"
-                                >
-                                  <Edit2 className="w-3.5 h-3.5" />
-                                </button>
-                                {staffTab === 'active' ? (
-                                  staff.role !== 'owner' && (
-                                    <>
-                                      <button
-                                        type="button"
-                                        onClick={() => {
-                                          setRevokingStaffMember(staff);
-                                          setRevocationReasonInput('');
-                                        }}
-                                        className="px-3 py-1 bg-rose-50 hover:bg-rose-100 text-rose-700 font-extrabold text-xs rounded-xl border border-rose-200 transition-colors cursor-pointer"
-                                      >
-                                        Révoquer
-                                      </button>
-                                      <button
-                                        type="button"
-                                        onClick={() => setDeletingStaffMemberState(staff)}
-                                        className="p-1.5 bg-slate-100 hover:bg-rose-50 text-slate-400 hover:text-rose-600 rounded-xl border border-slate-200 hover:border-rose-200 transition-colors cursor-pointer flex items-center justify-center"
-                                        title="Supprimer définitivement ce membre"
-                                      >
-                                        <Trash2 className="w-3.5 h-3.5" />
-                                      </button>
-                                    </>
-                                  )
-                                ) : (
-                                  <>
-                                    <button
-                                      type="button"
-                                      disabled={reactivatingStaffId === staff.id}
-                                      onClick={() => handleReactivateStaff(staff.id)}
-                                      className="px-3 py-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 font-extrabold text-xs rounded-xl border border-emerald-200 transition-colors cursor-pointer disabled:opacity-50 flex items-center space-x-1"
-                                    >
-                                      {reactivatingStaffId === staff.id ? (
-                                        <>
-                                          <Loader2 className="w-3 h-3 animate-spin" />
-                                          <span>Réactivation...</span>
-                                        </>
-                                      ) : (
-                                        <span>Réactiver</span>
-                                      )}
-                                    </button>
-                                    {staff.role !== 'owner' && (
-                                      <button
-                                        type="button"
-                                        onClick={() => setDeletingStaffMemberState(staff)}
-                                        className="p-1.5 bg-slate-100 hover:bg-rose-50 text-slate-400 hover:text-rose-600 rounded-xl border border-slate-200 hover:border-rose-200 transition-colors cursor-pointer flex items-center justify-center"
-                                        title="Supprimer définitivement ce membre"
-                                      >
-                                        <Trash2 className="w-3.5 h-3.5" />
-                                      </button>
-                                    )}
-                                  </>
-                                )}
-                              </div>
-                            </td>
-                          </tr>
-                        ))
-                    )}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-
-            {/* Webhook Tester Box */}
-            <div className="bg-white p-6 rounded-3xl border border-slate-200/80 shadow-2xs">
-              <h3 className="font-extrabold text-slate-900 text-base">Testeur de Webhook de Paiement (Wave / OM)</h3>
-              <p className="text-xs text-slate-500 mt-1">
-                Simulez l&apos;appel serveur-à-serveur renvoyé par l&apos;agrégateur lors de la validation d&apos;un règlement.
-              </p>
-
-              <div className="mt-4 grid grid-cols-1 sm:grid-cols-3 gap-4">
-                <select
-                  value={testOrderId}
-                  onChange={(e) => setTestOrderId(e.target.value)}
-                  className="bg-slate-50 text-slate-800 border border-slate-200 rounded-xl p-3 text-xs font-bold focus:border-emerald-500 shadow-2xs"
-                >
-                  <option value="">Sélectionner une commande...</option>
-                  {businessOrders.map((o) => (
-                    <option key={o.id} value={o.id}>
-                      #{o.id} - {o.customer_name} ({o.total_amount} {business.currency})
-                    </option>
-                  ))}
-                </select>
-
-                <input
-                  type="text"
-                  value={testPaymentRef}
-                  onChange={(e) => setTestPaymentRef(e.target.value)}
-                  className="bg-slate-50 text-slate-800 border border-slate-200 rounded-xl p-3 text-xs font-mono focus:border-emerald-500 shadow-2xs"
-                  placeholder="Référence de paiement Wave"
-                />
-
-                <button
-                  onClick={runWebhookTest}
-                  className="bg-cyan-600 hover:bg-cyan-700 text-white font-extrabold text-xs rounded-xl p-3 transition-all shadow-2xs"
-                >
-                  Simuler Webhook POST
-                </button>
-              </div>
-
-              {webhookLogs.length > 0 && (
-                <div className="mt-4 p-3 bg-slate-900 rounded-2xl border border-slate-800 font-mono text-[10px] text-cyan-300 space-y-1">
-                  {webhookLogs.map((log, i) => (
-                    <div key={i}>{log}</div>
-                  ))}
-                </div>
-              )}
-            </div>
-
-            {/* Sticky Unified Settings Save Bar */}
-            <div className="sticky bottom-6 z-30 bg-white/95 backdrop-blur-md p-4 rounded-2xl border border-slate-200/90 shadow-xl flex flex-col sm:flex-row items-center justify-between gap-3 transition-all">
-              <div className="flex items-center space-x-3 w-full sm:w-auto">
-                <div
-                  className={`w-3 h-3 rounded-full shrink-0 ${
-                    hasSettingsChanges ? 'bg-amber-500 animate-pulse' : 'bg-emerald-500'
-                  }`}
-                />
-                <div>
-                  <span className="text-xs font-extrabold text-slate-900 block">
-                    {hasSettingsChanges
-                      ? 'Modifications non enregistrées'
-                      : 'Toutes les modifications sont enregistrées'}
-                  </span>
-                  <span className="text-[11px] font-medium text-slate-500">
-                    {hasSettingsChanges
-                      ? 'Réglages généraux, agrégateur ou canaux modifiés.'
-                      : 'Aucune modification en attente.'}
-                  </span>
-                </div>
-              </div>
-
-              <div className="flex items-center space-x-3 w-full sm:w-auto justify-end">
-                <button
-                  type="button"
-                  onClick={handleCancelSettingsChanges}
-                  disabled={!hasSettingsChanges || isBizSaving}
-                  className={`px-4 py-2.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
-                    hasSettingsChanges && !isBizSaving
-                      ? 'bg-slate-100 hover:bg-slate-200 text-slate-700'
-                      : 'bg-slate-100/50 text-slate-400 cursor-not-allowed'
-                  }`}
-                >
-                  Annuler
-                </button>
-                <button
-                  type="button"
-                  onClick={handleSaveAllSettings}
-                  disabled={!hasSettingsChanges || isBizSaving}
-                  className={`px-5 py-2.5 rounded-xl text-xs font-extrabold transition-all flex items-center justify-center space-x-2 cursor-pointer ${
-                    hasSettingsChanges && !isBizSaving
-                      ? 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-md shadow-emerald-600/20 active:scale-98'
-                      : 'bg-slate-200 text-slate-400 cursor-not-allowed'
-                  }`}
-                >
-                  <Check className="w-4 h-4" />
-                  <span>{isBizSaving ? 'Enregistrement...' : 'Enregistrer les modifications'}</span>
-                </button>
-              </div>
-            </div>
-          </div>
+          <SettingsSection
+            business={business}
+            activeStaff={activeStaff}
+            businessOrders={businessOrders}
+            onProcessPayment={onProcessPayment}
+            businessStaff={businessStaff}
+            staffTab={staffTab}
+            setStaffTab={setStaffTab}
+            setEditingStaffId={setEditingStaffId}
+            setInviteName={setInviteName}
+            setInviteEmail={setInviteEmail}
+            setInvitePhone={setInvitePhone}
+            setInviteRoleTitle={setInviteRoleTitle}
+            setInviteSalary={setInviteSalary}
+            setInvitePhotoUrl={setInvitePhotoUrl}
+            setInvitePerms={setInvitePerms}
+            setIsInviteModalOpen={setIsInviteModalOpen}
+            setZoomedPhotoUrl={setZoomedPhotoUrl}
+            setViewingReasonStaff={setViewingReasonStaff}
+            setRevokingStaffMember={setRevokingStaffMember}
+            setRevocationReasonInput={setRevocationReasonInput}
+            reactivatingStaffId={reactivatingStaffId}
+            handleReactivateStaff={handleReactivateStaff}
+            bizName={bizName}
+            setBizName={setBizName}
+            bizWhatsapp={bizWhatsapp}
+            setBizWhatsapp={setBizWhatsapp}
+            bizCurrency={bizCurrency}
+            setBizCurrency={setBizCurrency}
+            isBizLoading={isBizLoading}
+            isBizSaving={isBizSaving}
+            gwProvider={gwProvider}
+            setGwProvider={setGwProvider}
+            gwPublicKey={gwPublicKey}
+            setGwPublicKey={setGwPublicKey}
+            gwSecretKey={gwSecretKey}
+            setGwSecretKey={setGwSecretKey}
+            channelStates={channelStates}
+            setChannelStates={setChannelStates}
+            currentChs={currentChs}
+            hasSettingsChanges={hasSettingsChanges}
+            handleSaveAllSettings={handleSaveAllSettings}
+            handleCancelSettingsChanges={handleCancelSettingsChanges}
+          />
         )}
 
         {/* 7. PAGE MON PROFIL (PERSONAL MEMBER PROFILE - SEPARATED FROM SETTINGS) */}
@@ -5972,54 +4262,6 @@ export default function MerchantDashboard({
               >
                 {revokingLoading && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
                 <span>Confirmer la révocation</span>
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Delete Staff Member Modal */}
-      {deletingStaffMemberState && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs">
-          <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl border border-slate-200 space-y-4 text-slate-800">
-            <div className="flex items-center space-x-2 text-rose-600">
-              <AlertTriangle className="w-5 h-5 shrink-0" />
-              <h3 className="font-extrabold text-slate-900 text-base">Supprimer ce membre d&apos;equipe ?</h3>
-            </div>
-            <p className="text-xs text-slate-600">
-              Etes-vous sur de vouloir retirer <span className="font-bold text-slate-900">{deletingStaffMemberState.name || deletingStaffMemberState.email || 'ce membre'}</span> de votre equipe ? Cette action est irreversible.
-            </p>
-            <div className="flex items-center justify-end space-x-3 pt-2">
-              <button
-                type="button"
-                onClick={() => setDeletingStaffMemberState(null)}
-                disabled={deletingLoading}
-                className="px-4 py-2 border border-slate-200 text-slate-700 font-bold text-xs rounded-xl hover:bg-slate-50 cursor-pointer"
-              >
-                Annuler
-              </button>
-              <button
-                type="button"
-                disabled={deletingLoading}
-                onClick={async () => {
-                  if (!deletingStaffMemberState) return;
-                  setDeletingLoading(true);
-                  try {
-                    const res = await deleteStaffMember(deletingStaffMemberState.id);
-                    if (res.success) {
-                      setDeletingStaffMemberState(null);
-                    } else {
-                      alert(res.error || 'Erreur lors de la suppression du membre.');
-                    }
-                  } catch (err: any) {
-                    alert(err?.message || 'Erreur lors de la suppression.');
-                  } finally {
-                    setDeletingLoading(false);
-                  }
-                }}
-                className="px-4 py-2 bg-rose-600 hover:bg-rose-700 disabled:opacity-50 text-white font-bold text-xs rounded-xl cursor-pointer"
-              >
-                {deletingLoading ? 'Suppression...' : 'Confirmer la suppression'}
               </button>
             </div>
           </div>
