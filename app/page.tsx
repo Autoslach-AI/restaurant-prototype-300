@@ -2,7 +2,8 @@
 
 export const dynamic = 'force-dynamic';
 
-import React, { useState, useEffect, useRef, useSyncExternalStore } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useSyncExternalStore } from 'react';
+import { Check } from 'lucide-react';
 import { getStore, AppStore } from '@/lib/store';
 import Navbar from '@/components/Navbar';
 import ClientStorefront from '@/components/ClientStorefront';
@@ -40,6 +41,9 @@ export default function HomePage() {
 
   // Subscribe to store updates using React 19 pattern
   const [, setTick] = useState(0);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [showRefreshToast, setShowRefreshToast] = useState(false);
+  const toastTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
     const unsubscribe = store.subscribe(() => {
@@ -54,6 +58,124 @@ export default function HomePage() {
     store: undefined,
     isFirstRun: true,
   });
+
+  const isMountedRef = useRef(true);
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+      if (toastTimerRef.current) {
+        clearTimeout(toastTimerRef.current);
+      }
+    };
+  }, []);
+
+  const refreshAllData = useCallback(async () => {
+    console.log('[DEBUG_REFRESH] refreshAllData called', { activeBusinessId: activeBusiness?.id });
+    if (!activeBusiness?.id) {
+      console.warn('[DEBUG_REFRESH] activeBusiness.id is missing, aborting refresh');
+      return;
+    }
+
+    setIsRefreshing(true);
+
+    try {
+      // 1. Staff
+      store.setStaffLoading(true);
+      const fetchCallId = Math.random().toString(36).slice(2, 8);
+      console.log('[DEBUG_REFRESH] calling fetchStaffForBusiness', { businessId: activeBusiness.id, fetchCallId, timestamp: Date.now() });
+      const staffPromise = fetchStaffForBusiness(activeBusiness.id)
+        .then((staffList) => {
+          console.log('[DEBUG_STAFF_CALL] fetch END', { fetchCallId, timestamp: Date.now(), count: staffList?.length });
+          if (!isMountedRef.current) return;
+          store.setStaffList(staffList);
+        })
+        .catch((err) => {
+          console.error('[DEBUG_REFRESH] fetchStaffForBusiness ERROR:', err);
+        });
+
+      // 2. Categories
+      store.setCategoriesLoading(true);
+      console.log('[DEBUG_REFRESH] calling fetchCategoriesForBusiness', { businessId: activeBusiness.id });
+      const categoriesPromise = fetchCategoriesForBusiness(activeBusiness.id)
+        .then((categoriesList) => {
+          if (!isMountedRef.current) return;
+          store.setCategoriesList(categoriesList);
+        })
+        .catch((err) => {
+          console.error('[DEBUG_REFRESH] fetchCategoriesForBusiness ERROR:', err);
+        });
+
+      // 3. Products
+      store.setProductsLoading(true);
+      console.log('[DEBUG_REFRESH] calling fetchProductsForBusiness', { businessId: activeBusiness.id });
+      const productsPromise = fetchProductsForBusiness(activeBusiness.id)
+        .then((productsList) => {
+          if (!isMountedRef.current) return;
+          store.setProductsList(productsList);
+        })
+        .catch((err) => {
+          console.error('[DEBUG_REFRESH] fetchProductsForBusiness ERROR:', err);
+        });
+
+      // 4. Customers
+      if (typeof store.setCustomersLoading === 'function') {
+        store.setCustomersLoading(true);
+      }
+      console.log('[DEBUG_REFRESH] calling fetchCustomersForBusiness', { businessId: activeBusiness.id });
+      const customersPromise = fetchCustomersForBusiness(activeBusiness.id)
+        .then((customersList) => {
+          console.log('[DEBUG_EFFECT] fetchCustomersForBusiness Supabase response received:', {
+            businessId: activeBusiness.id,
+            customersCountReceived: customersList ? customersList.length : 0,
+            customersList,
+            storeCustomersBeforeUpdate: store.customers?.length,
+          });
+          if (!isMountedRef.current) return;
+          if (typeof store.setCustomersList === 'function') {
+            store.setCustomersList(customersList || []);
+          } else {
+            store.customers = customersList || [];
+            store.notify();
+          }
+        })
+        .catch((err) => {
+          console.error('[DEBUG_REFRESH] fetchCustomersForBusiness ERROR:', err);
+        });
+
+      // 5. Orders
+      console.log('[DEBUG_REFRESH] calling fetchOrdersForBusiness', { businessId: activeBusiness.id });
+      const ordersPromise = fetchOrdersForBusiness(activeBusiness.id)
+        .then((ordersList) => {
+          if (!isMountedRef.current) return;
+          if (ordersList && ordersList.length > 0) {
+            store.orders = ordersList;
+            store.notify();
+          }
+        })
+        .catch((err) => {
+          console.error('[DEBUG_REFRESH] fetchOrdersForBusiness ERROR:', err);
+        });
+
+      await Promise.all([staffPromise, categoriesPromise, productsPromise, customersPromise, ordersPromise]);
+
+      if (isMountedRef.current) {
+        setShowRefreshToast(true);
+        if (toastTimerRef.current) {
+          clearTimeout(toastTimerRef.current);
+        }
+        toastTimerRef.current = setTimeout(() => {
+          if (isMountedRef.current) {
+            setShowRefreshToast(false);
+          }
+        }, 2000);
+      }
+    } finally {
+      if (isMountedRef.current) {
+        setIsRefreshing(false);
+      }
+    }
+  }, [activeBusiness?.id, store]);
 
   // Load staff, categories and products from Supabase on mount and whenever active business changes
   useEffect(() => {
@@ -78,66 +200,8 @@ export default function HomePage() {
       isFirstRun: false,
     };
 
-    let isMounted = true;
-    async function loadData() {
-      if (!activeBusiness?.id) return;
-
-      // 1. Staff
-      store.setStaffLoading(true);
-      fetchStaffForBusiness(activeBusiness.id).then((staffList) => {
-        if (!isMounted) return;
-        store.setStaffList(staffList);
-      });
-
-      // 2. Categories
-      store.setCategoriesLoading(true);
-      fetchCategoriesForBusiness(activeBusiness.id).then((categoriesList) => {
-        if (!isMounted) return;
-        store.setCategoriesList(categoriesList);
-      });
-
-      // 3. Products
-      store.setProductsLoading(true);
-      fetchProductsForBusiness(activeBusiness.id).then((productsList) => {
-        if (!isMounted) return;
-        store.setProductsList(productsList);
-      });
-
-      // 4. Customers
-      if (typeof store.setCustomersLoading === 'function') {
-        store.setCustomersLoading(true);
-      }
-      fetchCustomersForBusiness(activeBusiness.id).then((customersList) => {
-        console.log('[DEBUG_EFFECT] fetchCustomersForBusiness Supabase response received:', {
-          businessId: activeBusiness.id,
-          customersCountReceived: customersList ? customersList.length : 0,
-          customersList,
-          storeCustomersBeforeUpdate: store.customers?.length,
-        });
-        if (!isMounted) return;
-        if (typeof store.setCustomersList === 'function') {
-          store.setCustomersList(customersList || []);
-        } else {
-          store.customers = customersList || [];
-          store.notify();
-        }
-      });
-
-      // 5. Orders
-      fetchOrdersForBusiness(activeBusiness.id).then((ordersList) => {
-        if (!isMounted) return;
-        if (ordersList && ordersList.length > 0) {
-          store.orders = ordersList;
-          store.notify();
-        }
-      });
-    }
-
-    loadData();
-    return () => {
-      isMounted = false;
-    };
-  }, [activeBusiness?.id, store]);
+    refreshAllData();
+  }, [activeBusiness?.id, store, refreshAllData]);
   const businesses = store.businesses;
   const categories = store.categories;
   const products = store.products;
@@ -380,9 +444,13 @@ export default function HomePage() {
         onOpenCart={() => setIsCartOpen(true)}
         onToggleWhatsAppSim={() => setIsWhatsAppOpen(!isWhatsAppOpen)}
         isWhatsAppOpen={isWhatsAppOpen}
-        onResetData={() => store.resetStore()}
+        onResetData={() => {
+          console.log('[DEBUG_REFRESH_CLICK] Navbar onResetData button clicked');
+          refreshAllData();
+        }}
         searchQuery={searchQuery}
         onSearchChange={setSearchQuery}
+        isRefreshing={isRefreshing}
       />
 
       {/* Main View Mode */}
@@ -499,6 +567,17 @@ export default function HomePage() {
           onClose={() => setPaymentModalOrder(null)}
           onConfirmPayment={handleConfirmPayment}
         />
+      )}
+
+      {/* Discreet Refresh Success Toast */}
+      {showRefreshToast && (
+        <div
+          id="refresh-success-toast"
+          className="fixed bottom-6 right-6 z-50 flex items-center gap-2 bg-[#241F1B] text-[#FAF7F2] px-4 py-2.5 rounded-xl shadow-lg text-sm font-medium border border-[#3D352E] transition-all"
+        >
+          <Check className="w-4 h-4 text-[#C88A2E]" />
+          <span>Données actualisées</span>
+        </div>
       )}
     </div>
   );

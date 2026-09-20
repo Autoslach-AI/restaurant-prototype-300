@@ -1281,11 +1281,21 @@ export default function MerchantDashboard({
     rawStaff: s,
   }));
 
-  console.log('[DEBUG_TEAM] allTeamRows', {
+  console.log('[DEBUG_TEAM_ROWS] allTeamRows computed', {
     timestamp: Date.now(),
-    count: allTeamRows.length,
-    ids: allTeamRows.map((r) => ({ id: r.id, name: r.name })),
+    storeStaffRawLength: store.staff?.length,
+    businessStaffLength: businessStaff?.length,
+    allTeamRowsLength: allTeamRows.length,
+    storeStaffIds: store.staff?.map(s => ({id: s.id, name: s.name, revoked: s.revoked})),
   });
+
+  useEffect(() => {
+    console.log('[DEBUG_TEAM] allTeamRows', {
+      timestamp: Date.now(),
+      count: allTeamRows.length,
+      ids: allTeamRows.map((r) => ({ id: r.id, name: r.name })),
+    });
+  }, [allTeamRows]);
 
   const todayAttendanceCounts = {
     all: businessStaff.filter((s) => !s.revoked).length,

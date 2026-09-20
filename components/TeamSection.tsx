@@ -123,7 +123,7 @@ export const TeamSection: React.FC<TeamSectionProps> = ({
 
           <button
             onClick={() => {
-              const escapeCsvField = (value: unknown) => `"${String(value ?? '').replace(/"/g, '""')}"`;
+              const escapeCsvField = (value: string) => `"${String(value).replace(/"/g, '""')}"`;
               const csvHeader = ['Employee', 'Téléphone', 'Rôle', 'Position', 'Permissions', 'Hire Date', 'Status'].map(escapeCsvField).join(';') + '\n';
               const csvRows = displayTeamRows.map((e) =>
                 [e.name, e.phone, e.role, e.position, e.permissions, e.hireDate, e.status].map(escapeCsvField).join(';')

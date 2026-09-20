@@ -18,6 +18,7 @@ interface NavbarProps {
   onSearchChange?: (q: string) => void;
   onToggleWhatsAppSim?: () => void;
   isWhatsAppOpen?: boolean;
+  isRefreshing?: boolean;
 }
 
 export default function Navbar({
@@ -31,6 +32,7 @@ export default function Navbar({
   onResetData,
   searchQuery,
   onSearchChange,
+  isRefreshing = false,
 }: NavbarProps) {
   const [localSearch, setLocalSearch] = useState('');
 
@@ -138,13 +140,16 @@ export default function Navbar({
               </button>
             )}
 
-            {/* Reset Seed Data Icon Button */}
+            {/* Reload Page Icon Button */}
             <button
               onClick={onResetData}
-              className="p-2 rounded-xl text-[#6B6259] hover:text-[#241F1B] hover:bg-[#F4EFE6] transition-colors cursor-pointer"
-              title="Réinitialiser les données de démo"
+              disabled={isRefreshing}
+              className={`p-2 rounded-xl text-[#6B6259] hover:text-[#241F1B] hover:bg-[#F4EFE6] transition-colors ${
+                isRefreshing ? 'opacity-60 cursor-not-allowed' : 'cursor-pointer'
+              }`}
+              title={isRefreshing ? 'Actualisation en cours...' : 'Actualiser la page'}
             >
-              <RotateCcw className="w-4 h-4" />
+              <RotateCcw className={`w-4 h-4 ${isRefreshing ? 'animate-spin text-[#C88A2E]' : ''}`} />
             </button>
           </div>
         </div>

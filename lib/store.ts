@@ -768,8 +768,13 @@ export class AppStore {
     this.notify();
   }
 
-  setStaffList(staffMembers: Staff[]) {
-    this.staff = staffMembers;
+  setStaffList(staffList: Staff[]) {
+    console.log('[DEBUG_STAFF] setStaffList called', {
+      timestamp: Date.now(),
+      newCount: staffList.length,
+      stackTrace: new Error().stack,
+    });
+    this.staff = staffList;
     this.staffLoading = false;
     // Set active staff to first available member or owner
     const activeBiz = this.getActiveBusiness();
@@ -832,6 +837,10 @@ export class AppStore {
 
   getStaffForBusiness(businessId?: string): Staff[] {
     const bizId = businessId || this.activeBusinessId;
+    console.log('[DEBUG_BIZ_FILTER] getStaffForBusiness', {
+      bizIdRequested: JSON.stringify(bizId),
+      staffBusinessIds: this.staff.map((s) => ({ name: s.name, business_id: JSON.stringify(s.business_id) })),
+    });
     return this.staff.filter((s) => s.business_id === bizId);
   }
 
