@@ -135,7 +135,7 @@ export const TeamSection: React.FC<TeamSectionProps> = ({
 
   // 3. Export PDF (.pdf)
   const handleExportPdf = () => {
-    const doc = new jsPDF();
+    const doc = new jsPDF({ orientation: 'landscape', format: 'a4' });
     const headers = [['Employee', 'Téléphone', 'Rôle', 'Position', 'Permissions', 'Hire Date', 'Salaire']];
     const data = displayTeamRows.map((e) => [
       e.name,
@@ -164,6 +164,15 @@ export const TeamSection: React.FC<TeamSectionProps> = ({
         lineColor: [200, 200, 200],
         lineWidth: 0.1,
       },
+      columnStyles: {
+        0: { cellWidth: 'auto' },
+        1: { cellWidth: 35 },
+        2: { cellWidth: 28 },
+        3: { cellWidth: 30 },
+        4: { cellWidth: 'auto' },
+        5: { cellWidth: 28, halign: 'center' },
+        6: { cellWidth: 36, halign: 'right' },
+      },
     });
 
     doc.save('equipe_export.pdf');
@@ -172,8 +181,6 @@ export const TeamSection: React.FC<TeamSectionProps> = ({
   // 4. Export Word (.docx)
   const handleExportWord = async () => {
     const headers = ['Employee', 'Téléphone', 'Rôle', 'Position', 'Permissions', 'Hire Date', 'Salaire'];
-    const columnPercentages = [18, 13, 12, 15, 20, 12, 10];
-    const columnWidthsDxa = [1620, 1170, 1080, 1350, 1800, 1080, 900];
 
     const borderOption = {
       style: BorderStyle.SINGLE,
@@ -200,9 +207,8 @@ export const TeamSection: React.FC<TeamSectionProps> = ({
     const headerRow = new TableRow({
       tableHeader: true,
       children: headers.map(
-        (h, index) =>
+        (h) =>
           new TableCell({
-            width: { size: columnPercentages[index], type: WidthType.PERCENTAGE },
             borders: cellBorders,
             shading: { fill: "F1F5F9" },
             children: [
@@ -217,18 +223,9 @@ export const TeamSection: React.FC<TeamSectionProps> = ({
     const dataRows = displayTeamRows.map(
       (e) =>
         new TableRow({
-          children: [
-            e.name,
-            e.phone,
-            e.role,
-            e.position,
-            e.permissions,
-            e.hireDate,
-            formatSalary(e.salary),
-          ].map(
-            (val, index) =>
+          children: [e.name, e.phone, e.role, e.position, e.permissions, e.hireDate, formatSalary(e.salary)].map(
+            (val) =>
               new TableCell({
-                width: { size: columnPercentages[index], type: WidthType.PERCENTAGE },
                 borders: cellBorders,
                 children: [
                   new Paragraph({
@@ -242,7 +239,6 @@ export const TeamSection: React.FC<TeamSectionProps> = ({
 
     const table = new Table({
       width: { size: 100, type: WidthType.PERCENTAGE },
-      columnWidths: columnWidthsDxa,
       borders: tableBorders,
       rows: [headerRow, ...dataRows],
     });
@@ -353,16 +349,6 @@ export const TeamSection: React.FC<TeamSectionProps> = ({
 
             {isExportMenuOpen && (
               <div className="absolute right-0 mt-1.5 w-44 bg-white rounded-xl shadow-lg border border-slate-200 py-1 z-30 animate-in fade-in duration-100">
-                <button
-                  onClick={() => {
-                    handleExportCsv();
-                    setIsExportMenuOpen(false);
-                  }}
-                  className="w-full text-left px-3.5 py-2 text-xs text-slate-700 hover:bg-slate-50 flex items-center justify-between cursor-pointer"
-                >
-                  <span className="font-medium">CSV</span>
-                  <span className="text-[10px] text-slate-400 font-mono">.csv</span>
-                </button>
                 <button
                   onClick={() => {
                     handleExportExcel();
