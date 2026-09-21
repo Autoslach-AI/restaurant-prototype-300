@@ -28,6 +28,7 @@ import {
   BorderStyle,
   TextRun,
   HeadingLevel,
+  TableLayoutType,
 } from 'docx';
 import { Business, Staff, StaffPermissions } from '@/lib/types';
 
@@ -166,12 +167,12 @@ export const TeamSection: React.FC<TeamSectionProps> = ({
       },
       columnStyles: {
         0: { cellWidth: 'auto' },
-        1: { cellWidth: 35 },
-        2: { cellWidth: 28 },
-        3: { cellWidth: 30 },
+        1: { cellWidth: 32 },
+        2: { cellWidth: 26 },
+        3: { cellWidth: 32 },
         4: { cellWidth: 'auto' },
-        5: { cellWidth: 28, halign: 'center' },
-        6: { cellWidth: 36, halign: 'right' },
+        5: { cellWidth: 24, halign: 'center' },
+        6: { cellWidth: 28, halign: 'right' },
       },
     });
 
@@ -181,6 +182,8 @@ export const TeamSection: React.FC<TeamSectionProps> = ({
   // 4. Export Word (.docx)
   const handleExportWord = async () => {
     const headers = ['Employee', 'Téléphone', 'Rôle', 'Position', 'Permissions', 'Hire Date', 'Salaire'];
+    const columnPercentages = [18, 13, 12, 15, 20, 12, 10];
+    const columnWidthsDxa = [1620, 1170, 1080, 1350, 1800, 1080, 900];
 
     const borderOption = {
       style: BorderStyle.SINGLE,
@@ -207,8 +210,9 @@ export const TeamSection: React.FC<TeamSectionProps> = ({
     const headerRow = new TableRow({
       tableHeader: true,
       children: headers.map(
-        (h) =>
+        (h, index) =>
           new TableCell({
+            width: { size: columnPercentages[index], type: WidthType.PERCENTAGE },
             borders: cellBorders,
             shading: { fill: "F1F5F9" },
             children: [
@@ -223,9 +227,18 @@ export const TeamSection: React.FC<TeamSectionProps> = ({
     const dataRows = displayTeamRows.map(
       (e) =>
         new TableRow({
-          children: [e.name, e.phone, e.role, e.position, e.permissions, e.hireDate, formatSalary(e.salary)].map(
-            (val) =>
+          children: [
+            e.name,
+            e.phone,
+            e.role,
+            e.position,
+            e.permissions,
+            e.hireDate,
+            formatSalary(e.salary),
+          ].map(
+            (val, index) =>
               new TableCell({
+                width: { size: columnPercentages[index], type: WidthType.PERCENTAGE },
                 borders: cellBorders,
                 children: [
                   new Paragraph({
@@ -239,6 +252,8 @@ export const TeamSection: React.FC<TeamSectionProps> = ({
 
     const table = new Table({
       width: { size: 100, type: WidthType.PERCENTAGE },
+      layout: TableLayoutType.FIXED,
+      columnWidths: columnWidthsDxa,
       borders: tableBorders,
       rows: [headerRow, ...dataRows],
     });
