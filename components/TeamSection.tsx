@@ -167,12 +167,12 @@ export const TeamSection: React.FC<TeamSectionProps> = ({
       },
       columnStyles: {
         0: { cellWidth: 'auto' },
-        1: { cellWidth: 32 },
+        1: { cellWidth: 30 },
         2: { cellWidth: 26 },
-        3: { cellWidth: 32 },
+        3: { cellWidth: 30 },
         4: { cellWidth: 'auto' },
         5: { cellWidth: 24, halign: 'center' },
-        6: { cellWidth: 28, halign: 'right' },
+        6: { cellWidth: 36, halign: 'right', fontSize: 7.5 },
       },
     });
 
