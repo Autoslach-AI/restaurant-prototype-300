@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import Image from 'next/image';
 import { motion, AnimatePresence } from 'motion/react';
 import {
@@ -8,11 +8,27 @@ import {
   ListFilter,
   FileText,
   ChevronRight,
+  ChevronDown,
   Plus,
   X,
   Check,
   Settings,
 } from 'lucide-react';
+import * as XLSX from 'xlsx';
+import jsPDF from 'jspdf';
+import autoTable from 'jspdf-autotable';
+import {
+  Document,
+  Packer,
+  Paragraph,
+  Table,
+  TableRow,
+  TableCell,
+  WidthType,
+  BorderStyle,
+  TextRun,
+  HeadingLevel,
+} from 'docx';
 import { Business, Staff, StaffPermissions } from '@/lib/types';
 
 export interface TeamMemberRow {
@@ -54,6 +70,208 @@ export const TeamSection: React.FC<TeamSectionProps> = ({
   const [selectedTeamMemberIds, setSelectedTeamMemberIds] = useState<string[]>([]);
   const [teamSortActive, setTeamSortActive] = useState<boolean>(true);
   const [selectedTeamMemberForDetail, setSelectedTeamMemberForDetail] = useState<TeamMemberRow | null>(null);
+  const [isExportMenuOpen, setIsExportMenuOpen] = useState(false);
+  const exportMenuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (exportMenuRef.current && !exportMenuRef.current.contains(event.target as Node)) {
+        setIsExportMenuOpen(false);
+      }
+    }
+    if (isExportMenuOpen) {
+      document.addEventListener('mousedown', handleClickOutside);
+    }
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [isExportMenuOpen]);
+
+  const formatSalary = (salary: number | string): string => {
+    if (typeof salary === 'number') {
+      return `${salary.toLocaleString('fr-FR')} FCFA`;
+    }
+    const parsed = Number(salary);
+    if (typeof salary === 'string' && salary.trim() !== '' && !isNaN(parsed)) {
+      return `${parsed.toLocaleString('fr-FR')} FCFA`;
+    }
+    return salary ? String(salary) : '—';
+  };
+
+  // 1. Export CSV
+  const handleExportCsv = () => {
+    const escapeCsvField = (value: string) => `"${String(value).replace(/"/g, '""')}"`;
+    const csvHeader = ['Employee', 'Téléphone', 'Rôle', 'Position', 'Permissions', 'Hire Date', 'Salaire'].map(escapeCsvField).join(';') + '\n';
+    const csvRows = displayTeamRows.map((e) =>
+      [e.name, e.phone, e.role, e.position, e.permissions, e.hireDate, formatSalary(e.salary)].map(escapeCsvField).join(';')
+    ).join('\n');
+    const blob = new Blob(['\uFEFF' + csvHeader + csvRows], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.setAttribute("href", url);
+    link.setAttribute("download", "equipe_export.csv");
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
+
+  // 2. Export Excel (.xlsx)
+  const handleExportExcel = () => {
+    const excelData = displayTeamRows.map((e) => ({
+      'Employee': e.name,
+      'Téléphone': e.phone,
+      'Rôle': e.role,
+      'Position': e.position,
+      'Permissions': e.permissions,
+      'Hire Date': e.hireDate,
+      'Salaire': formatSalary(e.salary),
+    }));
+    const worksheet = XLSX.utils.json_to_sheet(excelData);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, 'Équipe');
+    XLSX.writeFile(workbook, 'equipe_export.xlsx');
+  };
+
+  // 3. Export PDF (.pdf)
+  const handleExportPdf = () => {
+    const doc = new jsPDF();
+    const headers = [['Employee', 'Téléphone', 'Rôle', 'Position', 'Permissions', 'Hire Date', 'Salaire']];
+    const data = displayTeamRows.map((e) => [
+      e.name,
+      e.phone,
+      e.role,
+      e.position,
+      e.permissions,
+      e.hireDate,
+      formatSalary(e.salary),
+    ]);
+
+    autoTable(doc, {
+      head: headers,
+      body: data,
+      theme: 'grid',
+      styles: {
+        fontSize: 8,
+        cellPadding: 3,
+        lineColor: [200, 200, 200],
+        lineWidth: 0.1,
+      },
+      headStyles: {
+        fillColor: [30, 41, 59],
+        textColor: [255, 255, 255],
+        fontStyle: 'bold',
+        lineColor: [200, 200, 200],
+        lineWidth: 0.1,
+      },
+    });
+
+    doc.save('equipe_export.pdf');
+  };
+
+  // 4. Export Word (.docx)
+  const handleExportWord = async () => {
+    const headers = ['Employee', 'Téléphone', 'Rôle', 'Position', 'Permissions', 'Hire Date', 'Salaire'];
+    const columnPercentages = [18, 13, 12, 15, 20, 12, 10];
+    const columnWidthsDxa = [1620, 1170, 1080, 1350, 1800, 1080, 900];
+
+    const borderOption = {
+      style: BorderStyle.SINGLE,
+      size: 1,
+      color: "CCCCCC",
+    };
+
+    const cellBorders = {
+      top: borderOption,
+      bottom: borderOption,
+      left: borderOption,
+      right: borderOption,
+    };
+
+    const tableBorders = {
+      top: borderOption,
+      bottom: borderOption,
+      left: borderOption,
+      right: borderOption,
+      insideHorizontal: borderOption,
+      insideVertical: borderOption,
+    };
+
+    const headerRow = new TableRow({
+      tableHeader: true,
+      children: headers.map(
+        (h, index) =>
+          new TableCell({
+            width: { size: columnPercentages[index], type: WidthType.PERCENTAGE },
+            borders: cellBorders,
+            shading: { fill: "F1F5F9" },
+            children: [
+              new Paragraph({
+                children: [new TextRun({ text: h, bold: true, size: 18 })],
+              }),
+            ],
+          })
+      ),
+    });
+
+    const dataRows = displayTeamRows.map(
+      (e) =>
+        new TableRow({
+          children: [
+            e.name,
+            e.phone,
+            e.role,
+            e.position,
+            e.permissions,
+            e.hireDate,
+            formatSalary(e.salary),
+          ].map(
+            (val, index) =>
+              new TableCell({
+                width: { size: columnPercentages[index], type: WidthType.PERCENTAGE },
+                borders: cellBorders,
+                children: [
+                  new Paragraph({
+                    children: [new TextRun({ text: String(val ?? ''), size: 18 })],
+                  }),
+                ],
+              })
+          ),
+        })
+    );
+
+    const table = new Table({
+      width: { size: 100, type: WidthType.PERCENTAGE },
+      columnWidths: columnWidthsDxa,
+      borders: tableBorders,
+      rows: [headerRow, ...dataRows],
+    });
+
+    const doc = new Document({
+      sections: [
+        {
+          children: [
+            new Paragraph({
+              text: "Liste de l'équipe",
+              heading: HeadingLevel.HEADING_1,
+              spacing: { after: 200 },
+            }),
+            table,
+          ],
+        },
+      ],
+    });
+
+    const blob = await Packer.toBlob(doc);
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.setAttribute("href", url);
+    link.setAttribute("download", "equipe_export.docx");
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
 
   const uniqueTeamRoles = Array.from(new Set(allTeamRows.map((r) => r.role).filter(Boolean)));
 
@@ -121,29 +339,63 @@ export const TeamSection: React.FC<TeamSectionProps> = ({
             </span>
           </button>
 
-          <button
-            onClick={() => {
-              const escapeCsvField = (value: string) => `"${String(value).replace(/"/g, '""')}"`;
-              const csvHeader = ['Employee', 'Téléphone', 'Rôle', 'Position', 'Permissions', 'Hire Date', 'Status'].map(escapeCsvField).join(';') + '\n';
-              const csvRows = displayTeamRows.map((e) =>
-                [e.name, e.phone, e.role, e.position, e.permissions, e.hireDate, e.status].map(escapeCsvField).join(';')
-              ).join('\n');
-              const blob = new Blob(['\uFEFF' + csvHeader + csvRows], { type: 'text/csv;charset=utf-8;' });
-              const url = URL.createObjectURL(blob);
-              const link = document.createElement("a");
-              link.setAttribute("href", url);
-              link.setAttribute("download", "equipe_export.csv");
-              document.body.appendChild(link);
-              link.click();
-              document.body.removeChild(link);
-            }}
-            className="px-3.5 py-2 rounded-xl border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 text-xs font-medium flex items-center space-x-1.5 transition-all cursor-pointer shadow-2xs"
-            title="Exporter la liste en CSV"
-          >
-            <FileText className="w-3.5 h-3.5 text-slate-500" />
-            <span>Export</span>
-            <ChevronRight className="w-3 h-3 text-slate-400 rotate-90" />
-          </button>
+          {/* Export Dropdown */}
+          <div className="relative" ref={exportMenuRef}>
+            <button
+              onClick={() => setIsExportMenuOpen(!isExportMenuOpen)}
+              className="px-3.5 py-2 rounded-xl border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 text-xs font-medium flex items-center space-x-1.5 transition-all cursor-pointer shadow-2xs"
+              title="Exporter la liste"
+            >
+              <FileText className="w-3.5 h-3.5 text-slate-500" />
+              <span>Export</span>
+              <ChevronDown className={`w-3 h-3 text-slate-400 transition-transform ${isExportMenuOpen ? 'rotate-180' : ''}`} />
+            </button>
+
+            {isExportMenuOpen && (
+              <div className="absolute right-0 mt-1.5 w-44 bg-white rounded-xl shadow-lg border border-slate-200 py-1 z-30 animate-in fade-in duration-100">
+                <button
+                  onClick={() => {
+                    handleExportCsv();
+                    setIsExportMenuOpen(false);
+                  }}
+                  className="w-full text-left px-3.5 py-2 text-xs text-slate-700 hover:bg-slate-50 flex items-center justify-between cursor-pointer"
+                >
+                  <span className="font-medium">CSV</span>
+                  <span className="text-[10px] text-slate-400 font-mono">.csv</span>
+                </button>
+                <button
+                  onClick={() => {
+                    handleExportExcel();
+                    setIsExportMenuOpen(false);
+                  }}
+                  className="w-full text-left px-3.5 py-2 text-xs text-slate-700 hover:bg-slate-50 flex items-center justify-between cursor-pointer"
+                >
+                  <span className="font-medium">Excel</span>
+                  <span className="text-[10px] text-emerald-600 font-mono font-medium">.xlsx</span>
+                </button>
+                <button
+                  onClick={() => {
+                    handleExportPdf();
+                    setIsExportMenuOpen(false);
+                  }}
+                  className="w-full text-left px-3.5 py-2 text-xs text-slate-700 hover:bg-slate-50 flex items-center justify-between cursor-pointer"
+                >
+                  <span className="font-medium">PDF</span>
+                  <span className="text-[10px] text-rose-600 font-mono font-medium">.pdf</span>
+                </button>
+                <button
+                  onClick={() => {
+                    handleExportWord();
+                    setIsExportMenuOpen(false);
+                  }}
+                  className="w-full text-left px-3.5 py-2 text-xs text-slate-700 hover:bg-slate-50 flex items-center justify-between cursor-pointer"
+                >
+                  <span className="font-medium">Word</span>
+                  <span className="text-[10px] text-blue-600 font-mono font-medium">.doc</span>
+                </button>
+              </div>
+            )}
+          </div>
 
           <button
             onClick={() => setIsInviteModalOpen(true)}
