@@ -1,7 +1,5 @@
 'use client';
 
-export const dynamic = 'force-dynamic';
-
 import React, { useState, useEffect, useRef, useCallback, useSyncExternalStore } from 'react';
 import { Check } from 'lucide-react';
 import { getStore, AppStore } from '@/lib/store';
