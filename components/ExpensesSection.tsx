@@ -9,6 +9,7 @@ import {
   Edit2,
   X,
   RotateCcw,
+  ArrowLeft,
 } from 'lucide-react';
 import {
   Business,
@@ -19,8 +20,11 @@ import {
 import {
   fetchExpensesForBusiness,
   fetchExpenseCategoriesForBusiness,
+  fetchTrashedCategoriesForBusiness,
   insertExpenseCategory,
   deleteExpenseCategory,
+  softDeleteExpenseCategory,
+  restoreExpenseCategory,
   insertExpense,
   updateExpense,
   deleteExpense,
@@ -50,15 +54,18 @@ function getCategoryBadgeStyle(category?: string | null): string {
 export interface ExpensesSectionProps {
   business: Business;
   activeStaff?: Staff | null;
+  onBackToDashboard?: () => void;
 }
 
 export default function ExpensesSection({
   business,
   activeStaff,
+  onBackToDashboard,
 }: ExpensesSectionProps) {
   // Expenses state & modal
   const [businessExpenses, setBusinessExpenses] = useState<Expense[]>([]);
   const [expenseCategories, setExpenseCategories] = useState<ExpenseCategoryItem[]>([]);
+  const [trashedCategories, setTrashedCategories] = useState<ExpenseCategoryItem[]>([]);
   const [expensesLoading, setExpensesLoading] = useState<boolean>(false);
   const [expenseSearch, setExpenseSearch] = useState<string>('');
   const [expenseCategoryFilter, setExpenseCategoryFilter] = useState<string>('all');
@@ -73,18 +80,7 @@ export default function ExpensesSection({
   const [expenseError, setExpenseError] = useState<string | null>(null);
   const [expenseDeletingId, setExpenseDeletingId] = useState<string | null>(null);
 
-  // Soft-deleted categories state with localStorage persistence
-  const [deletedCategoryIds, setDeletedCategoryIds] = useState<string[]>(() => {
-    if (typeof window !== 'undefined' && business?.id) {
-      try {
-        const saved = localStorage.getItem(`expenses_deleted_categories_${business.id}`);
-        return saved ? JSON.parse(saved) : [];
-      } catch {
-        return [];
-      }
-    }
-    return [];
-  });
+  // Trash modal & actions state
   const [isTrashModalOpen, setIsTrashModalOpen] = useState<boolean>(false);
 
   // Expense Category modal & actions state
@@ -94,20 +90,8 @@ export default function ExpensesSection({
   const [expenseCatError, setExpenseCatError] = useState<string | null>(null);
   const [expenseCatDeletingId, setExpenseCatDeletingId] = useState<string | null>(null);
 
-  // Sync deleted categories to localStorage
-  useEffect(() => {
-    if (business?.id && typeof window !== 'undefined') {
-      try {
-        localStorage.setItem(`expenses_deleted_categories_${business.id}`, JSON.stringify(deletedCategoryIds));
-      } catch {
-        // ignore
-      }
-    }
-  }, [deletedCategoryIds, business?.id]);
-
-  // Derived active and trashed categories
-  const activeCategories = expenseCategories.filter((cat) => !deletedCategoryIds.includes(cat.id));
-  const trashedCategories = expenseCategories.filter((cat) => deletedCategoryIds.includes(cat.id));
+  // Active categories are directly the fetched active categories
+  const activeCategories = expenseCategories;
 
   // Load expenses and categories effect
   useEffect(() => {
@@ -116,13 +100,15 @@ export default function ExpensesSection({
       if (!business?.id) return;
       setExpensesLoading(true);
       try {
-        const [expensesData, categoriesData] = await Promise.all([
+        const [expensesData, categoriesData, trashedData] = await Promise.all([
           fetchExpensesForBusiness(business.id),
           fetchExpenseCategoriesForBusiness(business.id),
+          fetchTrashedCategoriesForBusiness(business.id),
         ]);
         if (isMounted) {
           setBusinessExpenses(expensesData || []);
           setExpenseCategories(categoriesData || []);
+          setTrashedCategories(trashedData || []);
           setExpensesLoading(false);
         }
       } catch (err) {
@@ -163,8 +149,6 @@ export default function ExpensesSection({
       setExpenseCategories((prev) =>
         [...prev, res.category!].sort((a, b) => a.name.localeCompare(b.name, 'fr', { sensitivity: 'base' }))
       );
-      // Ensure it's not marked deleted
-      setDeletedCategoryIds((prev) => prev.filter((id) => id !== res.category!.id));
       setNewExpenseCatName('');
       setIsExpenseCategoryModalOpen(false);
     } else {
@@ -172,16 +156,57 @@ export default function ExpensesSection({
     }
   };
 
-  const handleSoftDeleteCategory = (catId: string) => {
-    setDeletedCategoryIds((prev) => (prev.includes(catId) ? prev : [...prev, catId]));
+  const handleSoftDeleteCategory = async (catId: string) => {
     const targetCat = expenseCategories.find((c) => c.id === catId);
-    if (targetCat && expenseCategoryFilter === targetCat.name) {
+    if (!targetCat) return;
+
+    // Optimistically move to trashed
+    setExpenseCategories((prev) => prev.filter((c) => c.id !== catId));
+    setTrashedCategories((prev) =>
+      [...prev, { ...targetCat, is_active: false }].sort((a, b) =>
+        a.name.localeCompare(b.name, 'fr', { sensitivity: 'base' })
+      )
+    );
+    if (expenseCategoryFilter === targetCat.name) {
       setExpenseCategoryFilter('all');
+    }
+
+    const res = await softDeleteExpenseCategory(catId);
+    if (!res.success) {
+      // Revert if error
+      setExpenseCategories((prev) =>
+        [...prev, targetCat].sort((a, b) =>
+          a.name.localeCompare(b.name, 'fr', { sensitivity: 'base' })
+        )
+      );
+      setTrashedCategories((prev) => prev.filter((c) => c.id !== catId));
+      alert(res.error || 'Erreur lors de la mise dans la corbeille de la catégorie.');
     }
   };
 
-  const handleRestoreCategory = (catId: string) => {
-    setDeletedCategoryIds((prev) => prev.filter((id) => id !== catId));
+  const handleRestoreCategory = async (catId: string) => {
+    const targetCat = trashedCategories.find((c) => c.id === catId);
+    if (!targetCat) return;
+
+    // Optimistically restore to active
+    setTrashedCategories((prev) => prev.filter((c) => c.id !== catId));
+    setExpenseCategories((prev) =>
+      [...prev, { ...targetCat, is_active: true }].sort((a, b) =>
+        a.name.localeCompare(b.name, 'fr', { sensitivity: 'base' })
+      )
+    );
+
+    const res = await restoreExpenseCategory(catId);
+    if (!res.success) {
+      // Revert if error
+      setTrashedCategories((prev) =>
+        [...prev, targetCat].sort((a, b) =>
+          a.name.localeCompare(b.name, 'fr', { sensitivity: 'base' })
+        )
+      );
+      setExpenseCategories((prev) => prev.filter((c) => c.id !== catId));
+      alert(res.error || 'Erreur lors de la restauration de la catégorie.');
+    }
   };
 
   const handlePermanentDeleteCategory = async (catId: string, catName: string) => {
@@ -193,7 +218,7 @@ export default function ExpensesSection({
     setExpenseCatDeletingId(null);
     if (res.success) {
       setExpenseCategories((prev) => prev.filter((c) => c.id !== catId));
-      setDeletedCategoryIds((prev) => prev.filter((id) => id !== catId));
+      setTrashedCategories((prev) => prev.filter((c) => c.id !== catId));
     } else {
       alert(res.error || 'Erreur lors de la suppression définitive de la catégorie.');
     }
@@ -302,14 +327,37 @@ export default function ExpensesSection({
 
   return (
     <div className="space-y-5">
-      {/* Title & Subtitle */}
-      <div className="flex items-center gap-3">
-        <div className="w-10 h-10 rounded-2xl bg-emerald-50 text-emerald-600 flex items-center justify-center shrink-0 border border-emerald-100 shadow-2xs">
-          <Receipt className="w-5 h-5" />
+      {/* Top Header Card: Retour au Tableau de bord | Page actuelle : Dépenses + Title & Subtitle */}
+      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 bg-white p-3.5 px-5 rounded-3xl border border-slate-200/80 shadow-2xs">
+        <div className="flex items-center space-x-3 flex-wrap gap-y-2">
+          {onBackToDashboard && (
+            <>
+              <button
+                type="button"
+                onClick={onBackToDashboard}
+                className="inline-flex items-center space-x-2 text-xs font-extrabold text-slate-700 hover:text-emerald-700 bg-slate-100/90 hover:bg-emerald-50 px-3.5 py-2 rounded-2xl border border-slate-200 hover:border-emerald-200 transition-all shadow-2xs group cursor-pointer"
+              >
+                <ArrowLeft className="w-4 h-4 text-slate-500 group-hover:text-emerald-600 transition-colors" />
+                <span>Retour au Tableau de bord</span>
+              </button>
+
+              <span className="text-slate-300 font-light text-sm hidden sm:inline">|</span>
+            </>
+          )}
+
+          <span className="text-xs font-bold text-slate-500">
+            Page actuelle : <span className="text-slate-900 font-extrabold">Dépenses</span>
+          </span>
         </div>
-        <div>
-          <h2 className="text-lg font-bold text-slate-900">Gestion des Dépenses</h2>
-          <p className="text-xs text-slate-500 font-medium">Suivez et catégorisez les charges de votre entreprise</p>
+
+        <div className="flex items-center gap-2.5">
+          <div className="w-8 h-8 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center shrink-0 border border-emerald-100 shadow-2xs">
+            <Receipt className="w-4 h-4" />
+          </div>
+          <div>
+            <h2 className="text-xs font-black text-slate-900 leading-tight">Gestion des Dépenses</h2>
+            <p className="text-[11px] text-slate-500 font-medium hidden md:block">Suivez et catégorisez les charges de votre entreprise</p>
+          </div>
         </div>
       </div>
 
@@ -667,7 +715,16 @@ export default function ExpensesSection({
               {trashedCategories.length > 1 && (
                 <button
                   type="button"
-                  onClick={() => setDeletedCategoryIds([])}
+                  onClick={async () => {
+                    const toRestore = [...trashedCategories];
+                    setTrashedCategories([]);
+                    setExpenseCategories((prev) =>
+                      [...prev, ...toRestore.map((c) => ({ ...c, is_active: true }))].sort((a, b) =>
+                        a.name.localeCompare(b.name, 'fr', { sensitivity: 'base' })
+                      )
+                    );
+                    await Promise.all(toRestore.map((cat) => restoreExpenseCategory(cat.id)));
+                  }}
                   className="text-xs font-semibold text-emerald-600 hover:text-emerald-700 hover:underline cursor-pointer"
                 >
                   Tout restaurer

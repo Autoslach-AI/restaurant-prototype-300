@@ -278,6 +278,7 @@ export interface ExpenseCategoryItem {
   id: string;
   business_id: string;
   name: string;
+  is_active?: boolean;
   created_at: string;
 }
 

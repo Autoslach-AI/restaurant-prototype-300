@@ -2553,7 +2553,7 @@ export async function deleteExpense(
  */
 
 /**
- * 1. Fetch all expense categories for a business from platform_expense_categories in Supabase,
+ * 1. Fetch all active expense categories for a business from platform_expense_categories in Supabase,
  * ordered by name ascending.
  * Returns empty array if error or no credentials.
  */
@@ -2574,6 +2574,7 @@ export async function fetchExpenseCategoriesForBusiness(
       .from('platform_expense_categories')
       .select('*')
       .eq('business_id', businessId)
+      .eq('is_active', true)
       .order('name', { ascending: true });
 
     if (error) {
@@ -2586,6 +2587,93 @@ export async function fetchExpenseCategoriesForBusiness(
     console.warn('Supabase fetch expense categories exception:', err?.message || err);
     return [];
   }
+}
+
+/**
+ * 1b. Fetch all trashed (is_active = false) expense categories for a business.
+ */
+export async function fetchTrashedCategoriesForBusiness(
+  businessId: string
+): Promise<ExpenseCategoryItem[]> {
+  const hasCredentials =
+    Boolean(process.env.NEXT_PUBLIC_SUPABASE_URL?.trim()) &&
+    Boolean(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY?.trim());
+
+  if (!hasCredentials) {
+    return [];
+  }
+
+  try {
+    const client = getSupabase();
+    const { data, error } = await (client as any)
+      .from('platform_expense_categories')
+      .select('*')
+      .eq('business_id', businessId)
+      .eq('is_active', false)
+      .order('name', { ascending: true });
+
+    if (error) {
+      console.warn('Supabase fetch trashed expense categories error:', error.message);
+      return [];
+    }
+
+    return (data as ExpenseCategoryItem[]) || [];
+  } catch (err: any) {
+    console.warn('Supabase fetch trashed expense categories exception:', err?.message || err);
+    return [];
+  }
+}
+
+/**
+ * 1c. Update active status (soft delete / restore) for an expense category in Supabase.
+ */
+export async function updateExpenseCategoryActiveStatus(
+  categoryId: string,
+  isActive: boolean
+): Promise<{ success: boolean; error?: string }> {
+  const hasCredentials =
+    Boolean(process.env.NEXT_PUBLIC_SUPABASE_URL?.trim()) &&
+    Boolean(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY?.trim());
+
+  if (!hasCredentials) {
+    return { success: false, error: 'Configuration Supabase manquante' };
+  }
+
+  try {
+    const client = getSupabase();
+    const { data: updatedRows, error } = await (client as any)
+      .from('platform_expense_categories')
+      .update({ is_active: isActive })
+      .eq('id', categoryId)
+      .select();
+
+    if (error) {
+      console.warn('Supabase update expense category active status error:', error.message);
+      return { success: false, error: error.message };
+    }
+
+    if (!updatedRows || updatedRows.length === 0) {
+      console.warn('Supabase update expense category active status: 0 rows affected');
+      return { success: false, error: 'Catégorie de dépense introuvable.' };
+    }
+
+    return { success: true };
+  } catch (err: any) {
+    console.warn('Supabase update expense category active status exception:', err?.message || err);
+    return { success: false, error: err?.message || 'Erreur de connexion' };
+  }
+}
+
+export async function softDeleteExpenseCategory(
+  categoryId: string
+): Promise<{ success: boolean; error?: string }> {
+  return updateExpenseCategoryActiveStatus(categoryId, false);
+}
+
+export async function restoreExpenseCategory(
+  categoryId: string
+): Promise<{ success: boolean; error?: string }> {
+  return updateExpenseCategoryActiveStatus(categoryId, true);
 }
 
 /**
@@ -2640,6 +2728,7 @@ export async function insertExpenseCategory(data: {
       id: newId,
       business_id: data.business_id,
       name: trimmedName,
+      is_active: true,
       created_at: now,
     };
 

@@ -1419,7 +1419,7 @@ export default function MerchantDashboard({
       {/* MAIN CONTENT WORKSPACE */}
       <main className="flex-1 min-w-0 p-4 sm:p-6 lg:p-8 space-y-6">
         {/* Navigation Header / Back to Dashboard Button when outside Overview */}
-        {activeTab !== 'overview' && activeTab !== 'agent' && (
+        {activeTab !== 'overview' && activeTab !== 'agent' && activeTab !== 'expenses' && (
           <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 bg-white p-3.5 px-5 rounded-3xl border border-slate-200/80 shadow-2xs">
             <div className="flex items-center space-x-3 flex-wrap gap-y-2">
               <button
@@ -2290,6 +2290,12 @@ export default function MerchantDashboard({
           <ExpensesSection
             business={business}
             activeStaff={activeStaff}
+            onBackToDashboard={() => {
+              setActiveTab('overview');
+              setStatusFilter('all');
+              setOrderSearch('');
+              setAlertCategoryFilter('all');
+            }}
           />
         )}
 
