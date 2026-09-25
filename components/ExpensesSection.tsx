@@ -65,7 +65,6 @@ export default function ExpensesSection({
   // Expenses state & modal
   const [businessExpenses, setBusinessExpenses] = useState<Expense[]>([]);
   const [expenseCategories, setExpenseCategories] = useState<ExpenseCategoryItem[]>([]);
-  const [trashedCategories, setTrashedCategories] = useState<ExpenseCategoryItem[]>([]);
   const [expensesLoading, setExpensesLoading] = useState<boolean>(false);
   const [expenseSearch, setExpenseSearch] = useState<string>('');
   const [expenseCategoryFilter, setExpenseCategoryFilter] = useState<string>('all');
@@ -80,7 +79,7 @@ export default function ExpensesSection({
   const [expenseError, setExpenseError] = useState<string | null>(null);
   const [expenseDeletingId, setExpenseDeletingId] = useState<string | null>(null);
 
-  // Trash modal & actions state
+  const [trashedCategories, setTrashedCategories] = useState<ExpenseCategoryItem[]>([]);
   const [isTrashModalOpen, setIsTrashModalOpen] = useState<boolean>(false);
 
   // Expense Category modal & actions state
@@ -89,6 +88,7 @@ export default function ExpensesSection({
   const [expenseCatSaving, setExpenseCatSaving] = useState<boolean>(false);
   const [expenseCatError, setExpenseCatError] = useState<string | null>(null);
   const [expenseCatDeletingId, setExpenseCatDeletingId] = useState<string | null>(null);
+  const [categoryToDeletePermanently, setCategoryToDeletePermanently] = useState<{ id: string; name: string } | null>(null);
 
   // Active categories are directly the fetched active categories
   const activeCategories = expenseCategories;
@@ -157,6 +157,7 @@ export default function ExpensesSection({
   };
 
   const handleSoftDeleteCategory = async (catId: string) => {
+    console.log('[DEBUG_TRASH] click fired', catId);
     const targetCat = expenseCategories.find((c) => c.id === catId);
     if (!targetCat) return;
 
@@ -209,16 +210,20 @@ export default function ExpensesSection({
     }
   };
 
-  const handlePermanentDeleteCategory = async (catId: string, catName: string) => {
-    if (!window.confirm(`Supprimer définitivement la catégorie "${catName}" de la base de données ?`)) {
-      return;
-    }
+  const handlePermanentDeleteCategory = (catId: string, catName: string) => {
+    setCategoryToDeletePermanently({ id: catId, name: catName });
+  };
+
+  const handleConfirmPermanentDelete = async () => {
+    if (!categoryToDeletePermanently) return;
+    const { id: catId } = categoryToDeletePermanently;
     setExpenseCatDeletingId(catId);
     const res = await deleteExpenseCategory(catId);
     setExpenseCatDeletingId(null);
     if (res.success) {
       setExpenseCategories((prev) => prev.filter((c) => c.id !== catId));
       setTrashedCategories((prev) => prev.filter((c) => c.id !== catId));
+      setCategoryToDeletePermanently(null);
     } else {
       alert(res.error || 'Erreur lors de la suppression définitive de la catégorie.');
     }
@@ -312,6 +317,7 @@ export default function ExpensesSection({
   };
 
   const handleDeleteExpense = async (expenseId: string) => {
+    console.log('[DEBUG_DELETE_EXP] click', expenseId);
     if (!window.confirm('Êtes-vous sûr de vouloir supprimer cette dépense ?')) {
       return;
     }
@@ -736,6 +742,56 @@ export default function ExpensesSection({
                 className="ml-auto px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-xl transition-all cursor-pointer"
               >
                 Fermer
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Permanent Delete Category Confirmation Modal */}
+      {categoryToDeletePermanently && (
+        <div className="fixed inset-0 z-60 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in">
+          <div className="bg-white rounded-3xl p-6 max-w-sm w-full shadow-2xl border border-slate-200 space-y-4 font-sans text-slate-800">
+            <div className="flex items-center space-x-3 text-rose-600">
+              <div className="w-10 h-10 rounded-2xl bg-rose-50 flex items-center justify-center shrink-0 border border-rose-100">
+                <Trash2 className="w-5 h-5 text-rose-600" />
+              </div>
+              <div className="min-w-0">
+                <h3 className="text-sm font-extrabold text-slate-900">Supprimer définitivement ?</h3>
+                <p className="text-xs text-rose-600 font-semibold truncate max-w-[200px]">
+                  {categoryToDeletePermanently.name}
+                </p>
+              </div>
+            </div>
+            <p className="text-xs text-slate-600 leading-relaxed">
+              Êtes-vous sûr de vouloir supprimer définitivement la catégorie <strong className="text-slate-800">&quot;{categoryToDeletePermanently.name}&quot;</strong> de la base de données ? Cette action est irréversible.
+            </p>
+            <div className="flex items-center justify-end space-x-2 pt-2 border-t border-slate-100">
+              <button
+                type="button"
+                disabled={expenseCatDeletingId !== null}
+                onClick={() => setCategoryToDeletePermanently(null)}
+                className="px-4 py-2 text-xs font-bold text-slate-600 hover:bg-slate-100 rounded-xl transition-colors cursor-pointer"
+              >
+                Annuler
+              </button>
+              <button
+                type="button"
+                disabled={expenseCatDeletingId !== null}
+                onClick={handleConfirmPermanentDelete}
+                className="px-4 py-2 text-xs font-extrabold bg-rose-600 hover:bg-rose-700 text-white rounded-xl transition-all shadow-sm flex items-center space-x-1.5 disabled:opacity-50 cursor-pointer"
+              >
+                {expenseCatDeletingId === categoryToDeletePermanently.id ? (
+                  <>
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    <span>Suppression...</span>
+                  </>
+                ) : (
+                  <>
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>Supprimer définitivement</span>
+                  </>
+                )}
               </button>
             </div>
           </div>

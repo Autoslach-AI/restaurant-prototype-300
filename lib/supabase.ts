@@ -2370,6 +2370,7 @@ export async function fetchExpensesForBusiness(
       .from('platform_expenses')
       .select('*')
       .eq('business_id', businessId)
+      .eq('is_active', true)
       .order('date', { ascending: false });
 
     if (startDate) {
@@ -2389,6 +2390,41 @@ export async function fetchExpensesForBusiness(
     return (data as Expense[]) || [];
   } catch (err: any) {
     console.warn('Supabase fetch expenses exception:', err?.message || err);
+    return [];
+  }
+}
+
+/**
+ * Fetch trashed (is_active = false) expenses for a business from platform_expenses in Supabase.
+ */
+export async function fetchTrashedExpensesForBusiness(
+  businessId: string
+): Promise<Expense[]> {
+  const hasCredentials =
+    Boolean(process.env.NEXT_PUBLIC_SUPABASE_URL?.trim()) &&
+    Boolean(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY?.trim());
+
+  if (!hasCredentials) {
+    return [];
+  }
+
+  try {
+    const client = getSupabase();
+    const { data, error } = await (client as any)
+      .from('platform_expenses')
+      .select('*')
+      .eq('business_id', businessId)
+      .eq('is_active', false)
+      .order('date', { ascending: false });
+
+    if (error) {
+      console.warn('Supabase fetch trashed expenses error:', error.message);
+      return [];
+    }
+
+    return (data as Expense[]) || [];
+  } catch (err: any) {
+    console.warn('Supabase fetch trashed expenses exception:', err?.message || err);
     return [];
   }
 }
@@ -2427,6 +2463,7 @@ export async function insertExpense(data: {
     date: data.date,
     is_recurring: Boolean(data.is_recurring),
     created_by: data.created_by,
+    is_active: true,
     created_at: now,
   };
 
@@ -2547,13 +2584,65 @@ export async function deleteExpense(
 }
 
 /**
+ * 5. Update is_active status of an expense in platform_expenses (soft delete or restore).
+ */
+export async function updateExpenseActiveStatus(
+  expenseId: string,
+  isActive: boolean
+): Promise<{ success: boolean; error?: string }> {
+  const hasCredentials =
+    Boolean(process.env.NEXT_PUBLIC_SUPABASE_URL?.trim()) &&
+    Boolean(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY?.trim());
+
+  if (!hasCredentials) {
+    return { success: false, error: 'Configuration Supabase manquante' };
+  }
+
+  try {
+    const client = getSupabase();
+    const { data: updatedRows, error } = await (client as any)
+      .from('platform_expenses')
+      .update({ is_active: isActive })
+      .eq('id', expenseId)
+      .select();
+
+    if (error) {
+      console.warn('Supabase update expense active status error:', error.message);
+      return { success: false, error: error.message };
+    }
+
+    if (!updatedRows || updatedRows.length === 0) {
+      console.warn('Supabase update expense active status: 0 rows affected');
+      return { success: false, error: 'Dépense introuvable.' };
+    }
+
+    return { success: true };
+  } catch (err: any) {
+    console.warn('Supabase update expense active status exception:', err?.message || err);
+    return { success: false, error: err?.message || 'Erreur de connexion' };
+  }
+}
+
+export async function softDeleteExpense(
+  expenseId: string
+): Promise<{ success: boolean; error?: string }> {
+  return updateExpenseActiveStatus(expenseId, false);
+}
+
+export async function restoreExpense(
+  expenseId: string
+): Promise<{ success: boolean; error?: string }> {
+  return updateExpenseActiveStatus(expenseId, true);
+}
+
+/**
  * ============================================================================
  * EXPENSE CATEGORIES CRUD (platform_expense_categories)
  * ============================================================================
  */
 
 /**
- * 1. Fetch all active expense categories for a business from platform_expense_categories in Supabase,
+ * 1. Fetch all expense categories for a business from platform_expense_categories in Supabase,
  * ordered by name ascending.
  * Returns empty array if error or no credentials.
  */
