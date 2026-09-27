@@ -2430,6 +2430,92 @@ export async function fetchTrashedExpensesForBusiness(
 }
 
 /**
+ * Upload an expense receipt (image or PDF) to Supabase Storage (bucket platform-customer-media).
+ * Enforces 10MB max limit, supports image/* and application/pdf, returns public URL.
+ */
+export async function uploadExpenseReceipt(
+  file: File,
+  businessId: string
+): Promise<{ success: boolean; url?: string; error?: string }> {
+  if (!file) {
+    return { success: false, error: 'Fichier manquant' };
+  }
+
+  const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10 Mo
+  if (file.size > MAX_FILE_SIZE) {
+    const sizeMo = (file.size / (1024 * 1024)).toFixed(1);
+    return {
+      success: false,
+      error: `Le fichier dépasse la taille maximale autorisée de 10 Mo (taille actuelle : ${sizeMo} Mo).`,
+    };
+  }
+
+  const contentType = file.type || 'application/octet-stream';
+  const isImage = contentType.startsWith('image/');
+  const isPdf = contentType === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
+
+  if (!isImage && !isPdf) {
+    return {
+      success: false,
+      error: 'Format non supporté. Veuillez sélectionner une image (PNG, JPG, WEBP...) ou un fichier PDF.',
+    };
+  }
+
+  let fileExt = 'bin';
+  const extMatch = file.name.split('.').pop();
+  if (extMatch) {
+    fileExt = extMatch.toLowerCase().replace(/[^a-zA-Z0-9]/g, '');
+  } else if (isPdf) {
+    fileExt = 'pdf';
+  } else if (isImage) {
+    fileExt = 'jpg';
+  }
+
+  const fileName = `receipt_${Date.now()}_${Math.random().toString(36).substring(2, 9)}.${fileExt}`;
+  const filePath = `${businessId}/receipts/${fileName}`;
+
+  const hasCredentials =
+    Boolean(process.env.NEXT_PUBLIC_SUPABASE_URL?.trim()) &&
+    Boolean(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY?.trim());
+
+  if (!hasCredentials) {
+    return { success: false, error: 'Configuration Supabase manquante' };
+  }
+
+  try {
+    const client = getSupabase();
+    const BUCKET_NAME = 'platform-customer-media';
+    const uploadRes = await client.storage
+      .from(BUCKET_NAME)
+      .upload(filePath, file, { upsert: true, contentType });
+
+    if (uploadRes.error) {
+      console.error(`Upload receipt to ${BUCKET_NAME} failed:`, uploadRes.error.message);
+      return {
+        success: false,
+        error: `Échec de l'upload sur Supabase Storage : ${uploadRes.error.message}`,
+      };
+    }
+
+    const { data: publicUrlData } = client.storage
+      .from(BUCKET_NAME)
+      .getPublicUrl(filePath);
+
+    if (publicUrlData?.publicUrl) {
+      return {
+        success: true,
+        url: publicUrlData.publicUrl,
+      };
+    }
+
+    return { success: false, error: "Impossible de récupérer l'URL publique du reçu." };
+  } catch (err: any) {
+    console.error('Supabase storage receipt upload exception:', err);
+    return { success: false, error: err?.message || "Erreur lors de l'upload du reçu" };
+  }
+}
+
+/**
  * 2. Insert a new expense into platform_expenses in Supabase.
  * Generates an id with 'exp_' prefix.
  * Enforces strict verification that insertedRows.length > 0.
@@ -2442,6 +2528,7 @@ export async function insertExpense(data: {
   date: string;
   is_recurring?: boolean;
   created_by: string;
+  receipt_url?: string | null;
 }): Promise<{ success: boolean; expense?: Expense; error?: string }> {
   const hasCredentials =
     Boolean(process.env.NEXT_PUBLIC_SUPABASE_URL?.trim()) &&
@@ -2463,6 +2550,7 @@ export async function insertExpense(data: {
     date: data.date,
     is_recurring: Boolean(data.is_recurring),
     created_by: data.created_by,
+    receipt_url: data.receipt_url || undefined,
     is_active: true,
     created_at: now,
   };
@@ -2518,6 +2606,7 @@ export async function updateExpense(
     if (data.date !== undefined) updatePayload.date = data.date;
     if (data.is_recurring !== undefined) updatePayload.is_recurring = Boolean(data.is_recurring);
     if (data.created_by !== undefined) updatePayload.created_by = data.created_by;
+    if (data.receipt_url !== undefined) updatePayload.receipt_url = data.receipt_url;
 
     const { data: updatedRows, error } = await (client as any)
       .from('platform_expenses')

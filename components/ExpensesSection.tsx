@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   Receipt,
   Plus,
@@ -10,6 +10,10 @@ import {
   X,
   RotateCcw,
   ArrowLeft,
+  Paperclip,
+  FileText,
+  UploadCloud,
+  Eye,
 } from 'lucide-react';
 import {
   Business,
@@ -19,6 +23,7 @@ import {
 } from '@/lib/types';
 import {
   fetchExpensesForBusiness,
+  fetchTrashedExpensesForBusiness,
   fetchExpenseCategoriesForBusiness,
   fetchTrashedCategoriesForBusiness,
   insertExpenseCategory,
@@ -28,7 +33,11 @@ import {
   insertExpense,
   updateExpense,
   deleteExpense,
+  softDeleteExpense,
+  restoreExpense,
+  uploadExpenseReceipt,
 } from '@/lib/supabase';
+import { MediaViewer, MediaViewerItem } from '@/components/MediaViewer';
 
 function getCategoryBadgeStyle(category?: string | null): string {
   const palette = [
@@ -64,6 +73,8 @@ export default function ExpensesSection({
 }: ExpensesSectionProps) {
   // Expenses state & modal
   const [businessExpenses, setBusinessExpenses] = useState<Expense[]>([]);
+  const [trashedExpenses, setTrashedExpenses] = useState<Expense[]>([]);
+  const [expensesViewMode, setExpensesViewMode] = useState<'active' | 'history'>('active');
   const [expenseCategories, setExpenseCategories] = useState<ExpenseCategoryItem[]>([]);
   const [expensesLoading, setExpensesLoading] = useState<boolean>(false);
   const [expenseSearch, setExpenseSearch] = useState<string>('');
@@ -78,6 +89,18 @@ export default function ExpensesSection({
   const [expenseSaving, setExpenseSaving] = useState<boolean>(false);
   const [expenseError, setExpenseError] = useState<string | null>(null);
   const [expenseDeletingId, setExpenseDeletingId] = useState<string | null>(null);
+  const [expenseRestoringId, setExpenseRestoringId] = useState<string | null>(null);
+
+  // Receipt attachment & preview states
+  const [expenseFormReceiptUrl, setExpenseFormReceiptUrl] = useState<string | null>(null);
+  const [expenseReceiptFile, setExpenseReceiptFile] = useState<File | null>(null);
+  const [expenseReceiptPreview, setExpenseReceiptPreview] = useState<string | null>(null);
+  const [expenseReceiptName, setExpenseReceiptName] = useState<string | null>(null);
+  const [expenseReceiptUploading, setExpenseReceiptUploading] = useState<boolean>(false);
+  const receiptFileInputRef = useRef<HTMLInputElement | null>(null);
+
+  // Fullscreen MediaViewer item state
+  const [activeMediaViewer, setActiveMediaViewer] = useState<MediaViewerItem | null>(null);
 
   const [trashedCategories, setTrashedCategories] = useState<ExpenseCategoryItem[]>([]);
   const [isTrashModalOpen, setIsTrashModalOpen] = useState<boolean>(false);
@@ -100,13 +123,15 @@ export default function ExpensesSection({
       if (!business?.id) return;
       setExpensesLoading(true);
       try {
-        const [expensesData, categoriesData, trashedData] = await Promise.all([
+        const [expensesData, trashedExpensesData, categoriesData, trashedData] = await Promise.all([
           fetchExpensesForBusiness(business.id),
+          fetchTrashedExpensesForBusiness(business.id),
           fetchExpenseCategoriesForBusiness(business.id),
           fetchTrashedCategoriesForBusiness(business.id),
         ]);
         if (isMounted) {
           setBusinessExpenses(expensesData || []);
+          setTrashedExpenses(trashedExpensesData || []);
           setExpenseCategories(categoriesData || []);
           setTrashedCategories(trashedData || []);
           setExpensesLoading(false);
@@ -236,6 +261,11 @@ export default function ExpensesSection({
     setExpenseFormAmount('');
     setExpenseFormDate(new Date().toISOString().split('T')[0]);
     setExpenseFormIsRecurring(false);
+    setExpenseFormReceiptUrl(null);
+    setExpenseReceiptFile(null);
+    setExpenseReceiptPreview(null);
+    setExpenseReceiptName(null);
+    setExpenseReceiptUploading(false);
     setExpenseError(null);
     setIsExpenseModalOpen(true);
   };
@@ -247,8 +277,59 @@ export default function ExpensesSection({
     setExpenseFormAmount(String(expense.amount || ''));
     setExpenseFormDate(expense.date ? expense.date.split('T')[0] : new Date().toISOString().split('T')[0]);
     setExpenseFormIsRecurring(Boolean(expense.is_recurring));
+    setExpenseFormReceiptUrl(expense.receipt_url || null);
+    setExpenseReceiptFile(null);
+    setExpenseReceiptPreview(expense.receipt_url || null);
+    setExpenseReceiptName(expense.receipt_url ? 'Reçu attaché' : null);
+    setExpenseReceiptUploading(false);
     setExpenseError(null);
     setIsExpenseModalOpen(true);
+  };
+
+  const handleReceiptFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (file.size > 10 * 1024 * 1024) {
+      setExpenseError('Le fichier dépasse la taille maximale de 10 Mo');
+      return;
+    }
+
+    const isImg = file.type.startsWith('image/');
+    const isPdf = file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
+
+    if (!isImg && !isPdf) {
+      setExpenseError('Format non supporté. Veuillez sélectionner une image (JPG, PNG, WEBP) ou un PDF.');
+      return;
+    }
+
+    setExpenseError(null);
+    setExpenseReceiptFile(file);
+    setExpenseReceiptName(file.name);
+
+    const objectUrl = URL.createObjectURL(file);
+    setExpenseReceiptPreview(objectUrl);
+  };
+
+  const handleOpenReceiptViewer = (receiptUrl: string, label: string, customName?: string | null) => {
+    const isReceiptPdf =
+      receiptUrl.toLowerCase().includes('.pdf') ||
+      Boolean(customName && customName.toLowerCase().endsWith('.pdf'));
+    setActiveMediaViewer({
+      url: receiptUrl,
+      name: customName || (isReceiptPdf ? `${label} - Reçu.pdf` : `${label} - Reçu`),
+      mediaType: isReceiptPdf ? 'pdf' : 'image',
+    });
+  };
+
+  const handleRemoveReceipt = () => {
+    setExpenseFormReceiptUrl(null);
+    setExpenseReceiptFile(null);
+    setExpenseReceiptPreview(null);
+    setExpenseReceiptName(null);
+    if (receiptFileInputRef.current) {
+      receiptFileInputRef.current.value = '';
+    }
   };
 
   const handleSaveExpense = async (e: React.FormEvent) => {
@@ -277,6 +358,22 @@ export default function ExpensesSection({
     setExpenseSaving(true);
     setExpenseError(null);
 
+    let finalReceiptUrl: string | undefined = expenseFormReceiptUrl || undefined;
+
+    // Upload receipt file if a new one was selected
+    if (expenseReceiptFile) {
+      setExpenseReceiptUploading(true);
+      const uploadRes = await uploadExpenseReceipt(expenseReceiptFile, business.id);
+      setExpenseReceiptUploading(false);
+
+      if (!uploadRes.success || !uploadRes.url) {
+        setExpenseSaving(false);
+        setExpenseError(uploadRes.error || "Échec de l'upload du reçu/facture");
+        return;
+      }
+      finalReceiptUrl = uploadRes.url;
+    }
+
     if (editingExpense) {
       const res = await updateExpense(editingExpense.id, {
         category: trimmedCategory,
@@ -284,6 +381,7 @@ export default function ExpensesSection({
         amount: numAmount,
         date: expenseFormDate,
         is_recurring: expenseFormIsRecurring,
+        receipt_url: finalReceiptUrl,
       });
 
       setExpenseSaving(false);
@@ -303,6 +401,7 @@ export default function ExpensesSection({
         date: expenseFormDate,
         is_recurring: expenseFormIsRecurring,
         created_by: activeStaff?.id || 'owner',
+        receipt_url: finalReceiptUrl,
       });
 
       setExpenseSaving(false);
@@ -317,17 +416,42 @@ export default function ExpensesSection({
   };
 
   const handleDeleteExpense = async (expenseId: string) => {
-    console.log('[DEBUG_DELETE_EXP] click', expenseId);
-    if (!window.confirm('Êtes-vous sûr de vouloir supprimer cette dépense ?')) {
-      return;
-    }
+    const targetExpense = businessExpenses.find((exp) => exp.id === expenseId);
+    if (!targetExpense) return;
+
+    // Optimistic update: remove from businessExpenses, add to trashedExpenses
+    setBusinessExpenses((prev) => prev.filter((exp) => exp.id !== expenseId));
+    setTrashedExpenses((prev) => [targetExpense, ...prev.filter((exp) => exp.id !== expenseId)]);
     setExpenseDeletingId(expenseId);
-    const res = await deleteExpense(expenseId);
+
+    const res = await softDeleteExpense(expenseId);
     setExpenseDeletingId(null);
-    if (res.success) {
-      setBusinessExpenses((prev) => prev.filter((exp) => exp.id !== expenseId));
-    } else {
+
+    if (!res.success) {
+      // Rollback on failure
+      setBusinessExpenses((prev) => [targetExpense, ...prev]);
+      setTrashedExpenses((prev) => prev.filter((exp) => exp.id !== expenseId));
       alert(res.error || 'Erreur lors de la suppression de la dépense');
+    }
+  };
+
+  const handleRestoreExpense = async (expenseId: string) => {
+    const targetExpense = trashedExpenses.find((exp) => exp.id === expenseId);
+    if (!targetExpense) return;
+
+    // Optimistic update: remove from trashedExpenses, add to businessExpenses
+    setTrashedExpenses((prev) => prev.filter((exp) => exp.id !== expenseId));
+    setBusinessExpenses((prev) => [targetExpense, ...prev.filter((exp) => exp.id !== expenseId)]);
+    setExpenseRestoringId(expenseId);
+
+    const res = await restoreExpense(expenseId);
+    setExpenseRestoringId(null);
+
+    if (!res.success) {
+      // Rollback on failure
+      setTrashedExpenses((prev) => [targetExpense, ...prev]);
+      setBusinessExpenses((prev) => prev.filter((exp) => exp.id !== expenseId));
+      alert(res.error || 'Erreur lors de la restauration de la dépense');
     }
   };
 
@@ -356,13 +480,59 @@ export default function ExpensesSection({
           </span>
         </div>
 
-        <div className="flex items-center gap-2.5">
-          <div className="w-8 h-8 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center shrink-0 border border-emerald-100 shadow-2xs">
-            <Receipt className="w-4 h-4" />
+        {/* Toggle View: Dépenses actives vs Historique */}
+        <div className="flex items-center gap-3">
+          <div className="grid grid-cols-2 p-1 bg-slate-100 rounded-2xl border border-slate-200/80">
+            <button
+              type="button"
+              onClick={() => setExpensesViewMode('active')}
+              className={`py-1.5 px-3 text-xs font-extrabold rounded-xl transition-all cursor-pointer text-center flex items-center justify-center gap-1.5 ${
+                expensesViewMode === 'active'
+                  ? 'bg-white text-slate-900 shadow-2xs font-black'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              <span>Dépenses actives</span>
+              <span
+                className={`text-[10px] px-1.5 py-0.2 rounded-full font-black ${
+                  expensesViewMode === 'active'
+                    ? 'bg-emerald-100 text-emerald-800'
+                    : 'bg-slate-200/80 text-slate-600'
+                }`}
+              >
+                {businessExpenses.length}
+              </span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setExpensesViewMode('history')}
+              className={`py-1.5 px-3 text-xs font-extrabold rounded-xl transition-all cursor-pointer text-center flex items-center justify-center gap-1.5 ${
+                expensesViewMode === 'history'
+                  ? 'bg-white text-slate-900 shadow-2xs font-black'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              <span>Historique</span>
+              <span
+                className={`text-[10px] px-1.5 py-0.2 rounded-full font-black ${
+                  expensesViewMode === 'history'
+                    ? 'bg-amber-100 text-amber-800'
+                    : 'bg-slate-200/80 text-slate-600'
+                }`}
+              >
+                {trashedExpenses.length}
+              </span>
+            </button>
           </div>
-          <div>
-            <h2 className="text-xs font-black text-slate-900 leading-tight">Gestion des Dépenses</h2>
-            <p className="text-[11px] text-slate-500 font-medium hidden md:block">Suivez et catégorisez les charges de votre entreprise</p>
+
+          <div className="flex items-center gap-2.5">
+            <div className="w-8 h-8 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center shrink-0 border border-emerald-100 shadow-2xs">
+              <Receipt className="w-4 h-4" />
+            </div>
+            <div>
+              <h2 className="text-xs font-black text-slate-900 leading-tight">Gestion des Dépenses</h2>
+              <p className="text-[11px] text-slate-500 font-medium hidden md:block">Suivez et catégorisez les charges de votre entreprise</p>
+            </div>
           </div>
         </div>
       </div>
@@ -444,7 +614,8 @@ export default function ExpensesSection({
             <p className="text-xs font-bold">Chargement des dépenses...</p>
           </div>
         ) : (() => {
-          const filteredExpenses = businessExpenses.filter((exp) => {
+          const currentExpenses = expensesViewMode === 'active' ? businessExpenses : trashedExpenses;
+          const filteredExpenses = currentExpenses.filter((exp) => {
             const matchesSearch = !expenseSearch.trim() || exp.label.toLowerCase().includes(expenseSearch.toLowerCase());
             const matchesCategory =
               expenseCategoryFilter === 'all' ||
@@ -455,9 +626,19 @@ export default function ExpensesSection({
           if (filteredExpenses.length === 0) {
             return (
               <div className="py-16 text-center text-slate-400">
-                <Receipt className="w-12 h-12 mx-auto mb-3 text-slate-300 stroke-1" />
-                <p className="text-sm font-bold text-slate-600">Aucune dépense enregistrée pour le moment.</p>
-                <p className="text-xs text-slate-400 mt-1">Cliquez sur &quot;Ajouter une dépense&quot; pour commencer.</p>
+                {expensesViewMode === 'active' ? (
+                  <>
+                    <Receipt className="w-12 h-12 mx-auto mb-3 text-slate-300 stroke-1" />
+                    <p className="text-sm font-bold text-slate-600">Aucune dépense enregistrée pour le moment.</p>
+                    <p className="text-xs text-slate-400 mt-1">Cliquez sur &quot;Ajouter une dépense&quot; pour commencer.</p>
+                  </>
+                ) : (
+                  <>
+                    <RotateCcw className="w-12 h-12 mx-auto mb-3 text-slate-300 stroke-1" />
+                    <p className="text-sm font-bold text-slate-600">Aucune dépense dans l&apos;historique.</p>
+                    <p className="text-xs text-slate-400 mt-1">Les dépenses supprimées apparaîtront ici et pourront être restaurées.</p>
+                  </>
+                )}
               </div>
             );
           }
@@ -495,8 +676,21 @@ export default function ExpensesSection({
                             {exp.category || 'Non catégorisé'}
                           </span>
                         </td>
-                        <td className="py-4 px-4 font-semibold text-slate-900 max-w-[240px] truncate">
-                          {exp.label}
+                        <td className="py-4 px-4 font-semibold text-slate-900 max-w-[240px]">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="truncate">{exp.label}</span>
+                            {exp.receipt_url && (
+                              <button
+                                type="button"
+                                onClick={() => handleOpenReceiptViewer(exp.receipt_url!, exp.label)}
+                                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[10px] font-bold bg-indigo-50 text-indigo-700 hover:bg-indigo-100 border border-indigo-200/80 transition-all cursor-pointer shrink-0"
+                                title="Voir le reçu / la facture"
+                              >
+                                <Paperclip className="w-3 h-3 text-indigo-500" />
+                                <span>Reçu</span>
+                              </button>
+                            )}
+                          </div>
                         </td>
                         <td className="py-4 px-4 text-right font-black text-slate-900 whitespace-nowrap">
                           {Number(exp.amount || 0).toLocaleString('fr-FR')} {business.currency || 'XOF'}
@@ -511,29 +705,68 @@ export default function ExpensesSection({
                           )}
                         </td>
                         <td className="py-4 px-4 sm:px-6 text-right whitespace-nowrap">
-                          <div className="inline-flex items-center gap-1 justify-end">
-                            <button
-                              type="button"
-                              onClick={() => handleOpenEditExpenseModal(exp)}
-                              className="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-xl transition-colors cursor-pointer"
-                              title="Modifier"
-                            >
-                              <Edit2 className="w-4 h-4" />
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => handleDeleteExpense(exp.id)}
-                              disabled={expenseDeletingId === exp.id}
-                              className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-xl transition-colors cursor-pointer disabled:opacity-50"
-                              title="Supprimer"
-                            >
-                              {expenseDeletingId === exp.id ? (
-                                <Loader2 className="w-4 h-4 animate-spin text-red-600" />
-                              ) : (
-                                <Trash2 className="w-4 h-4" />
+                          {expensesViewMode === 'history' ? (
+                            <div className="inline-flex items-center gap-1 justify-end">
+                              {exp.receipt_url && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleOpenReceiptViewer(exp.receipt_url!, exp.label)}
+                                  className="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-xl transition-colors cursor-pointer"
+                                  title="Voir le reçu"
+                                >
+                                  <Eye className="w-4 h-4" />
+                                </button>
                               )}
-                            </button>
-                          </div>
+                              <button
+                                type="button"
+                                onClick={() => handleRestoreExpense(exp.id)}
+                                disabled={expenseRestoringId === exp.id}
+                                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-xl transition-all cursor-pointer disabled:opacity-50"
+                                title="Restaurer cette dépense"
+                              >
+                                {expenseRestoringId === exp.id ? (
+                                  <Loader2 className="w-3.5 h-3.5 animate-spin text-emerald-600" />
+                                ) : (
+                                  <RotateCcw className="w-3.5 h-3.5" />
+                                )}
+                                <span>Restaurer</span>
+                              </button>
+                            </div>
+                          ) : (
+                            <div className="inline-flex items-center gap-1 justify-end">
+                              {exp.receipt_url && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleOpenReceiptViewer(exp.receipt_url!, exp.label)}
+                                  className="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-xl transition-colors cursor-pointer"
+                                  title="Voir le reçu"
+                                >
+                                  <Eye className="w-4 h-4" />
+                                </button>
+                              )}
+                              <button
+                                type="button"
+                                onClick={() => handleOpenEditExpenseModal(exp)}
+                                className="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-xl transition-colors cursor-pointer"
+                                title="Modifier"
+                              >
+                                <Edit2 className="w-4 h-4" />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleDeleteExpense(exp.id)}
+                                disabled={expenseDeletingId === exp.id}
+                                className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-xl transition-colors cursor-pointer disabled:opacity-50"
+                                title="Supprimer"
+                              >
+                                {expenseDeletingId === exp.id ? (
+                                  <Loader2 className="w-4 h-4 animate-spin text-red-600" />
+                                ) : (
+                                  <Trash2 className="w-4 h-4" />
+                                )}
+                              </button>
+                            </div>
+                          )}
                         </td>
                       </tr>
                     );
@@ -933,6 +1166,94 @@ export default function ExpensesSection({
                 </label>
               </div>
 
+              {/* Receipt / Invoice Upload field */}
+              <div className="pt-1">
+                <label className="block text-xs font-bold text-slate-700 mb-1.5">
+                  Reçu ou facture justificative <span className="text-slate-400 font-normal">(optionnel)</span>
+                </label>
+
+                {expenseReceiptFile || expenseFormReceiptUrl ? (
+                  <div className="flex items-center justify-between p-3 bg-slate-50 border border-slate-200/90 rounded-2xl">
+                    <div className="flex items-center gap-3 min-w-0">
+                      {expenseReceiptPreview &&
+                      !expenseReceiptName?.toLowerCase().endsWith('.pdf') &&
+                      !expenseFormReceiptUrl?.toLowerCase().includes('.pdf') ? (
+                        <div className="w-12 h-12 rounded-xl overflow-hidden border border-slate-200 shrink-0 bg-white shadow-2xs">
+                          <img
+                            src={expenseReceiptPreview}
+                            alt="Aperçu du reçu"
+                            className="w-full h-full object-cover"
+                          />
+                        </div>
+                      ) : (
+                        <div className="w-12 h-12 rounded-xl bg-rose-50 border border-rose-200 text-rose-600 flex items-center justify-center shrink-0 shadow-2xs">
+                          <FileText className="w-6 h-6" />
+                        </div>
+                      )}
+                      <div className="truncate">
+                        <p className="text-xs font-bold text-slate-800 truncate">
+                          {expenseReceiptName || (expenseFormReceiptUrl ? 'Reçu attaché' : 'Fichier sélectionné')}
+                        </p>
+                        <p className="text-[11px] text-slate-400 font-medium">
+                          {expenseReceiptFile
+                            ? `${(expenseReceiptFile.size / 1024).toFixed(0)} Ko`
+                            : 'Fichier justificatif disponible'}
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-1 shrink-0 ml-2">
+                      {(expenseReceiptPreview || expenseFormReceiptUrl) && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const url = expenseReceiptPreview || expenseFormReceiptUrl;
+                            if (url) {
+                              handleOpenReceiptViewer(url, expenseFormLabel || 'Dépense', expenseReceiptName);
+                            }
+                          }}
+                          className="p-1.5 text-slate-500 hover:text-indigo-600 hover:bg-white rounded-xl transition-colors cursor-pointer"
+                          title="Aperçu plein écran"
+                        >
+                          <Eye className="w-4 h-4" />
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={handleRemoveReceipt}
+                        className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-white rounded-xl transition-colors cursor-pointer"
+                        title="Retirer le justificatif"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div>
+                    <input
+                      ref={receiptFileInputRef}
+                      type="file"
+                      accept="image/*,.pdf,application/pdf"
+                      onChange={handleReceiptFileChange}
+                      className="hidden"
+                      id="expense-receipt-file-input"
+                    />
+                    <label
+                      htmlFor="expense-receipt-file-input"
+                      className="flex flex-col items-center justify-center p-4 border-2 border-dashed border-slate-200 hover:border-emerald-500 hover:bg-emerald-50/20 rounded-2xl transition-all cursor-pointer group text-center"
+                    >
+                      <UploadCloud className="w-6 h-6 text-slate-400 group-hover:text-emerald-600 transition-colors mb-1" />
+                      <span className="text-xs font-bold text-slate-700 group-hover:text-emerald-700">
+                        Cliquez pour joindre un reçu ou une facture
+                      </span>
+                      <span className="text-[10px] text-slate-400 mt-0.5">
+                        Image (PNG, JPG, WEBP) ou PDF — Max 10 Mo
+                      </span>
+                    </label>
+                  </div>
+                )}
+              </div>
+
               <div className="pt-4 border-t border-slate-100 flex items-center justify-end gap-3">
                 <button
                   type="button"
@@ -943,13 +1264,13 @@ export default function ExpensesSection({
                 </button>
                 <button
                   type="submit"
-                  disabled={expenseSaving}
+                  disabled={expenseSaving || expenseReceiptUploading}
                   className="inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-2xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-sm transition-all cursor-pointer disabled:opacity-50"
                 >
-                  {expenseSaving ? (
+                  {expenseSaving || expenseReceiptUploading ? (
                     <>
                       <Loader2 className="w-4 h-4 animate-spin" />
-                      <span>Enregistrement...</span>
+                      <span>{expenseReceiptUploading ? 'Upload du reçu...' : 'Enregistrement...'}</span>
                     </>
                   ) : (
                     <span>{editingExpense ? 'Enregistrer les modifications' : 'Ajouter la dépense'}</span>
@@ -959,6 +1280,15 @@ export default function ExpensesSection({
             </form>
           </div>
         </div>
+      )}
+
+      {/* Fullscreen MediaViewer for expense receipts */}
+      {activeMediaViewer && (
+        <MediaViewer
+          isOpen={Boolean(activeMediaViewer)}
+          onClose={() => setActiveMediaViewer(null)}
+          item={activeMediaViewer}
+        />
       )}
     </div>
   );

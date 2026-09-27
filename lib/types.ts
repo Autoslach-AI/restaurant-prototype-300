@@ -291,6 +291,7 @@ export interface Expense {
   date: string; // YYYY-MM-DD
   is_recurring: boolean;
   created_by: string; // staff id
+  receipt_url?: string;
   is_active?: boolean;
   created_at: string;
 }
