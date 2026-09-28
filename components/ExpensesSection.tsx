@@ -315,10 +315,12 @@ export default function ExpensesSection({
     const isReceiptPdf =
       receiptUrl.toLowerCase().includes('.pdf') ||
       Boolean(customName && customName.toLowerCase().endsWith('.pdf'));
+    const mediaType = isReceiptPdf ? 'pdf' : 'image';
+    console.log('[DEBUG_RECEIPT] opening', { url: receiptUrl, isReceiptPdf, mediaType });
     setActiveMediaViewer({
       url: receiptUrl,
       name: customName || (isReceiptPdf ? `${label} - Reçu.pdf` : `${label} - Reçu`),
-      mediaType: isReceiptPdf ? 'pdf' : 'image',
+      mediaType,
     });
   };
 
