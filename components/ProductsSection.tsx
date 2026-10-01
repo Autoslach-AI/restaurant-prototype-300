@@ -34,6 +34,9 @@ export default function ProductsSection({
   onSaveCategory,
   onDeleteCategory,
 }: ProductsSectionProps) {
+  // Category filter state
+  const [selectedCategoryId, setSelectedCategoryId] = useState<string>('all');
+
   // Product modal states
   const [isProductModalOpen, setIsProductModalOpen] = useState(false);
   const [editingProduct, setEditingProduct] = useState<Partial<Product> | null>(null);
@@ -70,21 +73,47 @@ export default function ProductsSection({
     if (!newCatName.trim()) return;
     onSaveCategory(newCatName.trim());
     setNewCatName('');
-    setIsCategoryModalOpen(false);
   };
+
+  // Filtered products according to selected category
+  const filteredProducts = businessProducts.filter((prod) => {
+    if (selectedCategoryId === 'all') return true;
+    return prod.category_id === selectedCategoryId;
+  });
 
   return (
     <div className="space-y-6">
       {/* Action Bar */}
-      <div className="flex items-center justify-between gap-4 bg-white p-4 rounded-3xl border border-slate-200/80 shadow-2xs">
-        <div className="text-xs text-slate-500 font-bold px-2">
-          Catalogue : <span className="text-slate-900 font-black">{businessProducts.length}</span> produit(s), <span className="text-slate-900 font-black">{businessCategories.length}</span> catégorie(s)
+      <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-4 bg-white p-4 rounded-3xl border border-slate-200/80 shadow-2xs">
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="text-xs text-slate-500 font-bold px-2 whitespace-nowrap">
+            Catalogue : <span className="text-slate-900 font-black">{businessProducts.length}</span> produit(s), <span className="text-slate-900 font-black">{businessCategories.length}</span> catégorie(s)
+          </div>
+
+          {/* Menu déroulant de filtre par catégorie */}
+          <div className="relative">
+            <select
+              value={selectedCategoryId}
+              onChange={(e) => setSelectedCategoryId(e.target.value)}
+              className="bg-slate-50 hover:bg-slate-100/80 focus:bg-white border border-slate-200 rounded-2xl px-3 py-2 text-xs text-slate-800 font-bold focus:outline-none focus:border-emerald-500 transition-all cursor-pointer shadow-2xs"
+            >
+              <option value="all">Toutes les catégories ({businessProducts.length})</option>
+              {businessCategories.map((cat) => {
+                const count = businessProducts.filter((p) => p.category_id === cat.id).length;
+                return (
+                  <option key={cat.id} value={cat.id}>
+                    {cat.name} ({count})
+                  </option>
+                );
+              })}
+            </select>
+          </div>
         </div>
 
-        <div className="flex items-center space-x-3">
+        <div className="flex items-center space-x-3 shrink-0">
           <button
             onClick={() => setIsCategoryModalOpen(true)}
-            className="px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-800 font-extrabold text-xs rounded-xl flex items-center space-x-2 border border-slate-200 transition-all shadow-2xs"
+            className="px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-800 font-extrabold text-xs rounded-xl flex items-center space-x-2 border border-slate-200 transition-all shadow-2xs cursor-pointer"
           >
             <Plus className="w-4 h-4" />
             <span>Nouvelle Catégorie</span>
@@ -92,7 +121,7 @@ export default function ProductsSection({
 
           <button
             onClick={() => {
-              setEditingProduct({ category_id: businessCategories[0]?.id || '' });
+              setEditingProduct({ category_id: selectedCategoryId !== 'all' ? selectedCategoryId : (businessCategories[0]?.id || '') });
               setIsProductModalOpen(true);
             }}
             className="px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs rounded-xl flex items-center space-x-2 transition-all shadow-sm shadow-emerald-500/10 cursor-pointer"
@@ -101,34 +130,6 @@ export default function ProductsSection({
             <span>Ajouter un Produit</span>
           </button>
         </div>
-      </div>
-
-      {/* Categories List */}
-      <div className="flex items-center space-x-2 overflow-x-auto pb-1">
-        {businessCategories.length === 0 ? (
-          <div className="px-3 py-1.5 bg-slate-50 border border-dashed border-slate-200 rounded-xl text-xs text-slate-400 font-medium">
-            Aucune catégorie créée. Cliquez sur &quot;Nouvelle Catégorie&quot;.
-          </div>
-        ) : (
-          businessCategories.map((cat) => (
-            <div
-              key={cat.id}
-              className="px-4 py-2 bg-white border border-slate-200/80 rounded-2xl flex items-center space-x-2 text-xs font-bold text-slate-700 shrink-0 shadow-2xs"
-            >
-              <span>{cat.name}</span>
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onDeleteCategory(cat.id);
-                }}
-                className="text-slate-400 hover:text-rose-600 ml-1 p-1 cursor-pointer"
-                title="Supprimer la catégorie"
-              >
-                <Trash2 className="w-3.5 h-3.5" />
-              </button>
-            </div>
-          ))
-        )}
       </div>
 
       {/* Products Grid */}
@@ -152,9 +153,37 @@ export default function ProductsSection({
             <span>Ajouter un Produit</span>
           </button>
         </div>
+      ) : filteredProducts.length === 0 ? (
+        <div className="bg-white border border-dashed border-slate-200 rounded-3xl p-12 text-center flex flex-col items-center justify-center">
+          <div className="w-14 h-14 rounded-2xl bg-slate-50 border border-slate-100 flex items-center justify-center text-slate-400 mb-3">
+            <Package className="w-7 h-7" />
+          </div>
+          <h4 className="text-base font-extrabold text-slate-900">Aucun produit dans cette catégorie</h4>
+          <p className="text-xs text-slate-500 max-w-sm mt-1 mb-4">
+            Aucun produit ne correspond à la catégorie sélectionnée. Vous pouvez en ajouter un ou changer de filtre.
+          </p>
+          <div className="flex items-center space-x-3">
+            <button
+              onClick={() => setSelectedCategoryId('all')}
+              className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-extrabold text-xs rounded-xl transition-all cursor-pointer"
+            >
+              Afficher tous les produits
+            </button>
+            <button
+              onClick={() => {
+                setEditingProduct({ category_id: selectedCategoryId !== 'all' ? selectedCategoryId : (businessCategories[0]?.id || '') });
+                setIsProductModalOpen(true);
+              }}
+              className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs rounded-xl flex items-center space-x-1.5 transition-all shadow-sm cursor-pointer"
+            >
+              <Plus className="w-4 h-4" />
+              <span>Ajouter un Produit</span>
+            </button>
+          </div>
+        </div>
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
-          {businessProducts.map((prod) => {
+          {filteredProducts.map((prod) => {
             const cat = businessCategories.find((c) => c.id === prod.category_id);
             return (
               <div key={prod.id} className="bg-white border border-slate-200/80 rounded-3xl overflow-hidden flex flex-col justify-between shadow-2xs hover:shadow-xs transition-shadow">
@@ -468,9 +497,9 @@ export default function ProductsSection({
       {/* Category Modal */}
       {isCategoryModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-xs">
-          <div className="bg-white rounded-3xl max-w-sm w-full p-6 border border-slate-200 shadow-2xl text-slate-800">
-            <div className="flex items-center justify-between pb-4 border-b border-slate-100 mb-4">
-              <h3 className="font-extrabold text-slate-900 text-base">Nouvelle Catégorie</h3>
+          <div className="bg-white rounded-3xl max-w-md w-full p-6 border border-slate-200 shadow-2xl text-slate-800 space-y-4">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+              <h3 className="font-extrabold text-slate-900 text-base">Gestion des Catégories</h3>
               <button
                 onClick={() => setIsCategoryModalOpen(false)}
                 className="text-slate-400 hover:text-slate-700 p-1 rounded-full transition-colors cursor-pointer"
@@ -479,26 +508,86 @@ export default function ProductsSection({
               </button>
             </div>
 
-            <form onSubmit={handleCategorySubmit} className="space-y-4 text-xs">
+            {/* Formulaire d'ajout */}
+            <form onSubmit={handleCategorySubmit} className="space-y-3 text-xs">
               <div>
-                <label className="font-extrabold text-slate-700 block mb-1">Nom de la catégorie</label>
-                <input
-                  type="text"
-                  value={newCatName}
-                  onChange={(e) => setNewCatName(e.target.value)}
-                  className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-slate-900 font-medium focus:outline-none focus:border-emerald-500 shadow-2xs"
-                  placeholder="ex: Desserts, Boissons Fraîches"
-                  required
-                />
+                <label className="font-extrabold text-slate-700 block mb-1">Ajouter une nouvelle catégorie</label>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="text"
+                    value={newCatName}
+                    onChange={(e) => setNewCatName(e.target.value)}
+                    className="flex-1 bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-slate-900 font-medium focus:outline-none focus:border-emerald-500 shadow-2xs"
+                    placeholder="ex: Desserts, Boissons Fraîches"
+                    required
+                  />
+                  <button
+                    type="submit"
+                    className="px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs rounded-xl transition-all shadow-sm shrink-0 cursor-pointer"
+                  >
+                    Ajouter
+                  </button>
+                </div>
               </div>
-
-              <button
-                type="submit"
-                className="w-full py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs rounded-xl transition-all shadow-sm cursor-pointer"
-              >
-                Créer la Catégorie
-              </button>
             </form>
+
+            {/* Liste des catégories existantes avec suppression */}
+            <div className="pt-3 border-t border-slate-100">
+              <span className="text-[11px] font-extrabold text-slate-500 uppercase tracking-wider block mb-2">
+                Catégories existantes ({businessCategories.length})
+              </span>
+
+              {businessCategories.length === 0 ? (
+                <p className="text-xs text-slate-400 italic py-2">
+                  Aucune catégorie pour le moment.
+                </p>
+              ) : (
+                <div className="space-y-1.5 max-h-48 overflow-y-auto pr-1">
+                  {businessCategories.map((cat) => {
+                    const count = businessProducts.filter((p) => p.category_id === cat.id).length;
+                    return (
+                      <div
+                        key={cat.id}
+                        className="flex items-center justify-between px-3 py-2 bg-slate-50 border border-slate-200/80 rounded-xl text-xs"
+                      >
+                        <div className="flex items-center gap-2 min-w-0">
+                          <span className="font-bold text-slate-800 truncate">{cat.name}</span>
+                          <span className="text-[10px] text-slate-400 shrink-0">({count} produit{count > 1 ? 's' : ''})</span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (count > 0) {
+                              if (!confirm(`Cette catégorie contient ${count} produit(s). Confirmez-vous la suppression ?`)) {
+                                return;
+                              }
+                            }
+                            onDeleteCategory(cat.id);
+                            if (selectedCategoryId === cat.id) {
+                              setSelectedCategoryId('all');
+                            }
+                          }}
+                          className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer shrink-0 ml-2"
+                          title="Supprimer la catégorie"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+            <div className="pt-2 border-t border-slate-100 flex justify-end">
+              <button
+                type="button"
+                onClick={() => setIsCategoryModalOpen(false)}
+                className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-xl transition-all cursor-pointer"
+              >
+                Fermer
+              </button>
+            </div>
           </div>
         </div>
       )}
