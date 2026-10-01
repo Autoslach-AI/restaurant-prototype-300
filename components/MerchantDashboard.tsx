@@ -333,7 +333,7 @@ export default function MerchantDashboard({
   // Order filters
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [orderSearch, setOrderSearch] = useState('');
-  const [alertCategoryFilter, setAlertCategoryFilter] = useState<'all' | 'urgent_undelivered' | 'preparing_45m'>('all');
+  const [alertCategoryFilter, setAlertCategoryFilter] = useState<'all' | 'urgent_undelivered' | 'preparing_45m' | 'new_orders'>('all');
   const [paymentMethodFilter, setPaymentMethodFilter] = useState<'all' | 'wave' | 'orange' | 'card'>('all');
   const [orderPeriodFilter, setOrderPeriodFilter] = useState<'day' | 'week' | 'month' | 'year' | 'all'>('all');
   const [hasRatingFilter, setHasRatingFilter] = useState<boolean>(false);
@@ -789,16 +789,34 @@ export default function MerchantDashboard({
     return nowMs - startTime >= 45 * 60 * 1000;
   });
 
+  // 3. Nouvelles commandes récemment créées (<= 30 min, statut pending ou confirmed)
+  const newRecentOrders = businessOrders.filter((o) => {
+    if (o.status !== 'pending' && o.status !== 'confirmed') return false;
+    const createdAt = new Date(o.created_at).getTime();
+    return nowMs - createdAt <= 30 * 60 * 1000;
+  });
+
   const totalSubAlertsCount =
     urgentUndelivered.length +
-    preparingOver45Min.length;
+    preparingOver45Min.length +
+    newRecentOrders.length;
 
   const alertCategories = [
+    {
+      id: 'new_orders' as const,
+      title: 'Nouvelle commande',
+      count: newRecentOrders.length,
+      rank: 1,
+      icon: Sparkles,
+      activeColorClass: 'bg-[#EBF3F3] hover:bg-[#EBF3F3]/80 border-[#1B4B4A]/30 text-[#1B4B4A] font-black',
+      activeBadgeClass: 'bg-[#1B4B4A] text-white font-extrabold',
+      activeIconClass: 'text-[#1B4B4A]',
+    },
     {
       id: 'urgent_undelivered' as const,
       title: 'Commande urgente non livrée',
       count: urgentUndelivered.length,
-      rank: 1,
+      rank: 2,
       icon: AlertTriangle,
       activeColorClass: 'bg-[#FCECEB] hover:bg-[#FCECEB]/80 border-[#A63A2F]/30 text-[#A63A2F] font-black',
       activeBadgeClass: 'bg-[#A63A2F] text-white font-extrabold',
@@ -808,7 +826,7 @@ export default function MerchantDashboard({
       id: 'preparing_45m' as const,
       title: 'En cours depuis +45 min',
       count: preparingOver45Min.length,
-      rank: 2,
+      rank: 3,
       icon: AlertCircle,
       activeColorClass: 'bg-[#FBF4E8] hover:bg-[#FBF4E8]/80 border-[#C88A2E]/30 text-[#C88A2E] font-black',
       activeBadgeClass: 'bg-[#C88A2E] text-white font-extrabold',
@@ -1895,11 +1913,6 @@ export default function MerchantDashboard({
                           }
 
                           return recentOrders.map((ord) => {
-                            const custObj = businessCustomers.find(
-                              (c) =>
-                                (c.phone && ord.customer_phone && c.phone.includes(ord.customer_phone.slice(-8))) ||
-                                c.name === ord.customer_name
-                            );
                             const isPickup = ord.order_type === 'pickup' || (ord as any).delivery_type === 'pickup';
 
                             const formattedTime = ord.created_at
@@ -1912,11 +1925,11 @@ export default function MerchantDashboard({
                             const cleanOrderId = (() => {
                               if (!ord.id) return '#ORD';
                               const raw = String(ord.id).trim();
-                              if (raw.toUpperCase().startsWith('ORD_') || raw.toUpperCase().startsWith('ORD-')) {
-                                return `#${raw.toUpperCase()}`;
-                              }
-                              if (raw.startsWith('#')) return raw;
-                              return `#ORD-${raw.toUpperCase()}`;
+                              // Si l'ID contient des séparateurs (_ ou -), on isole le segment significatif
+                              const parts = raw.split(/[-_]/).filter(Boolean);
+                              const tail = parts.length > 1 ? parts[parts.length - 1] : raw;
+                              const shortCode = tail.length > 6 ? tail.slice(-6) : tail;
+                              return `#${shortCode.toUpperCase()}`;
                             })();
 
                             const locationLabel = isPickup
@@ -1967,31 +1980,23 @@ export default function MerchantDashboard({
                                   {cleanOrderId}
                                 </td>
 
-                                {/* Customer Avatar + Name (Separate click to customer page) */}
+                                {/* Customer Avatar + Name (Identique à OrdersSection) */}
                                 <td className="py-3.5 px-2">
                                   <div
-                                    className="flex items-center gap-2.5 cursor-pointer group/cust transition-colors"
+                                    className="flex items-center gap-2 cursor-pointer group/cust transition-colors"
                                     onClick={(e) => {
                                       e.stopPropagation();
-                                      if (custObj) {
-                                        setSelectedCustomerId(custObj.id);
+                                      if (ord.customer_id) {
+                                        setSelectedCustomerId(ord.customer_id);
                                       }
                                       setActiveTab('customers');
                                     }}
                                     title="Voir la fiche client"
                                   >
-                                    {custObj?.avatar_url ? (
-                                      <img
-                                        src={custObj.avatar_url}
-                                        alt={ord.customer_name}
-                                        className="w-7 h-7 rounded-full object-cover border border-slate-200 shrink-0 group-hover/cust:scale-110 transition-transform duration-200 shadow-2xs"
-                                      />
-                                    ) : (
-                                      <div className="w-7 h-7 rounded-full bg-gradient-to-br from-indigo-100 to-purple-100 text-purple-900 border border-purple-200/60 flex items-center justify-center font-black text-[10px] shrink-0 group-hover/cust:scale-110 transition-transform duration-200 shadow-2xs">
-                                        {getInitials(ord.customer_name)}
-                                      </div>
-                                    )}
-                                    <span className="font-bold text-slate-800 group-hover/cust:text-purple-600 group-hover/cust:underline underline-offset-2 transition-colors truncate max-w-[120px]">
+                                    <div className="w-7 h-7 rounded-full bg-slate-100 text-slate-700 border border-slate-200/80 font-medium text-xs flex items-center justify-center shrink-0">
+                                      {getInitials(ord.customer_name)}
+                                    </div>
+                                    <span className="font-bold text-slate-900 group-hover/cust:text-purple-600 group-hover/cust:underline underline-offset-2 transition-colors whitespace-nowrap">
                                       {ord.customer_name || 'Client Inconnu'}
                                     </span>
                                   </div>
@@ -2056,16 +2061,16 @@ export default function MerchantDashboard({
                 </div>
               </div>
 
-              {/* Right Column: Messages & Activity of RAG Agent */}
+              {/* Right Column: Messages & Activity of Assistant IA */}
               <div className="lg:col-span-2 bg-white border border-slate-100 rounded-3xl p-6 shadow-2xs flex flex-col justify-between">
                 <div>
                   <div className="flex items-center justify-between gap-2 pb-4 border-b border-slate-100">
                     <div className="flex items-center gap-2">
                       <div className="w-8 h-8 rounded-xl bg-purple-100/80 text-purple-700 flex items-center justify-center shrink-0">
-                        <Bot className="w-4 h-4" />
+                        <MessageSquare className="w-4 h-4" />
                       </div>
                       <div>
-                        <h3 className="font-extrabold text-slate-900 text-base tracking-tight">Messages Agent RAG</h3>
+                        <h3 className="font-extrabold text-slate-900 text-base tracking-tight">Messages Assistant IA</h3>
                         <p className="text-[11px] text-slate-500 font-medium">Assistance commerciale & Ventes AI</p>
                       </div>
                     </div>
@@ -2094,7 +2099,7 @@ export default function MerchantDashboard({
                       if (relevantEvents.length === 0) {
                         return (
                           <div className="py-8 text-center text-xs text-slate-400 font-medium bg-slate-50/50 rounded-2xl border border-dashed border-slate-200">
-                            Aucune activité agent pour le moment.
+                            Aucune activité assistant pour le moment.
                           </div>
                         );
                       }
@@ -2102,7 +2107,7 @@ export default function MerchantDashboard({
                       return relevantEvents.map((evt) => {
                         const eventDate = new Date(evt.created_at);
                         const timeStr = eventDate.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
-                        const rawMsg = evt.payload?.message || evt.payload?.query || evt.event_type || 'Action agent RAG enregistrée';
+                        const rawMsg = evt.payload?.message || evt.payload?.query || evt.event_type || 'Action assistant enregistrée';
                         const msgText = typeof rawMsg === 'string' ? rawMsg : String(rawMsg);
 
                         return (
@@ -2119,7 +2124,7 @@ export default function MerchantDashboard({
                           >
                             <div className="flex items-center justify-between gap-2 mb-1">
                               <span className="font-bold text-slate-800 text-xs group-hover:text-purple-700 transition-colors flex items-center gap-1.5">
-                                <Bot className="w-3.5 h-3.5 text-purple-600 shrink-0 group-hover:scale-110 transition-transform duration-200" />
+                                <MessageSquare className="w-3.5 h-3.5 text-purple-600 shrink-0 group-hover:scale-110 transition-transform duration-200" />
                                 {evt.event_type.replace(/_/g, ' ').toUpperCase()}
                               </span>
                               <span className="text-[10px] font-semibold text-slate-400 shrink-0">{timeStr}</span>
@@ -2138,7 +2143,7 @@ export default function MerchantDashboard({
                     onClick={() => setActiveTab('agent')}
                     className="w-full mt-4 py-2 text-xs font-bold text-slate-600 hover:text-slate-900 bg-slate-100 hover:bg-slate-200/80 rounded-xl transition-all cursor-pointer flex items-center justify-center gap-1.5"
                   >
-                    <span>Ouvrir l&apos;Assistant RAG</span>
+                    <span>Ouvrir l&apos;Assistant IA</span>
                     <ChevronRight className="w-3.5 h-3.5" />
                   </button>
                 </div>

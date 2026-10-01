@@ -17,8 +17,8 @@ export interface OrdersSectionProps {
   startOfTodayMs: number;
   statusFilter: string;
   setStatusFilter: (status: string) => void;
-  alertCategoryFilter: 'all' | 'urgent_undelivered' | 'preparing_45m';
-  setAlertCategoryFilter: (filter: 'all' | 'urgent_undelivered' | 'preparing_45m') => void;
+  alertCategoryFilter: 'all' | 'urgent_undelivered' | 'preparing_45m' | 'new_orders';
+  setAlertCategoryFilter: (filter: 'all' | 'urgent_undelivered' | 'preparing_45m' | 'new_orders') => void;
   orderSearch: string;
   setOrderSearch: (search: string) => void;
   hasRatingFilter: boolean;
@@ -124,6 +124,10 @@ export default function OrdersSection({
       if (o.status !== 'preparing' && o.status !== 'ready') return false;
       const startTime = new Date(o.updated_at || o.created_at).getTime();
       if (nowMs - startTime < 45 * 60 * 1000) return false;
+    } else if (alertCategoryFilter === 'new_orders') {
+      if (o.status !== 'pending' && o.status !== 'confirmed') return false;
+      const createdTime = new Date(o.created_at).getTime();
+      if (nowMs - createdTime > 30 * 60 * 1000) return false;
     } else {
       if (statusFilter !== 'all') {
         if (statusFilter === 'preparing') {
@@ -551,6 +555,11 @@ export default function OrdersSection({
                           <td className="py-3.5 px-3.5 text-right text-[11px] text-slate-600 font-normal whitespace-nowrap">
                             <span className="block text-slate-800 font-medium">{new Date(ord.created_at).toLocaleDateString('fr-FR')}</span>
                             <span className="text-[10px] text-slate-400 block" suppressHydrationWarning>{new Date(ord.created_at).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}</span>
+                            {ord.requested_delivery_time && (
+                              <span className="inline-flex items-center gap-1 mt-1 px-1.5 py-0.5 rounded-md bg-purple-50 text-purple-700 border border-purple-200 text-[10px] font-bold">
+                                <span>🕒 Souhaitée : {ord.requested_delivery_time}</span>
+                              </span>
+                            )}
                           </td>
 
                           {/* 11. Commentaire */}

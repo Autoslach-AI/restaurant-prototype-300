@@ -256,6 +256,8 @@ export default function HomePage() {
     deliveryFee?: number;
     customerLat?: number | null;
     customerLng?: number | null;
+    priorityLevel?: string | null;
+    requestedDeliveryTime?: string | null;
   }) => {
     const cartItemsTotal = store.getCartTotal();
     const isDelivery = (data.orderType || 'delivery') === 'delivery';
@@ -314,6 +316,8 @@ export default function HomePage() {
       delivery_fee: deliveryFee,
       customer_lat: data.customerLat !== undefined ? data.customerLat : null,
       customer_lng: data.customerLng !== undefined ? data.customerLng : null,
+      priority_level: data.priorityLevel || 'moyen',
+      requested_delivery_time: data.requestedDeliveryTime || null,
       items: orderItems,
     });
 

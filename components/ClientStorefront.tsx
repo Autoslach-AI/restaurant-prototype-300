@@ -49,6 +49,8 @@ interface ClientStorefrontProps {
     deliveryFee?: number;
     customerLat?: number | null;
     customerLng?: number | null;
+    priorityLevel?: string | null;
+    requestedDeliveryTime?: string | null;
   }) => Promise<{ order: Order; clientMsg: string; merchantMsg: string }>;
   onSimulatePayment: (orderId: string) => void;
   onSubmitRating?: (orderId: string, rating: number, comment: string) => void;
@@ -97,6 +99,8 @@ export default function ClientStorefront({
   const [customerPhone, setCustomerPhone] = useState('+221 77 654 32 10');
   const [deliveryAddress, setDeliveryAddress] = useState('Mermoz Pyrotechnie, Villa 14, Dakar');
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('wave');
+  const [priorityLevel, setPriorityLevel] = useState<'moyen' | 'urgent'>('moyen');
+  const [requestedDeliveryTime, setRequestedDeliveryTime] = useState('');
 
   // Rating state for last order
   const [userRating, setUserRating] = useState<number>(5);
@@ -165,6 +169,8 @@ export default function ClientStorefront({
         deliveryFee: currentDeliveryFee,
         customerLat: orderType === 'delivery' ? customerLat : null,
         customerLng: orderType === 'delivery' ? customerLng : null,
+        priorityLevel,
+        requestedDeliveryTime: requestedDeliveryTime.trim() || null,
       });
 
       if (result && result.order) {
@@ -761,6 +767,44 @@ export default function ClientStorefront({
                       </div>
                     </button>
                   )}
+                </div>
+              </div>
+
+              {/* Priority & Delivery Time Options */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 p-3 bg-slate-50/80 rounded-2xl border border-slate-200">
+                {/* Niveau de priorité souhaité */}
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                    Niveau de priorité souhaité
+                  </label>
+                  <select
+                    value={priorityLevel}
+                    onChange={(e) => setPriorityLevel(e.target.value as 'moyen' | 'urgent')}
+                    className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs font-bold text-slate-800 focus:ring-2 focus:ring-emerald-500"
+                  >
+                    <option value="moyen">Normal</option>
+                    <option value="urgent">Urgent</option>
+                  </select>
+                  <span className="text-[10px] text-slate-500 block mt-1">
+                    {priorityLevel === 'urgent' ? '⚡ Traitement prioritaire par l\'équipe' : 'Traitement dans le flux régulier'}
+                  </span>
+                </div>
+
+                {/* Heure de livraison souhaitée */}
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                    Heure souhaitée <span className="font-normal text-slate-400">(Optionnel)</span>
+                  </label>
+                  <input
+                    type="time"
+                    value={requestedDeliveryTime}
+                    onChange={(e) => setRequestedDeliveryTime(e.target.value)}
+                    placeholder="HH:MM"
+                    className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs font-medium text-slate-800 focus:ring-2 focus:ring-emerald-500"
+                  />
+                  <span className="text-[10px] text-slate-500 block mt-1">
+                    {orderType === 'pickup' ? 'Heure de retrait estimée' : 'Heure de réception désirée'}
+                  </span>
                 </div>
               </div>
 

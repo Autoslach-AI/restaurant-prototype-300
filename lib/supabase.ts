@@ -1967,6 +1967,7 @@ export async function insertOrder(data: {
   rating_comment?: string | null;
   priority_level?: string | null;
   urgent_surcharge_applied?: number | null;
+  requested_delivery_time?: string | null;
   items?: Array<{
     product_id: string;
     quantity: number;
@@ -2001,6 +2002,7 @@ export async function insertOrder(data: {
     rating_comment: data.rating_comment || null,
     priority_level: data.priority_level || null,
     urgent_surcharge_applied: data.urgent_surcharge_applied !== undefined ? data.urgent_surcharge_applied : null,
+    requested_delivery_time: data.requested_delivery_time || null,
     created_at: now,
     updated_at: now,
   };
