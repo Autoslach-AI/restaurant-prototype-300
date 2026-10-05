@@ -12,6 +12,8 @@ import {
   Video,
   Music,
   ImageIcon,
+  Loader2,
+  Code,
 } from 'lucide-react';
 import { getDownloadUrl } from '@/lib/supabase';
 
@@ -90,6 +92,79 @@ export function MediaViewer({ isOpen, onClose, media, item }: MediaViewerProps) 
     !isVideo &&
     !isAudio &&
     !isImage;
+
+  const isText =
+    (normalizedType.startsWith('text/') ||
+      normalizedType === 'application/json' ||
+      normalizedType === 'application/xml' ||
+      normalizedType === 'application/javascript' ||
+      normalizedType === 'text/javascript' ||
+      normalizedType === 'text/plain' ||
+      normalizedType === 'text/markdown' ||
+      normalizedType === 'text/html' ||
+      normalizedType === 'text/css' ||
+      normalizedType === 'text/csv' ||
+      lowerFileName.match(/\.(txt|csv|md|json|log|xml|html|css|js|ts|tsx|jsx|py|sql|yml|yaml)$/i) ||
+      rawUrl.match(/\.(txt|csv|md|json|log|xml|html|css|js|ts|tsx|jsx|py|sql|yml|yaml)(\?|$)/i)) &&
+    !isPdf &&
+    !isVideo &&
+    !isAudio &&
+    !isImage &&
+    !isOfficeDoc;
+
+  // Text preview states: loading, text content, error, truncated flag
+  const [textContent, setTextContent] = useState<string | null>(null);
+  const [textLoading, setTextLoading] = useState<boolean>(false);
+  const [textFetchFailed, setTextFetchFailed] = useState<boolean>(false);
+  const [isTextTruncated, setIsTextTruncated] = useState<boolean>(false);
+
+  const TEXT_MAX_CHARS = 200000;
+
+  // Fetch text content when modal is open and current item is a text file
+  useEffect(() => {
+    if (!isCurrentlyOpen || !isText || !rawUrl) {
+      setTextContent(null);
+      setTextLoading(false);
+      setTextFetchFailed(false);
+      setIsTextTruncated(false);
+      return;
+    }
+
+    const abortController = new AbortController();
+    setTextLoading(true);
+    setTextFetchFailed(false);
+    setTextContent(null);
+    setIsTextTruncated(false);
+
+    fetch(rawUrl, { signal: abortController.signal })
+      .then((res) => {
+        if (!res.ok) {
+          throw new Error(`HTTP error ${res.status}`);
+        }
+        return res.text();
+      })
+      .then((fullText) => {
+        if (fullText.length > TEXT_MAX_CHARS) {
+          setTextContent(fullText.slice(0, TEXT_MAX_CHARS));
+          setIsTextTruncated(true);
+        } else {
+          setTextContent(fullText);
+          setIsTextTruncated(false);
+        }
+        setTextLoading(false);
+      })
+      .catch((err) => {
+        if (err.name === 'AbortError') {
+          return;
+        }
+        setTextFetchFailed(true);
+        setTextLoading(false);
+      });
+
+    return () => {
+      abortController.abort();
+    };
+  }, [isCurrentlyOpen, isText, rawUrl]);
 
   // Reset modal size and zoom when opening or switching media
   const [prevMediaKey, setPrevMediaKey] = useState<string | null>(null);
@@ -320,6 +395,8 @@ export function MediaViewer({ isOpen, onClose, media, item }: MediaViewerProps) 
                 <Video className="w-4 h-4 text-amber-400" />
               ) : isAudio ? (
                 <Music className="w-4 h-4 text-sky-400" />
+              ) : isText ? (
+                <Code className="w-4 h-4 text-teal-400" />
               ) : (
                 <FileText className="w-4 h-4 text-teal-400" />
               )}
@@ -491,6 +568,45 @@ export function MediaViewer({ isOpen, onClose, media, item }: MediaViewerProps) 
                 }}
                 className="max-h-[70vh] max-w-full object-contain rounded-xl shadow-2xl origin-center"
               />
+            </div>
+          ) : isText && !textFetchFailed ? (
+            /* 4.5 Text / Code Viewer */
+            <div className={`w-full ${!modalSize ? 'h-[74vh] max-w-4xl' : 'h-full min-h-[260px]'} flex flex-col bg-slate-900 border border-slate-800 rounded-2xl shadow-xl overflow-hidden`}>
+              <div className="flex items-center justify-between px-4 py-2 bg-slate-950/80 border-b border-slate-800 text-xs text-slate-400 font-mono select-none">
+                <span className="flex items-center gap-1.5 truncate">
+                  <Code className="w-3.5 h-3.5 text-teal-400 shrink-0" />
+                  <span className="truncate">{fileName}</span>
+                </span>
+                <a
+                  href={getDownloadUrl(url, fileName)}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  download={fileName}
+                  className="inline-flex items-center gap-1 px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg font-bold text-[11px] transition-colors shrink-0 ml-2"
+                >
+                  <Download className="w-3 h-3" />
+                  <span>Télécharger</span>
+                </a>
+              </div>
+
+              <div className="flex-1 overflow-auto p-4 select-text">
+                {textLoading ? (
+                  <div className="h-full min-h-[200px] flex flex-col items-center justify-center text-slate-400 space-y-2 select-none">
+                    <Loader2 className="w-6 h-6 animate-spin text-teal-400" />
+                    <span className="text-xs font-medium">Chargement de l&apos;aperçu…</span>
+                  </div>
+                ) : (
+                  <pre className="font-mono text-xs text-slate-200 whitespace-pre-wrap break-words leading-relaxed font-normal">
+                    {textContent}
+                  </pre>
+                )}
+              </div>
+
+              {isTextTruncated && (
+                <div className="px-4 py-2 bg-amber-500/10 border-t border-amber-500/20 text-[11px] text-amber-300 font-medium select-none">
+                  Aperçu limité aux 200 000 premiers caractères. Téléchargez le fichier pour le voir en entier.
+                </div>
+              )}
             </div>
           ) : (
             /* 5. Generic Document / Fallback Card */
