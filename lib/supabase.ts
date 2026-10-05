@@ -1381,74 +1381,53 @@ export async function uploadCustomerMedia(
     Boolean(process.env.NEXT_PUBLIC_SUPABASE_URL?.trim()) &&
     Boolean(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY?.trim());
 
-  if (hasCredentials) {
-    try {
-      const client = getSupabase();
-      const BUCKET_NAME = 'platform-customer-media';
-
-      const uploadRes = await client.storage
-        .from(BUCKET_NAME)
-        .upload(filePath, fileBlob, { upsert: true, contentType });
-
-      if (uploadRes.error) {
-        console.error(`Upload to ${BUCKET_NAME} failed:`, uploadRes.error.message);
-        return {
-          success: false,
-          error: `Échec de l'upload sur Supabase Storage : ${uploadRes.error.message}`,
-        };
-      }
-
-      if (uploadRes.data) {
-        const { data: publicUrlData } = client.storage
-          .from(BUCKET_NAME)
-          .getPublicUrl(filePath);
-
-        if (publicUrlData?.publicUrl) {
-          return {
-            success: true,
-            url: publicUrlData.publicUrl,
-            media_type: mediaCategory,
-            media_name: originalName,
-            media_size: fileSize,
-          };
-        }
-      }
-    } catch (err: any) {
-      console.error('Supabase storage customer media upload exception:', err);
-      return { success: false, error: err?.message || "Erreur lors de l'upload du fichier" };
-    }
-  }
-
-  // Fallback to data URL only if Supabase keys are absent
-  if (typeof input === 'string') {
+  if (!hasCredentials) {
     return {
-      success: true,
-      url: input,
-      media_type: mediaCategory,
-      media_name: originalName,
-      media_size: fileSize,
+      success: false,
+      error: "Configuration Supabase manquante : l'envoi de fichiers est désactivé.",
     };
   }
 
-  return new Promise((resolve) => {
-    const reader = new FileReader();
-    reader.onloadend = () => {
-      if (typeof reader.result === 'string') {
-        resolve({
+  try {
+    const client = getSupabase();
+    const BUCKET_NAME = 'platform-customer-media';
+
+    const uploadRes = await client.storage
+      .from(BUCKET_NAME)
+      .upload(filePath, fileBlob, { upsert: true, contentType });
+
+    if (uploadRes.error) {
+      console.error(`Upload to ${BUCKET_NAME} failed:`, uploadRes.error.message);
+      return {
+        success: false,
+        error: `Échec de l'upload sur Supabase Storage : ${uploadRes.error.message}`,
+      };
+    }
+
+    if (uploadRes.data) {
+      const { data: publicUrlData } = client.storage
+        .from(BUCKET_NAME)
+        .getPublicUrl(filePath);
+
+      if (publicUrlData?.publicUrl) {
+        return {
           success: true,
-          url: reader.result,
+          url: publicUrlData.publicUrl,
           media_type: mediaCategory,
           media_name: originalName,
           media_size: fileSize,
-        });
-      } else {
-        resolve({ success: false, error: 'Conversion du fichier en base64 échouée' });
+        };
       }
+    }
+
+    return {
+      success: false,
+      error: "L'upload a réussi mais l'URL publique est introuvable.",
     };
-    reader.onerror = () =>
-      resolve({ success: false, error: 'Erreur lors de la lecture du fichier' });
-    reader.readAsDataURL(fileBlob);
-  });
+  } catch (err: any) {
+    console.error('Supabase storage customer media upload exception:', err);
+    return { success: false, error: err?.message || "Erreur lors de l'upload du fichier" };
+  }
 }
 
 /**

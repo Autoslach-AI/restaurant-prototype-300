@@ -1,15 +1,11 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import Image from 'next/image';
 import { motion } from 'motion/react';
 import PeriodFilter, { PeriodType } from '@/components/ui/period-filter';
 import { Expense } from '@/lib/types';
 import { fetchExpensesForBusiness } from '@/lib/supabase';
 import {
-  Search,
-  Moon,
-  Bell,
   ChevronDown,
   MoreVertical,
   TrendingUp,
@@ -654,54 +650,18 @@ export default function FinanceSection({
       className="p-6 md:p-8 space-y-8 bg-slate-50/50 min-h-screen text-slate-800 font-sans"
     >
       {/* 1. TOP HEADER */}
-      <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
+      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold text-slate-900 tracking-tight">Finance</h1>
         </div>
 
-        <div className="flex flex-wrap items-center gap-4 w-full sm:w-auto">
+        <div>
           {/* Global Period Filter */}
           <PeriodFilter
             value={periodFilter}
             onChange={setPeriodFilter}
             showLabel={true}
           />
-
-          {/* Search Box */}
-          <div className="relative flex-1 sm:w-56">
-            <Search className="w-4 h-4 absolute left-3.5 top-2.5 text-slate-400" />
-            <input
-              type="text"
-              placeholder="Search"
-              className="w-full bg-slate-100/80 border border-slate-200/80 rounded-xl pl-10 pr-4 py-2 text-xs text-slate-800 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-cyan-500/20 focus:bg-white transition-all"
-            />
-          </div>
-
-          {/* Action Icons & Profile */}
-          <div className="flex items-center gap-3 shrink-0">
-            <button className="p-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-600 transition-colors">
-              <Moon className="w-4 h-4" />
-            </button>
-            <button className="p-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-600 transition-colors relative">
-              <Bell className="w-4 h-4" />
-              <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-rose-500 rounded-full" />
-            </button>
-
-            <div className="flex items-center gap-2 pl-2 border-l border-slate-200">
-              <div className="w-8 h-8 rounded-full bg-slate-800 text-white font-bold text-xs flex items-center justify-center overflow-hidden">
-                <Image
-                  src="https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=120&q=80"
-                  alt="User"
-                  width={32}
-                  height={32}
-                  unoptimized
-                  referrerPolicy="no-referrer"
-                  className="w-full h-full object-cover"
-                />
-              </div>
-              <ChevronDown className="w-3.5 h-3.5 text-slate-500" />
-            </div>
-          </div>
         </div>
       </div>
 

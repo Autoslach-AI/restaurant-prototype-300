@@ -580,6 +580,11 @@ export default function CustomersSection({
         break;
       }
 
+      if (!uploadRes.url.startsWith('https://')) {
+        anyError = "URL de fichier invalide, envoi annulé.";
+        break;
+      }
+
       // La légende texte saisie est associée au premier message envoyé
       const messageContent = i === 0 && text ? text : undefined;
 
