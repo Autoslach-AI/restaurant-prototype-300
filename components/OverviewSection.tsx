@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import {
   ArrowUpRight,
   TrendingUp,
@@ -149,6 +149,53 @@ export default function OverviewSection({
 
   const loyaltyRate =
     businessCustomers.length > 0 ? (loyalCustomers.length / businessCustomers.length) * 100 : 0;
+
+  // Real payment methods distribution for donut chart
+  const PAYMENT_PALETTE = ['#FF4B72', '#8B5CF6', '#F472B6', '#DDD6FE'];
+
+  const paymentMethodsDistribution = useMemo(() => {
+    const validOrders = businessOrders.filter((o) => o.status !== 'cancelled');
+    const totalValid = validOrders.length;
+    if (totalValid === 0) return [];
+
+    const getPaymentLabel = (method?: string | null): string => {
+      if (!method || !method.trim()) return 'Non précisé';
+      const clean = method.trim().toLowerCase();
+      if (clean === 'wave') return 'Wave';
+      if (clean === 'orange_money' || clean === 'orange') return 'Orange Money';
+      if (clean === 'card' || clean === 'paydunya' || clean === 'cinetpay') return 'Carte';
+      if (clean === 'cash') return 'Espèces';
+      return clean.charAt(0).toUpperCase() + clean.slice(1);
+    };
+
+    const countsMap = new Map<string, number>();
+    for (const order of validOrders) {
+      const label = getPaymentLabel(order.payment_method);
+      countsMap.set(label, (countsMap.get(label) || 0) + 1);
+    }
+
+    const sortedGroups = Array.from(countsMap.entries())
+      .map(([name, count]) => ({ name, count }))
+      .sort((a, b) => b.count - a.count);
+
+    let sumPercentages = 0;
+    return sortedGroups.map((group, index) => {
+      let pct: number;
+      if (index === sortedGroups.length - 1) {
+        pct = Math.max(0, 100 - sumPercentages);
+      } else {
+        pct = Math.round((group.count / totalValid) * 100);
+        sumPercentages += pct;
+      }
+      return {
+        name: group.name,
+        count: group.count,
+        value: group.count,
+        pct: `${pct} %`,
+        color: PAYMENT_PALETTE[index % PAYMENT_PALETTE.length],
+      };
+    });
+  }, [businessOrders]);
 
   const getInitials = (name?: string) => {
     if (!name) return 'CL';
@@ -628,63 +675,57 @@ export default function OverviewSection({
           </div>
         </div>
 
-        {/* Carte Droite: Top Formats de Vente (Donut Chart) */}
+        {/* Carte Droite: Moyens de paiement (Donut Chart) */}
         <div className="lg:col-span-2 bg-white border border-slate-100 rounded-3xl p-6 shadow-2xs flex flex-col justify-between">
           <div>
             <h3 className="font-extrabold text-slate-900 text-lg tracking-tight pb-4 border-b border-slate-100">
-              Top Formats de Vente
+              Moyens de paiement
             </h3>
 
-            <div className="mt-4 flex flex-col sm:flex-row items-center justify-between gap-4">
-              {/* Donut Chart */}
-              <div className="w-44 h-44 shrink-0 relative flex items-center justify-center">
-                <ResponsiveContainer width="100%" height="100%">
-                  <PieChart>
-                    <Pie
-                      data={[
-                        { name: 'Commande Directe', value: 54, color: '#FF4B72' },
-                        { name: 'Assistant IA', value: 24, color: '#8B5CF6' },
-                        { name: 'Catalogue Web', value: 16, color: '#F472B6' },
-                        { name: 'Lien de Paiement', value: 6, color: '#DDD6FE' },
-                      ]}
-                      cx="50%"
-                      cy="50%"
-                      innerRadius={48}
-                      outerRadius={72}
-                      paddingAngle={2}
-                      dataKey="value"
-                    >
-                      {[
-                        { name: 'Commande Directe', value: 54, color: '#FF4B72' },
-                        { name: 'Assistant IA', value: 24, color: '#8B5CF6' },
-                        { name: 'Catalogue Web', value: 16, color: '#F472B6' },
-                        { name: 'Lien de Paiement', value: 6, color: '#DDD6FE' },
-                      ].map((entry, index) => (
-                        <Cell key={`cell-${index}`} fill={entry.color} stroke="#FFFFFF" strokeWidth={2} />
-                      ))}
-                    </Pie>
-                  </PieChart>
-                </ResponsiveContainer>
+            {paymentMethodsDistribution.length === 0 ? (
+              <div className="py-12 flex flex-col items-center justify-center text-center">
+                <p className="text-sm font-medium text-slate-400">
+                  Aucune commande pour le moment
+                </p>
               </div>
+            ) : (
+              <div className="mt-4 flex flex-col sm:flex-row items-center justify-between gap-4">
+                {/* Donut Chart */}
+                <div className="w-44 h-44 shrink-0 relative flex items-center justify-center">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <PieChart>
+                      <Pie
+                        data={paymentMethodsDistribution}
+                        cx="50%"
+                        cy="50%"
+                        innerRadius={48}
+                        outerRadius={72}
+                        paddingAngle={2}
+                        dataKey="value"
+                      >
+                        {paymentMethodsDistribution.map((entry, index) => (
+                          <Cell key={`cell-${index}`} fill={entry.color} stroke="#FFFFFF" strokeWidth={2} />
+                        ))}
+                      </Pie>
+                    </PieChart>
+                  </ResponsiveContainer>
+                </div>
 
-              {/* Legend list matching reference layout */}
-              <div className="flex flex-col space-y-3 w-full sm:w-auto">
-                {[
-                  { label: 'Commande Directe', pct: '54%', color: '#FF4B72' },
-                  { label: 'Assistant IA', pct: '24%', color: '#8B5CF6' },
-                  { label: 'Catalogue Web', pct: '16%', color: '#F472B6' },
-                  { label: 'Lien de Paiement', pct: '6%', color: '#DDD6FE' },
-                ].map((item, idx) => (
-                  <div key={idx} className="flex items-center justify-between gap-4 text-xs">
-                    <div className="flex items-center gap-2">
-                      <span className="w-2.5 h-2.5 rounded-full inline-block" style={{ backgroundColor: item.color }} />
-                      <span className="font-semibold text-slate-700 whitespace-nowrap">{item.label}</span>
+                {/* Legend list matching reference layout */}
+                <div className="flex flex-col space-y-3 w-full sm:w-auto">
+                  {paymentMethodsDistribution.map((item, idx) => (
+                    <div key={idx} className="flex items-center justify-between gap-4 text-xs">
+                      <div className="flex items-center gap-2">
+                        <span className="w-2.5 h-2.5 rounded-full inline-block shrink-0" style={{ backgroundColor: item.color }} />
+                        <span className="font-semibold text-slate-700 whitespace-nowrap">
+                          {item.name} — {item.pct} ({item.count})
+                        </span>
+                      </div>
                     </div>
-                    <span className="font-black text-slate-900 tabular-nums">{item.pct}</span>
-                  </div>
-                ))}
+                  ))}
+                </div>
               </div>
-            </div>
+            )}
           </div>
         </div>
       </div>
