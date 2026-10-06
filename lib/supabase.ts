@@ -3297,6 +3297,38 @@ export async function updateBusinessConfig(
 
   try {
     const client = getSupabase();
+
+    // Merge existing config to preserve other nested keys (e.g. oracle, display_preferences)
+    if (data.config) {
+      const { data: currentBiz } = await (client as any)
+        .from('platform_businesses')
+        .select('config')
+        .eq('id', businessId)
+        .maybeSingle();
+
+      if (currentBiz?.config) {
+        updatePayload.config = {
+          ...currentBiz.config,
+          ...data.config,
+          ...(data.config.message_templates
+            ? {
+                message_templates: {
+                  ...(currentBiz.config.message_templates || {}),
+                  ...data.config.message_templates,
+                },
+              }
+            : {}),
+        };
+      }
+
+      // Force la clé « oracle » : protégée contre toute écriture du Dashboard
+      if (currentBiz?.config?.oracle) {
+        updatePayload.config.oracle = currentBiz.config.oracle;
+      } else if (updatePayload.config) {
+        delete updatePayload.config.oracle;
+      }
+    }
+
     const { data: updatedRows, error } = await (client as any)
       .from('platform_businesses')
       .update(updatePayload)
@@ -3323,6 +3355,75 @@ export async function updateBusinessConfig(
   } catch (err: any) {
     console.warn('Supabase update business exception:', err?.message || err);
     return { success: false, error: err?.message || 'Erreur de connexion à la base de données' };
+  }
+}
+
+/**
+ * TOKEN USAGE TRACKING (platform_token_usage & platform_businesses.config.oracle)
+ * ============================================================================
+ */
+
+/**
+ * Fetch total tokens used for the current month and monthly limit configured.
+ * used = sum of total_tokens in platform_token_usage since 1st of current month at 00:00 UTC.
+ * limit = config.oracle.token_quota.monthly_limit from platform_businesses (null if absent).
+ */
+export async function fetchTokenUsageForBusiness(
+  businessId: string
+): Promise<{ used: number; limit: number | null }> {
+  const now = new Date();
+  const startOfMonthIso = new Date(
+    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1, 0, 0, 0)
+  ).toISOString();
+
+  const hasCredentials =
+    Boolean(process.env.NEXT_PUBLIC_SUPABASE_URL?.trim()) &&
+    Boolean(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY?.trim());
+
+  if (!hasCredentials) {
+    const store = getStore();
+    const biz = store.businesses.find((b) => b.id === businessId);
+    const rawLimit = biz?.config?.oracle?.token_quota?.monthly_limit;
+    const limit = typeof rawLimit === 'number' && Number.isFinite(rawLimit) ? rawLimit : null;
+    return { used: 0, limit };
+  }
+
+  try {
+    const client = getSupabase();
+
+    // 1. Fetch token consumption for current month
+    const { data: usageRows, error: usageError } = await (client as any)
+      .from('platform_token_usage')
+      .select('total_tokens')
+      .eq('business_id', businessId)
+      .gte('created_at', startOfMonthIso);
+
+    if (usageError) {
+      console.warn('Supabase fetchTokenUsage error (usage):', usageError.message);
+    }
+
+    const used = Array.isArray(usageRows)
+      ? usageRows.reduce((sum, row) => sum + (Number(row.total_tokens) || 0), 0)
+      : 0;
+
+    // 2. Fetch monthly limit from business config
+    const { data: bizData, error: bizError } = await (client as any)
+      .from('platform_businesses')
+      .select('config')
+      .eq('id', businessId)
+      .maybeSingle();
+
+    if (bizError) {
+      console.warn('Supabase fetchTokenUsage error (biz config):', bizError.message);
+    }
+
+    const rawLimit = bizData?.config?.oracle?.token_quota?.monthly_limit;
+    const limit = typeof rawLimit === 'number' && Number.isFinite(rawLimit) ? rawLimit : null;
+
+    return { used, limit };
+  } catch (err: any) {
+    console.warn('Supabase fetchTokenUsage exception:', err?.message || err);
+    return { used: 0, limit: null };
   }
 }
 

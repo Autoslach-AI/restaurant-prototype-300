@@ -88,6 +88,7 @@ import {
   fetchCustomersForBusiness,
   fetchBusinessById,
   updateBusinessConfig,
+  fetchTokenUsageForBusiness,
   supabase,
 } from '@/lib/supabase';
 import {
@@ -427,6 +428,46 @@ export default function MerchantDashboard({
     gwProvider !== currentGw.provider ||
     gwPublicKey !== (currentGw.public_key || '') ||
     gwSecretKey !== (currentGw.secret_key || '');
+
+  // Token Quota state for sidebar
+  const [tokenUsage, setTokenUsage] = useState<{ used: number; limit: number | null } | null>(null);
+  const [isTokenLoading, setIsTokenLoading] = useState<boolean>(true);
+
+  useEffect(() => {
+    let isMounted = true;
+    async function loadTokenQuota() {
+      if (!business?.id) return;
+      setIsTokenLoading(true);
+      try {
+        const data = await fetchTokenUsageForBusiness(business.id);
+        if (isMounted) {
+          setTokenUsage(data);
+        }
+      } catch (err) {
+        console.error('Erreur chargement tokens:', err);
+      } finally {
+        if (isMounted) {
+          setIsTokenLoading(false);
+        }
+      }
+    }
+    loadTokenQuota();
+    return () => {
+      isMounted = false;
+    };
+  }, [business.id, activeTab]);
+
+  const formatCompactTokens = (num: number): string => {
+    if (num >= 1_000_000) {
+      const mVal = num / 1_000_000;
+      return Number.isInteger(mVal) ? `${mVal}M` : `${mVal.toFixed(1)}M`;
+    }
+    if (num >= 1_000) {
+      const kVal = num / 1_000;
+      return Number.isInteger(kVal) ? `${kVal}k` : `${Math.round(kVal)}k`;
+    }
+    return String(num);
+  };
 
   const isChannelsChanged = currentChs.some(
     (c) => (channelStates[c.id] ?? c.enabled) !== c.enabled
@@ -1075,42 +1116,90 @@ export default function MerchantDashboard({
 
         {/* Sidebar Footer: Token Quota */}
         <div className="p-3 border-t border-slate-200/80 bg-slate-50/60">
-          {!isSidebarCollapsed ? (
-            <div>
-              {/* Monthly Tokens Quota Indicator (Clickable -> Settings / Subscription) */}
-              <div
-                onClick={() => setActiveTab('settings')}
-                className="p-2.5 bg-white hover:bg-slate-50 rounded-2xl border border-slate-200/80 shadow-2xs transition-all cursor-pointer group"
-                title="Gérer mon abonnement"
-              >
-                <div className="flex items-center justify-between text-[11px] font-extrabold text-slate-700 mb-1.5">
-                  <span>Tokens restants</span>
-                  <span className="text-[10px] text-[#B5451B] font-extrabold group-hover:underline">Abonnement →</span>
-                </div>
-                {/* Thin horizontal progress bar */}
-                <div className="w-full bg-slate-100 rounded-full h-1.5 overflow-hidden">
+          {(() => {
+            const limit = tokenUsage?.limit;
+            const used = tokenUsage?.used ?? 0;
+            const hasLimit = typeof limit === 'number' && limit > 0;
+            const remaining = hasLimit ? Math.max(0, limit - used) : 0;
+            const pct = hasLimit ? Math.min(100, Math.max(0, (remaining / limit) * 100)) : 0;
+            const compactText = hasLimit
+              ? `${formatCompactTokens(remaining)} / ${formatCompactTokens(limit)} tokens`
+              : 'Quota non défini';
+
+            if (!isSidebarCollapsed) {
+              return (
+                <div>
+                  {/* Monthly Tokens Quota Indicator (Clickable -> Settings / Subscription) */}
                   <div
-                    className="bg-[#1B4B4A] h-1.5 rounded-full transition-all duration-300"
-                    style={{ width: '68%' }}
+                    onClick={() => setActiveTab('settings')}
+                    className="p-2.5 bg-white hover:bg-slate-50 rounded-2xl border border-slate-200/80 shadow-2xs transition-all cursor-pointer group"
+                    title="Gérer mon abonnement"
+                  >
+                    <div className="flex items-center justify-between text-[11px] font-extrabold text-slate-700 mb-1.5">
+                      <span>Tokens restants</span>
+                      <span className="text-[10px] text-[#B5451B] font-extrabold group-hover:underline">Abonnement →</span>
+                    </div>
+
+                    {isTokenLoading ? (
+                      <div>
+                        <div className="w-full bg-slate-100 rounded-full h-1.5 overflow-hidden animate-pulse" />
+                        <div className="mt-1.5 text-right text-[10px] font-medium text-slate-400">
+                          Chargement...
+                        </div>
+                      </div>
+                    ) : hasLimit ? (
+                      <div>
+                        {/* Thin horizontal progress bar */}
+                        <div className="w-full bg-slate-100 rounded-full h-1.5 overflow-hidden">
+                          <div
+                            className="bg-[#1B4B4A] h-1.5 rounded-full transition-all duration-300"
+                            style={{ width: `${pct}%` }}
+                          />
+                        </div>
+                        <div className="mt-1.5 text-right text-[10px] font-bold text-slate-500 tabular-nums">
+                          {compactText}
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="mt-1 text-left text-[11px] font-semibold text-slate-400">
+                        Quota non défini
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            }
+
+            // Collapsed mode
+            return (
+              <div>
+                <div
+                  onClick={() => setActiveTab('settings')}
+                  className="p-1.5 bg-white hover:bg-slate-100 rounded-xl border border-slate-200/80 text-center transition-all cursor-pointer"
+                  title={
+                    isTokenLoading
+                      ? 'Chargement du quota...'
+                      : hasLimit
+                      ? `Tokens restants : ${compactText}`
+                      : 'Quota non défini'
+                  }
+                >
+                  <div
+                    className={`w-2 h-2 rounded-full mx-auto mb-0.5 ${
+                      isTokenLoading || !hasLimit ? 'bg-slate-300' : 'bg-[#1B4B4A]'
+                    }`}
                   />
-                </div>
-                <div className="mt-1.5 text-right text-[10px] font-bold text-slate-500 tabular-nums">
-                  680k / 1M tokens
+                  <span className="text-[9px] font-bold text-slate-600 block">
+                    {isTokenLoading
+                      ? '...'
+                      : hasLimit
+                      ? formatCompactTokens(remaining)
+                      : '—'}
+                  </span>
                 </div>
               </div>
-            </div>
-          ) : (
-            <div>
-              <div
-                onClick={() => setActiveTab('settings')}
-                className="p-1.5 bg-white hover:bg-slate-100 rounded-xl border border-slate-200/80 text-center transition-all cursor-pointer"
-                title="Tokens restants : 680k / 1M tokens"
-              >
-                <div className="w-2 h-2 rounded-full bg-[#1B4B4A] mx-auto mb-0.5" />
-                <span className="text-[9px] font-bold text-slate-600 block">680k</span>
-              </div>
-            </div>
-          )}
+            );
+          })()}
         </div>
       </aside>
 

@@ -467,6 +467,10 @@ export async function POST(req: NextRequest) {
     let turn = 0;
     let responseText = '';
 
+    let totalPromptTokens = 0;
+    let totalCandidatesTokens = 0;
+    let totalTokens = 0;
+
     while (turn < maxTurns) {
       turn++;
       const response = await ai.models.generateContent({
@@ -477,6 +481,12 @@ export async function POST(req: NextRequest) {
           tools: [{ functionDeclarations }],
         },
       });
+
+      if (response.usageMetadata) {
+        totalPromptTokens += response.usageMetadata.promptTokenCount ?? 0;
+        totalCandidatesTokens += response.usageMetadata.candidatesTokenCount ?? 0;
+        totalTokens += response.usageMetadata.totalTokenCount ?? 0;
+      }
 
       const functionCalls = response.functionCalls;
 
@@ -518,7 +528,32 @@ export async function POST(req: NextRequest) {
           systemInstruction: baseSystemInstruction,
         },
       });
+      if (finalRes.usageMetadata) {
+        totalPromptTokens += finalRes.usageMetadata.promptTokenCount ?? 0;
+        totalCandidatesTokens += finalRes.usageMetadata.candidatesTokenCount ?? 0;
+        totalTokens += finalRes.usageMetadata.totalTokenCount ?? 0;
+      }
       responseText = finalRes.text || '';
+    }
+
+    // Persist token usage record (never blocks or alters chat response)
+    if (supabase && totalTokens > 0) {
+      try {
+        const { error: insertTokenErr } = await (supabase as any)
+          .from('platform_token_usage')
+          .insert({
+            business_id,
+            prompt_tokens: totalPromptTokens,
+            candidates_tokens: totalCandidatesTokens,
+            total_tokens: totalTokens,
+            source: 'agent_chat',
+          });
+        if (insertTokenErr) {
+          console.error('Erreur insertion platform_token_usage:', insertTokenErr.message);
+        }
+      } catch (tokenErr: any) {
+        console.error('Exception insertion platform_token_usage:', tokenErr?.message || tokenErr);
+      }
     }
 
     return NextResponse.json({

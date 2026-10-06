@@ -11,6 +11,11 @@ export interface BusinessConfig {
     primary_color?: string;
     banner_text?: string;
   };
+  oracle?: {
+    token_quota?: {
+      monthly_limit?: number;
+    };
+  };
 }
 
 export interface Business {
