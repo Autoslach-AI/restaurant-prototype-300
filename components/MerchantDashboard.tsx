@@ -649,15 +649,17 @@ export default function MerchantDashboard({
     return (o.priority_level || '').toLowerCase() === 'urgent';
   });
 
-  // 2. Commandes en cours depuis plus de 45 minutes (status = preparing ou ready)
+  // 2. Commandes en cours depuis plus de 45 minutes (status = preparing ou ready, hors urgentes)
   const preparingOver45Min = businessOrders.filter((o) => {
+    if ((o.priority_level || '').toLowerCase() === 'urgent') return false;
     if (o.status !== 'preparing' && o.status !== 'ready') return false;
     const startTime = new Date(o.updated_at || o.created_at).getTime();
     return nowMs - startTime >= 45 * 60 * 1000;
   });
 
-  // 3. Nouvelles commandes récemment créées (<= 30 min, statut pending ou confirmed)
+  // 3. Nouvelles commandes récemment créées (<= 30 min, statut pending ou confirmed, hors urgentes)
   const newRecentOrders = businessOrders.filter((o) => {
+    if ((o.priority_level || '').toLowerCase() === 'urgent') return false;
     if (o.status !== 'pending' && o.status !== 'confirmed') return false;
     const createdAt = new Date(o.created_at).getTime();
     return nowMs - createdAt <= 30 * 60 * 1000;

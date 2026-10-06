@@ -121,10 +121,12 @@ export default function OrdersSection({
       if (o.status === 'delivered' || o.status === 'cancelled') return false;
       if ((o.priority_level || '').toLowerCase() !== 'urgent') return false;
     } else if (alertCategoryFilter === 'preparing_45m') {
+      if ((o.priority_level || '').toLowerCase() === 'urgent') return false;
       if (o.status !== 'preparing' && o.status !== 'ready') return false;
       const startTime = new Date(o.updated_at || o.created_at).getTime();
       if (nowMs - startTime < 45 * 60 * 1000) return false;
     } else if (alertCategoryFilter === 'new_orders') {
+      if ((o.priority_level || '').toLowerCase() === 'urgent') return false;
       if (o.status !== 'pending' && o.status !== 'confirmed') return false;
       const createdTime = new Date(o.created_at).getTime();
       if (nowMs - createdTime > 30 * 60 * 1000) return false;

@@ -6,9 +6,6 @@ import {
   TrendingUp,
   TrendingDown,
   CheckCircle2,
-  Sparkles,
-  AlertTriangle,
-  AlertCircle,
   MessageSquare,
   ChevronRight,
 } from 'lucide-react';
@@ -90,30 +87,24 @@ export default function OverviewSection({
       title: 'Nouvelle commande',
       count: newRecentOrders.length,
       rank: 1,
-      icon: Sparkles,
       activeColorClass: 'bg-[#EBF3F3] hover:bg-[#EBF3F3]/80 border-[#1B4B4A]/30 text-[#1B4B4A] font-black',
       activeBadgeClass: 'bg-[#1B4B4A] text-white font-extrabold',
-      activeIconClass: 'text-[#1B4B4A]',
     },
     {
       id: 'urgent_undelivered' as const,
       title: 'Commande urgente non livrée',
       count: urgentUndelivered.length,
       rank: 2,
-      icon: AlertTriangle,
       activeColorClass: 'bg-[#FCECEB] hover:bg-[#FCECEB]/80 border-[#A63A2F]/30 text-[#A63A2F] font-black',
       activeBadgeClass: 'bg-[#A63A2F] text-white font-extrabold',
-      activeIconClass: 'text-[#A63A2F]',
     },
     {
       id: 'preparing_45m' as const,
       title: 'En cours depuis +45 min',
       count: preparingOver45Min.length,
       rank: 3,
-      icon: AlertCircle,
       activeColorClass: 'bg-[#FBF4E8] hover:bg-[#FBF4E8]/80 border-[#C88A2E]/30 text-[#C88A2E] font-black',
       activeBadgeClass: 'bg-[#C88A2E] text-white font-extrabold',
-      activeIconClass: 'text-[#C88A2E]',
     },
   ];
 
@@ -383,7 +374,6 @@ export default function OverviewSection({
 
               <div className="space-y-1.5">
                 {alertCategories.map((cat) => {
-                  const IconComp = cat.icon;
                   const isActive = cat.count > 0;
                   return (
                     <button
@@ -403,12 +393,7 @@ export default function OverviewSection({
                       }`}
                       title={`Cliquer pour filtrer les commandes : ${cat.title}`}
                     >
-                      <div className="flex items-center space-x-2 min-w-0 pr-1">
-                        <IconComp
-                          className={`w-3.5 h-3.5 shrink-0 ${
-                            isActive ? cat.activeIconClass : 'text-slate-400'
-                          }`}
-                        />
+                      <div className="flex items-center min-w-0 pr-1">
                         <span className="text-xs font-bold leading-tight">{cat.title}</span>
                       </div>
                       <span
