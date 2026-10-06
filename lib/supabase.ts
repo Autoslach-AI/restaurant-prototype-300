@@ -3319,6 +3319,10 @@ export async function updateBusinessConfig(
               }
             : {}),
         };
+      } else {
+        updatePayload.config = {
+          ...data.config,
+        };
       }
 
       // Force la clé « oracle » : protégée contre toute écriture du Dashboard
