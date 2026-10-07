@@ -1,6 +1,7 @@
 import { createClient } from '@supabase/supabase-js';
-import { AgentChatMessage, AgentChatMessageAttachment, AgentConversation, AgentProject, AttendanceRecord, Business, Category, Customer, CustomerMessage, DeliveryZone, Expense, ExpenseCategory, ExpenseCategoryItem, Order, OrderItem, OrderStatus, PaymentStatus, Product, Staff, StaffPermissions } from './types';
+import { AgentChatMessage, AgentChatMessageAttachment, AgentConversation, AgentMemory, AgentProject, AttendanceRecord, Business, Category, Customer, CustomerMessage, DeliveryZone, Expense, ExpenseCategory, ExpenseCategoryItem, Order, OrderItem, OrderStatus, PaymentStatus, Product, Staff, StaffPermissions } from './types';
 import { getStore } from './store';
+import { isSensitiveMemoryText } from './agent-config';
 
 let supabaseClient: ReturnType<typeof createClient> | null = null;
 
@@ -4088,6 +4089,288 @@ export async function insertAgentMessage(data: {
     return { success: false, error: err?.message || 'Erreur de connexion à la base de données' };
   }
 }
+
+/**
+ * 11. Récupère tous les souvenirs actifs d'un commerce ordonnés par date de création.
+ */
+export async function fetchAgentMemories(businessId: string): Promise<AgentMemory[]> {
+  if (!businessId) return [];
+
+  const hasCredentials =
+    Boolean(process.env.NEXT_PUBLIC_SUPABASE_URL?.trim()) &&
+    Boolean(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY?.trim());
+
+  if (!hasCredentials) {
+    return [];
+  }
+
+  try {
+    const client = getSupabase();
+    const { data, error } = await (client as any)
+      .from('platform_agent_memory')
+      .select('*')
+      .eq('business_id', businessId)
+      .eq('is_active', true)
+      .order('created_at', { ascending: true });
+
+    if (error) {
+      console.warn('Supabase fetchAgentMemories error:', error.message);
+      return [];
+    }
+
+    return (data || []) as AgentMemory[];
+  } catch (err: any) {
+    console.warn('Supabase fetchAgentMemories exception:', err?.message || err);
+    return [];
+  }
+}
+
+/**
+ * 12. Insère un nouveau souvenir pour un commerce après validation des règles métier.
+ */
+export async function insertAgentMemory(data: {
+  business_id: string;
+  section: string;
+  content: string;
+  source?: 'merchant' | 'agent' | string;
+  config: {
+    maxItems: number;
+    maxChars: number;
+    sections: Array<{ id: string; label: string }>;
+  };
+}): Promise<{ success: boolean; memory?: AgentMemory; error?: string }> {
+  const businessId = data?.business_id;
+  if (!businessId) {
+    return { success: false, error: 'Identifiant du commerce manquant.' };
+  }
+
+  const config = data?.config;
+  if (
+    !config ||
+    typeof config.maxItems !== 'number' ||
+    typeof config.maxChars !== 'number' ||
+    !Array.isArray(config.sections)
+  ) {
+    return { success: false, error: 'Configuration de la mémoire invalide ou non définie.' };
+  }
+
+  const trimmedContent = typeof data.content === 'string' ? data.content.trim() : '';
+  if (!trimmedContent) {
+    return { success: false, error: 'Le contenu du souvenir ne peut pas être vide.' };
+  }
+
+  if (trimmedContent.length > config.maxChars) {
+    return {
+      success: false,
+      error: `Le texte dépasse la limite autorisée de ${config.maxChars} caractères (longueur actuelle : ${trimmedContent.length}).`,
+    };
+  }
+
+  const isValidSection = config.sections.some((s) => s.id === data.section);
+  if (!isValidSection) {
+    return { success: false, error: "La section spécifiée n'est pas autorisée par la configuration." };
+  }
+
+  if (isSensitiveMemoryText(trimmedContent)) {
+    return {
+      success: false,
+      error: 'Le souvenir contient des informations sensibles interdites (carte bancaire, mot de passe, code PIN ou IBAN).',
+    };
+  }
+
+  const hasCredentials =
+    Boolean(process.env.NEXT_PUBLIC_SUPABASE_URL?.trim()) &&
+    Boolean(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY?.trim());
+
+  if (!hasCredentials) {
+    return { success: false, error: 'Connexion Supabase non configurée.' };
+  }
+
+  try {
+    const client = getSupabase();
+
+    // Vérifier que le nombre de souvenirs actifs est strictement inférieur à maxItems
+    const { count, error: countErr } = await (client as any)
+      .from('platform_agent_memory')
+      .select('id', { count: 'exact', head: true })
+      .eq('business_id', businessId)
+      .eq('is_active', true);
+
+    if (countErr) {
+      console.warn('Supabase insertAgentMemory count error:', countErr.message);
+      return { success: false, error: 'Erreur lors de la vérification du quota de souvenirs.' };
+    }
+
+    if (typeof count === 'number' && count >= config.maxItems) {
+      return {
+        success: false,
+        error: `La limite maximale de ${config.maxItems} souvenirs actifs est atteinte pour ce commerce.`,
+      };
+    }
+
+    const newId = `agmem_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+    const now = new Date().toISOString();
+    const recordToInsert = {
+      id: newId,
+      business_id: businessId,
+      section: data.section,
+      content: trimmedContent,
+      source: data.source || 'merchant',
+      is_active: true,
+      created_at: now,
+      updated_at: now,
+    };
+
+    const { data: insertedRows, error: insertErr } = await (client as any)
+      .from('platform_agent_memory')
+      .insert(recordToInsert)
+      .select();
+
+    if (insertErr) {
+      console.warn('Supabase insertAgentMemory error:', insertErr.message);
+      return { success: false, error: insertErr.message };
+    }
+
+    const memory = insertedRows && insertedRows[0] ? (insertedRows[0] as AgentMemory) : (recordToInsert as AgentMemory);
+    return { success: true, memory };
+  } catch (err: any) {
+    console.warn('Supabase insertAgentMemory exception:', err?.message || err);
+    return { success: false, error: err?.message || "Erreur de connexion lors de l'enregistrement du souvenir." };
+  }
+}
+
+/**
+ * 13. Met à jour un souvenir existant d'un commerce après validation.
+ */
+export async function updateAgentMemory(data: {
+  id: string;
+  business_id: string;
+  content: string;
+  section?: string;
+  config: {
+    maxChars: number;
+    sections: Array<{ id: string; label: string }>;
+  };
+}): Promise<{ success: boolean; memory?: AgentMemory; error?: string }> {
+  const { id, business_id: businessId, config } = data;
+  if (!id || !businessId) {
+    return { success: false, error: 'Identifiant du souvenir ou du commerce manquant.' };
+  }
+
+  if (!config || typeof config.maxChars !== 'number' || !Array.isArray(config.sections)) {
+    return { success: false, error: 'Configuration de la mémoire invalide ou non définie.' };
+  }
+
+  const trimmedContent = typeof data.content === 'string' ? data.content.trim() : '';
+  if (!trimmedContent) {
+    return { success: false, error: 'Le contenu du souvenir ne peut pas être vide.' };
+  }
+
+  if (trimmedContent.length > config.maxChars) {
+    return {
+      success: false,
+      error: `Le texte dépasse la limite autorisée de ${config.maxChars} caractères (longueur actuelle : ${trimmedContent.length}).`,
+    };
+  }
+
+  if (data.section) {
+    const isValidSection = config.sections.some((s) => s.id === data.section);
+    if (!isValidSection) {
+      return { success: false, error: "La section spécifiée n'est pas autorisée par la configuration." };
+    }
+  }
+
+  if (isSensitiveMemoryText(trimmedContent)) {
+    return {
+      success: false,
+      error: 'Le souvenir contient des informations sensibles interdites (carte bancaire, mot de passe, code PIN ou IBAN).',
+    };
+  }
+
+  const hasCredentials =
+    Boolean(process.env.NEXT_PUBLIC_SUPABASE_URL?.trim()) &&
+    Boolean(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY?.trim());
+
+  if (!hasCredentials) {
+    return { success: false, error: 'Connexion Supabase non configurée.' };
+  }
+
+  try {
+    const client = getSupabase();
+    const updatePayload: Record<string, any> = {
+      content: trimmedContent,
+      updated_at: new Date().toISOString(),
+    };
+    if (data.section) {
+      updatePayload.section = data.section;
+    }
+
+    const { data: updatedRows, error: updateErr } = await (client as any)
+      .from('platform_agent_memory')
+      .update(updatePayload)
+      .eq('id', id)
+      .eq('business_id', businessId)
+      .select();
+
+    if (updateErr) {
+      console.warn('Supabase updateAgentMemory error:', updateErr.message);
+      return { success: false, error: updateErr.message };
+    }
+
+    if (!updatedRows || updatedRows.length === 0) {
+      return { success: false, error: 'Souvenir introuvable ou non autorisé.' };
+    }
+
+    return { success: true, memory: updatedRows[0] as AgentMemory };
+  } catch (err: any) {
+    console.warn('Supabase updateAgentMemory exception:', err?.message || err);
+    return { success: false, error: err?.message || 'Erreur de connexion lors de la mise à jour du souvenir.' };
+  }
+}
+
+/**
+ * 14. Désactive un souvenir existant (soft delete : is_active = false).
+ */
+export async function softDeleteAgentMemory(data: {
+  id: string;
+  business_id: string;
+}): Promise<{ success: boolean; error?: string }> {
+  const { id, business_id: businessId } = data;
+  if (!id || !businessId) {
+    return { success: false, error: 'Identifiant du souvenir ou du commerce manquant.' };
+  }
+
+  const hasCredentials =
+    Boolean(process.env.NEXT_PUBLIC_SUPABASE_URL?.trim()) &&
+    Boolean(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY?.trim());
+
+  if (!hasCredentials) {
+    return { success: false, error: 'Connexion Supabase non configurée.' };
+  }
+
+  try {
+    const client = getSupabase();
+    const { error } = await (client as any)
+      .from('platform_agent_memory')
+      .update({
+        is_active: false,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', id)
+      .eq('business_id', businessId);
+
+    if (error) {
+      console.warn('Supabase softDeleteAgentMemory error:', error.message);
+      return { success: false, error: error.message };
+    }
+
+    return { success: true };
+  } catch (err: any) {
+    console.warn('Supabase softDeleteAgentMemory exception:', err?.message || err);
+    return { success: false, error: err?.message || 'Erreur lors de la désactivation du souvenir.' };
+  }
+}
+
 
 
 

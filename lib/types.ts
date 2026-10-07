@@ -15,6 +15,14 @@ export interface BusinessConfig {
     token_quota?: {
       monthly_limit?: number;
     };
+    agent?: {
+      system_prompt?: string;
+      memory?: {
+        max_items?: number;
+        max_chars?: number;
+        sections?: Array<{ id: string; label: string }>;
+      };
+    };
   };
 }
 
@@ -264,6 +272,17 @@ export interface AgentChatMessage {
   text: string;
   attachments?: AgentChatMessageAttachment[];
   created_at: string;
+}
+
+export interface AgentMemory {
+  id: string;
+  business_id: string;
+  section: string;
+  content: string;
+  source: 'merchant' | 'agent' | string;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
 }
 
 export type AttendanceStatus = 'present' | 'absent' | 'late';
