@@ -35,6 +35,49 @@ function getStartDateForPeriod(period?: string): { dateStr: string; isoStr: stri
   return { dateStr, isoStr };
 }
 
+async function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isRetryableUnavailableError(err: any): boolean {
+  const errStr = String(err?.message || err?.status || err || '');
+  return (
+    errStr.includes('503') ||
+    errStr.includes('UNAVAILABLE') ||
+    errStr.toLowerCase().includes('overloaded')
+  );
+}
+
+class ServiceUnavailableError extends Error {
+  code = 'SERVICE_UNAVAILABLE';
+  constructor(message = 'Le service IA est momentanément surchargé. Réessayez dans quelques instants.') {
+    super(message);
+    this.name = 'ServiceUnavailableError';
+  }
+}
+
+async function callGenerateContentWithRetry(ai: any, params: any) {
+  const delays = [1500, 3000]; // 1.5s, 3s (2 relances max)
+  let attempt = 0;
+
+  while (true) {
+    try {
+      return await ai.models.generateContent(params);
+    } catch (err: any) {
+      if (isRetryableUnavailableError(err) && attempt < delays.length) {
+        await sleep(delays[attempt]);
+        attempt++;
+        continue;
+      }
+      if (isRetryableUnavailableError(err)) {
+        throw new ServiceUnavailableError();
+      }
+      // Toute autre erreur (400, 401, 403, 429...) n'est PAS relancée
+      throw err;
+    }
+  }
+}
+
 async function executeGetRecentOrders(supabase: any, businessId: string, args: any) {
   const limitParam = typeof args?.limit === 'number' ? args.limit : 10;
   const limit = Math.min(Math.max(Math.floor(limitParam), 1), 50);
@@ -333,6 +376,10 @@ export async function POST(req: NextRequest) {
   let demoMessagesUsedToday: number | null = null;
   const demoMessagesLimit = 20;
   let resetAtIso: string | null = null;
+  let businessIdForTracking = '';
+  let totalPromptTokens = 0;
+  let totalCandidatesTokens = 0;
+  let totalTokens = 0;
 
   const getDemoMeta = () => {
     if (!isDemo) {
@@ -352,6 +399,7 @@ export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
     const { business_id, message, conversation_history } = body;
+    businessIdForTracking = business_id || '';
 
     if (!business_id || !message) {
       return NextResponse.json(
@@ -467,13 +515,30 @@ export async function POST(req: NextRequest) {
     let turn = 0;
     let responseText = '';
 
-    let totalPromptTokens = 0;
-    let totalCandidatesTokens = 0;
-    let totalTokens = 0;
+    const recordTokensToDatabase = async () => {
+      if (supabase && totalTokens > 0 && businessIdForTracking) {
+        try {
+          const { error: insertTokenErr } = await (supabase as any)
+            .from('platform_token_usage')
+            .insert({
+              business_id: businessIdForTracking,
+              prompt_tokens: totalPromptTokens,
+              candidates_tokens: totalCandidatesTokens,
+              total_tokens: totalTokens,
+              source: 'agent_chat',
+            });
+          if (insertTokenErr) {
+            console.error('Erreur insertion platform_token_usage:', insertTokenErr.message);
+          }
+        } catch (tokenErr: any) {
+          console.error('Exception insertion platform_token_usage:', tokenErr?.message || tokenErr);
+        }
+      }
+    };
 
     while (turn < maxTurns) {
       turn++;
-      const response = await ai.models.generateContent({
+      const response = await callGenerateContentWithRetry(ai, {
         model: 'gemini-3.6-flash',
         contents,
         config: {
@@ -521,7 +586,7 @@ export async function POST(req: NextRequest) {
     }
 
     if (!responseText && turn >= maxTurns) {
-      const finalRes = await ai.models.generateContent({
+      const finalRes = await callGenerateContentWithRetry(ai, {
         model: 'gemini-3.6-flash',
         contents,
         config: {
@@ -537,24 +602,7 @@ export async function POST(req: NextRequest) {
     }
 
     // Persist token usage record (never blocks or alters chat response)
-    if (supabase && totalTokens > 0) {
-      try {
-        const { error: insertTokenErr } = await (supabase as any)
-          .from('platform_token_usage')
-          .insert({
-            business_id,
-            prompt_tokens: totalPromptTokens,
-            candidates_tokens: totalCandidatesTokens,
-            total_tokens: totalTokens,
-            source: 'agent_chat',
-          });
-        if (insertTokenErr) {
-          console.error('Erreur insertion platform_token_usage:', insertTokenErr.message);
-        }
-      } catch (tokenErr: any) {
-        console.error('Exception insertion platform_token_usage:', tokenErr?.message || tokenErr);
-      }
-    }
+    await recordTokensToDatabase();
 
     return NextResponse.json({
       text: responseText,
@@ -562,8 +610,40 @@ export async function POST(req: NextRequest) {
       ...getDemoMeta(),
     });
   } catch (err: any) {
+    // Enregistrer les tokens déjà consommés avant l'échec
+    if (typeof totalTokens === 'number' && totalTokens > 0 && businessIdForTracking) {
+      try {
+        const client = getSupabaseClient();
+        if (client) {
+          await (client as any)
+            .from('platform_token_usage')
+            .insert({
+              business_id: businessIdForTracking,
+              prompt_tokens: totalPromptTokens,
+              candidates_tokens: totalCandidatesTokens,
+              total_tokens: totalTokens,
+              source: 'agent_chat',
+            });
+        }
+      } catch (tokenErr: any) {
+        console.error('Exception insertion platform_token_usage (sur erreur):', tokenErr?.message || tokenErr);
+      }
+    }
+
     const rawErrorStr = String(err?.message || err?.status || err || '');
     const details = err?.message || String(err) || 'Erreur interne inconnue';
+
+    if (err instanceof ServiceUnavailableError || isRetryableUnavailableError(err)) {
+      return NextResponse.json(
+        {
+          error: 'Le service IA est momentanément surchargé. Réessayez dans quelques instants.',
+          code: 'SERVICE_UNAVAILABLE',
+          details,
+          ...getDemoMeta(),
+        },
+        { status: 503 }
+      );
+    }
 
     if (
       rawErrorStr.includes('RESOURCE_EXHAUSTED') ||
