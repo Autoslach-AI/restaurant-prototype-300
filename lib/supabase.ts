@@ -1,7 +1,7 @@
 import { createClient } from '@supabase/supabase-js';
 import { AgentChatMessage, AgentChatMessageAttachment, AgentConversation, AgentMemory, AgentProject, AttendanceRecord, Business, Category, Customer, CustomerMessage, DeliveryZone, Expense, ExpenseCategory, ExpenseCategoryItem, Order, OrderItem, OrderStatus, PaymentStatus, Product, Staff, StaffPermissions } from './types';
 import { getStore } from './store';
-import { isSensitiveMemoryText } from './agent-config';
+import { isSensitiveMemoryText, resolveAgentConfig, ResolvedAgentMemoryConfig } from './agent-config';
 
 let supabaseClient: ReturnType<typeof createClient> | null = null;
 
@@ -4208,10 +4208,8 @@ export async function insertAgentMemory(data: {
       };
     }
 
-    const newId = `agmem_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
     const now = new Date().toISOString();
     const recordToInsert = {
-      id: newId,
       business_id: businessId,
       section: data.section,
       content: trimmedContent,
@@ -4231,7 +4229,11 @@ export async function insertAgentMemory(data: {
       return { success: false, error: insertErr.message };
     }
 
-    const memory = insertedRows && insertedRows[0] ? (insertedRows[0] as AgentMemory) : (recordToInsert as AgentMemory);
+    if (!insertedRows || insertedRows.length === 0) {
+      return { success: false, error: "Aucun enregistrement retourné après insertion." };
+    }
+
+    const memory = insertedRows[0] as AgentMemory;
     return { success: true, memory };
   } catch (err: any) {
     console.warn('Supabase insertAgentMemory exception:', err?.message || err);
@@ -4370,6 +4372,42 @@ export async function softDeleteAgentMemory(data: {
     return { success: false, error: err?.message || 'Erreur lors de la désactivation du souvenir.' };
   }
 }
+
+/**
+ * 15. Récupère la configuration mémoire d'un commerce (null si absente ou non configurée).
+ */
+export async function fetchAgentMemoryConfig(businessId: string): Promise<ResolvedAgentMemoryConfig | null> {
+  if (!businessId) return null;
+
+  const hasCredentials =
+    Boolean(process.env.NEXT_PUBLIC_SUPABASE_URL?.trim()) &&
+    Boolean(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY?.trim());
+
+  if (!hasCredentials) {
+    return null;
+  }
+
+  try {
+    const client = getSupabase();
+    const { data, error } = await (client as any)
+      .from('platform_businesses')
+      .select('config')
+      .eq('id', businessId)
+      .single();
+
+    if (error || !data) {
+      console.warn('Supabase fetchAgentMemoryConfig error:', error?.message);
+      return null;
+    }
+
+    const resolved = resolveAgentConfig(data);
+    return resolved.memory;
+  } catch (err: any) {
+    console.warn('Supabase fetchAgentMemoryConfig exception:', err?.message || err);
+    return null;
+  }
+}
+
 
 
 

@@ -27,7 +27,9 @@ import {
   ArrowLeft,
   Loader2,
   X,
+  Bookmark,
 } from 'lucide-react';
+import AgentMemoryPanel from './AgentMemoryPanel';
 import {
   fetchAgentProjectsForBusiness,
   insertAgentProject,
@@ -71,6 +73,7 @@ export default function AgentAssistantSection({
   const [agentConversationsList, setAgentConversationsList] = useState<AgentConversation[]>([]);
   const [agentMessagesList, setAgentMessagesList] = useState<AgentChatMessage[]>([]);
   const [isLoadingAgentData, setIsLoadingAgentData] = useState(false);
+  const [isMemoryOpen, setIsMemoryOpen] = useState(false);
 
   const [selectedConversationId, setSelectedConversationId] = useState<string | null>(null);
   const [editingProjectId, setEditingProjectId] = useState<string | null>(null);
@@ -1191,8 +1194,17 @@ export default function AgentAssistantSection({
                 </div>
               </div>
 
-              {/* Corbeille Section at Bottom of Sidebar */}
-              <div className="pt-2 border-t border-[#E5DCD0]">
+              {/* Mémoire & Corbeille Section at Bottom of Sidebar */}
+              <div className="pt-2 border-t border-[#E5DCD0] space-y-1">
+                <button
+                  onClick={() => setIsMemoryOpen(true)}
+                  className="w-full flex items-center justify-between px-3 py-2 rounded-xl cursor-pointer transition-all hover:bg-white/60 text-slate-700 font-medium"
+                >
+                  <div className="flex items-center space-x-2">
+                    <Bookmark className="w-4 h-4 text-[#1B4B4A]" />
+                    <span className="text-xs">Mémoire</span>
+                  </div>
+                </button>
                 <button
                   onClick={() => setIsTrashViewOpen(true)}
                   className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl cursor-pointer transition-all ${
@@ -2252,6 +2264,12 @@ export default function AgentAssistantSection({
         )}
       </AnimatePresence>
 
+      {isMemoryOpen && (
+        <AgentMemoryPanel
+          businessId={business.id}
+          onClose={() => setIsMemoryOpen(false)}
+        />
+      )}
     </>
   );
 }

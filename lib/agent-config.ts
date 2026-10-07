@@ -81,14 +81,10 @@ export function resolveAgentConfig(businessRow: any): ResolvedAgentConfig {
 
 export function isSensitiveMemoryText(text: string): boolean {
   if (!text || typeof text !== 'string') return false;
-  const lower = text.toLowerCase();
 
-  if (
-    lower.includes('mot de passe') ||
-    lower.includes('password') ||
-    lower.includes('code pin') ||
-    lower.includes('iban')
-  ) {
+  // Mots entiers (limites de mots), insensible à la casse
+  const sensitiveWordsRegex = /\b(?:mot de passe|password|code pin|iban)\b/i;
+  if (sensitiveWordsRegex.test(text)) {
     return true;
   }
 
