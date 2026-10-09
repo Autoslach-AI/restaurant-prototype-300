@@ -7,6 +7,7 @@ export interface ResolvedAgentMemoryConfig {
   maxItems: number;
   maxChars: number;
   sections: AgentMemorySection[];
+  guidelines: string | null;
 }
 
 export interface ResolvedAgentConfig {
@@ -61,6 +62,16 @@ export function resolveAgentConfig(businessRow: any): ResolvedAgentConfig {
           s.label.trim().length > 0
       );
 
+    const rawGuidelines = rawMemory.guidelines;
+    let guidelines: string | null = null;
+    if (
+      typeof rawGuidelines === 'string' &&
+      rawGuidelines.trim().length > 0 &&
+      rawGuidelines.length <= 2000
+    ) {
+      guidelines = rawGuidelines.trim();
+    }
+
     if (maxItems !== null && maxChars !== null && isValidSections) {
       memory = {
         maxItems,
@@ -69,6 +80,7 @@ export function resolveAgentConfig(businessRow: any): ResolvedAgentConfig {
           id: String(s.id).trim(),
           label: String(s.label).trim(),
         })),
+        guidelines,
       };
     }
   }

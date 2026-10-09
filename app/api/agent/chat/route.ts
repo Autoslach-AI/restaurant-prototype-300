@@ -1,7 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { FunctionDeclaration, GoogleGenAI, Type } from '@google/genai';
 import { createClient } from '@supabase/supabase-js';
-import { resolveAgentConfig } from '@/lib/agent-config';
+import {
+  isSensitiveMemoryText,
+  resolveAgentConfig,
+  ResolvedAgentMemoryConfig,
+} from '@/lib/agent-config';
 
 function getSupabaseClient() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim();
@@ -292,12 +296,234 @@ async function executeGetExpensesBreakdown(supabase: any, businessId: string, ar
   return result;
 }
 
+function getProposeMemoryDeclaration(memory: ResolvedAgentMemoryConfig): FunctionDeclaration {
+  return {
+    name: 'propose_memory',
+    description:
+      'Proposer un ajout, un remplacement ou un oubli dans la mémoire durable du commerce. Ne sauvegarde rien directement en base : la proposition sera présentée à l\'utilisateur pour validation.',
+    parameters: {
+      type: Type.OBJECT,
+      properties: {
+        action: {
+          type: Type.STRING,
+          description: "L'action à effectuer : 'add' (ajouter), 'replace' (remplacer/modifier), ou 'forget' (oublier/supprimer).",
+          enum: ['add', 'replace', 'forget'],
+        },
+        section: {
+          type: Type.STRING,
+          description: `Identifiant de la section. Requis pour 'add' et 'replace'. Sections disponibles : ${memory.sections.map((s) => s.id).join(', ')}.`,
+          enum: memory.sections.map((s) => s.id),
+        },
+        content: {
+          type: Type.STRING,
+          description: `Contenu textuel du souvenir (maximum ${memory.maxChars} caractères). Requis pour 'add' et 'replace'.`,
+        },
+        target_id: {
+          type: Type.STRING,
+          description: "UUID du souvenir cible (visible dans l'historique sous forme (id:<uuid>)). Requis pour 'replace' et 'forget'.",
+        },
+      },
+      required: ['action'],
+    },
+  };
+}
+
+function executeProposeMemory(
+  args: any,
+  memoryContext?: {
+    memory: ResolvedAgentMemoryConfig | null;
+    activeMemories: any[];
+    memoryProposals: Array<{
+      action: 'add' | 'replace' | 'forget';
+      content?: string;
+      section?: string;
+      target_id?: string;
+      target_content?: string;
+      target_section?: string;
+    }>;
+  }
+): Record<string, unknown> {
+  try {
+    if (!memoryContext || !memoryContext.memory) {
+      return { error: 'La mémoire n\'est pas configurée pour ce commerce.' };
+    }
+
+    const { memory, activeMemories, memoryProposals } = memoryContext;
+
+    if (memoryProposals.length >= 1) {
+      return {
+        error: 'Une proposition de mémoire a déjà été enregistrée pour cette réponse. Une seule proposition est autorisée par tour.',
+      };
+    }
+
+    const action = typeof args?.action === 'string' ? args.action.trim().toLowerCase() : '';
+    if (!['add', 'replace', 'forget'].includes(action)) {
+      return {
+        error: `Action invalide "${args?.action}". Les actions autorisées sont "add", "replace" ou "forget".`,
+      };
+    }
+
+    const validSectionIds = memory.sections.map((s) => s.id);
+    const rawSection = typeof args?.section === 'string' ? args.section.trim() : '';
+    const rawContent = typeof args?.content === 'string' ? args.content.trim() : '';
+    const rawTargetId = typeof args?.target_id === 'string' ? args.target_id.trim() : '';
+
+    if (action === 'add') {
+      if (!rawContent) {
+        return { error: 'Le champ content est requis et ne peut pas être vide pour l\'action "add".' };
+      }
+      if (rawContent.length > memory.maxChars) {
+        return {
+          error: `Le contenu dépasse la limite autorisée de ${memory.maxChars} caractères (${rawContent.length} caractères fournis).`,
+        };
+      }
+      if (isSensitiveMemoryText(rawContent)) {
+        return {
+          error: 'Le contenu contient des données sensibles interdites (mot de passe, code PIN, IBAN ou numéro de carte bancaire).',
+        };
+      }
+      if (!rawSection || !validSectionIds.includes(rawSection)) {
+        return {
+          error: `Section invalide "${rawSection}". Sections autorisées : ${validSectionIds.join(', ')}.`,
+        };
+      }
+      if (activeMemories.length >= memory.maxItems) {
+        return {
+          error: `Nombre maximum de souvenirs atteint (${memory.maxItems}). Utilisez "replace" ou "forget" pour libérer de la place.`,
+        };
+      }
+      const isDuplicate = activeMemories.some(
+        (m) => String(m.content || '').trim().toLowerCase() === rawContent.toLowerCase()
+      );
+      if (isDuplicate) {
+        return {
+          error: 'Un souvenir actif avec un contenu identique existe déjà.',
+        };
+      }
+
+      const proposal = {
+        action: 'add' as const,
+        section: rawSection,
+        content: rawContent,
+      };
+      memoryProposals.push(proposal);
+      return {
+        success: true,
+        message: 'Proposition affichée au commerçant. Elle n\'est PAS enregistrée tant qu\'il n\'a pas confirmé. Ne dis pas qu\'elle est enregistrée.',
+        proposal,
+      };
+    }
+
+    if (action === 'replace') {
+      if (!rawTargetId) {
+        return { error: 'Le champ target_id est requis pour l\'action "replace".' };
+      }
+      const cleanTargetId = rawTargetId.replace(/^id:/i, '').trim();
+      const target = activeMemories.find(
+        (m) => m.id === cleanTargetId || m.id === rawTargetId
+      );
+      if (!target) {
+        return {
+          error: `Souvenir cible "${rawTargetId}" introuvable parmi les souvenirs actifs.`,
+        };
+      }
+      if (!rawContent) {
+        return { error: 'Le champ content est requis et ne peut pas être vide pour l\'action "replace".' };
+      }
+      if (rawContent.length > memory.maxChars) {
+        return {
+          error: `Le contenu dépasse la limite autorisée de ${memory.maxChars} caractères (${rawContent.length} caractères fournis).`,
+        };
+      }
+      if (isSensitiveMemoryText(rawContent)) {
+        return {
+          error: 'Le contenu contient des données sensibles interdites (mot de passe, code PIN, IBAN ou numéro de carte bancaire).',
+        };
+      }
+      if (!rawSection || !validSectionIds.includes(rawSection)) {
+        return {
+          error: `Section invalide "${rawSection}". Sections autorisées : ${validSectionIds.join(', ')}.`,
+        };
+      }
+      const isDuplicateOther = activeMemories.some(
+        (m) => m.id !== target.id && String(m.content || '').trim().toLowerCase() === rawContent.toLowerCase()
+      );
+      if (isDuplicateOther) {
+        return {
+          error: 'Un autre souvenir actif identique existe déjà.',
+        };
+      }
+
+      const proposal = {
+        action: 'replace' as const,
+        target_id: target.id,
+        target_content: String(target.content || ''),
+        target_section: String(target.section || ''),
+        section: rawSection,
+        content: rawContent,
+      };
+      memoryProposals.push(proposal);
+      return {
+        success: true,
+        message: 'Proposition affichée au commerçant. Elle n\'est PAS enregistrée tant qu\'il n\'a pas confirmé. Ne dis pas qu\'elle est enregistrée.',
+        proposal,
+      };
+    }
+
+    if (action === 'forget') {
+      if (!rawTargetId) {
+        return { error: 'Le champ target_id est requis pour l\'action "forget".' };
+      }
+      const cleanTargetId = rawTargetId.replace(/^id:/i, '').trim();
+      const target = activeMemories.find(
+        (m) => m.id === cleanTargetId || m.id === rawTargetId
+      );
+      if (!target) {
+        return {
+          error: `Souvenir cible "${rawTargetId}" introuvable parmi les souvenirs actifs.`,
+        };
+      }
+
+      const proposal = {
+        action: 'forget' as const,
+        target_id: target.id,
+        target_content: String(target.content || ''),
+        target_section: String(target.section || ''),
+      };
+      memoryProposals.push(proposal);
+      return {
+        success: true,
+        message: 'Proposition affichée au commerçant. Elle n\'est PAS enregistrée tant qu\'il n\'a pas confirmé. Ne dis pas qu\'elle est enregistrée.',
+        proposal,
+      };
+    }
+
+    return { error: 'Action non reconnue.' };
+  } catch (err: any) {
+    return { error: 'Erreur lors du traitement de la proposition de mémoire: ' + (err?.message || 'inconnue') };
+  }
+}
+
 async function executeToolCall(
   supabase: any,
   businessId: string,
   name: string,
-  args: any
+  args: any,
+  memoryContext?: {
+    memory: ResolvedAgentMemoryConfig | null;
+    activeMemories: any[];
+    memoryProposals: Array<{
+      action: 'add' | 'replace' | 'forget';
+      content?: string;
+      section?: string;
+      target_id?: string;
+    }>;
+  }
 ): Promise<Record<string, unknown>> {
+  if (name === 'propose_memory') {
+    return executeProposeMemory(args, memoryContext);
+  }
+
   if (!supabase) {
     return { error: 'Base de donnees non accessible' };
   }
@@ -385,6 +611,16 @@ export async function POST(req: NextRequest) {
   let totalCandidatesTokens = 0;
   let totalTokens = 0;
   let baseSystemInstruction = DEFAULT_SYSTEM_PROMPT;
+  let resolvedMemory: ResolvedAgentMemoryConfig | null = null;
+  let activeMemories: any[] = [];
+  const memoryProposals: Array<{
+    action: 'add' | 'replace' | 'forget';
+    content?: string;
+    section?: string;
+    target_id?: string;
+    target_content?: string;
+    target_section?: string;
+  }> = [];
 
   const getDemoMeta = () => {
     if (!isDemo) {
@@ -433,23 +669,27 @@ export async function POST(req: NextRequest) {
           }
 
           if (memory) {
+            resolvedMemory = memory;
             try {
               const { data: memData, error: memErr } = await (supabase as any)
                 .from('platform_agent_memory')
                 .select('*')
                 .eq('business_id', business_id)
                 .eq('is_active', true)
-                .order('created_at', { ascending: true })
-                .limit(memory.maxItems);
+                .order('created_at', { ascending: true });
 
-              if (!memErr && Array.isArray(memData) && memData.length > 0) {
+              if (!memErr && Array.isArray(memData)) {
+                activeMemories = memData;
+              }
+
+              if (activeMemories.length > 0) {
                 const sectionMap = new Map(memory.sections.map((s) => [s.id, s.label]));
-                const memoryLines = memData
+                const memoryLines = activeMemories
                   .slice(0, memory.maxItems)
                   .map((m: any) => {
                     const label = sectionMap.get(m.section) || m.section || 'Information';
                     const text = String(m.content || '').trim().slice(0, memory.maxChars);
-                    return `- [${label}] ${text}`;
+                    return `- (id:${m.id}) [${label}] ${text}`;
                   })
                   .filter((line: string) => line.trim().length > 0);
 
@@ -461,6 +701,11 @@ export async function POST(req: NextRequest) {
               }
             } catch (memErr) {
               console.warn('Erreur chargement memoire agent:', memErr);
+            }
+
+            if (memory.guidelines) {
+              baseSystemInstruction +=
+                '\n\n--- Règles de la mémoire ---\n' + memory.guidelines;
             }
           }
         }
@@ -576,6 +821,11 @@ export async function POST(req: NextRequest) {
       }
     };
 
+    const activeFunctionDeclarations: FunctionDeclaration[] = [...functionDeclarations];
+    if (resolvedMemory && resolvedMemory.guidelines) {
+      activeFunctionDeclarations.push(getProposeMemoryDeclaration(resolvedMemory));
+    }
+
     while (turn < maxTurns) {
       turn++;
       const response = await callGenerateContentWithRetry(ai, {
@@ -583,7 +833,7 @@ export async function POST(req: NextRequest) {
         contents,
         config: {
           systemInstruction: baseSystemInstruction,
-          tools: [{ functionDeclarations }],
+          tools: [{ functionDeclarations: activeFunctionDeclarations }],
         },
       });
 
@@ -604,7 +854,11 @@ export async function POST(req: NextRequest) {
         for (const call of functionCalls) {
           const callName = call.name || '';
           const callArgs = call.args || {};
-          const toolResult = await executeToolCall(supabase, business_id, callName, callArgs);
+          const toolResult = await executeToolCall(supabase, business_id, callName, callArgs, {
+            memory: resolvedMemory,
+            activeMemories,
+            memoryProposals,
+          });
 
           responseParts.push({
             functionResponse: {
@@ -647,6 +901,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({
       text: responseText,
       success: true,
+      memory_proposals: memoryProposals,
       ...getDemoMeta(),
     });
   } catch (err: any) {

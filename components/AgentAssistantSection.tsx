@@ -28,8 +28,15 @@ import {
   Loader2,
   X,
   Bookmark,
+  CheckCircle2,
 } from 'lucide-react';
 import AgentMemoryPanel from './AgentMemoryPanel';
+import {
+  fetchAgentMemoryConfig,
+  insertAgentMemory,
+  updateAgentMemory,
+  softDeleteAgentMemory,
+} from '@/lib/supabase';
 import {
   fetchAgentProjectsForBusiness,
   insertAgentProject,
@@ -110,6 +117,24 @@ export default function AgentAssistantSection({
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
   const [isRegeneratingAgentMessage, setIsRegeneratingAgentMessage] = useState(false);
   const [showScrollBottomButton, setShowScrollBottomButton] = useState(false);
+
+  // Propositions de mémoire de l'assistant (session en cours uniquement)
+  const [memoryProposalsByMessage, setMemoryProposalsByMessage] = useState<
+    Record<
+      string,
+      Array<{
+        action: 'add' | 'replace' | 'forget';
+        content?: string;
+        section?: string;
+        target_id?: string;
+        target_content?: string;
+        target_section?: string;
+      }>
+    >
+  >({});
+  const [savingProposalKey, setSavingProposalKey] = useState<string | null>(null);
+  const [proposalSuccessKey, setProposalSuccessKey] = useState<Record<string, string>>({});
+  const [proposalErrorKey, setProposalErrorKey] = useState<Record<string, string>>({});
 
   const handleMessagesScroll = () => {
     const el = messagesContainerRef.current;
@@ -378,19 +403,36 @@ export default function AgentAssistantSection({
       } else {
         responseText = data.text || 'Aucune reponse generee par l assistant.';
       }
+
+      // 3. Enregistre la reponse de l'assistant dans Supabase
+      const assistantMsgRes = await insertAgentMessage({
+        conversation_id: targetConvId!,
+        sender: 'assistant',
+        content: responseText,
+      });
+
+      if (assistantMsgRes.success && assistantMsgRes.message) {
+        const newMsg = assistantMsgRes.message!;
+        setAgentMessagesList((prev) => [...prev, newMsg]);
+
+        // Mémorisation des propositions de mémoire de cette réponse
+        if (Array.isArray(data?.memory_proposals) && data.memory_proposals.length > 0) {
+          setMemoryProposalsByMessage((prev) => ({
+            ...prev,
+            [newMsg.id]: data.memory_proposals,
+          }));
+        }
+      }
     } catch {
       responseText = 'Erreur de connexion avec le serveur de l assistant IA.';
-    }
-
-    // 3. Enregistre la reponse de l'assistant dans Supabase
-    const assistantMsgRes = await insertAgentMessage({
-      conversation_id: targetConvId!,
-      sender: 'assistant',
-      content: responseText,
-    });
-
-    if (assistantMsgRes.success && assistantMsgRes.message) {
-      setAgentMessagesList((prev) => [...prev, assistantMsgRes.message!]);
+      const fallbackMsg: AgentChatMessage = {
+        id: 'temp-' + Date.now(),
+        conversation_id: targetConvId!,
+        sender: 'assistant',
+        text: responseText,
+        created_at: new Date().toISOString(),
+      };
+      setAgentMessagesList((prev) => [...prev, fallbackMsg]);
     }
   };
 
@@ -438,6 +480,13 @@ export default function AgentAssistantSection({
     if (!lastUserMsg) return;
 
     setIsRegeneratingAgentMessage(true);
+
+    // Supprimer les propositions de l'ancienne réponse
+    setMemoryProposalsByMessage((prev) => {
+      const next = { ...prev };
+      delete next[lastAssistantMsg.id];
+      return next;
+    });
 
     setAgentMessagesList((prev) => prev.filter((m) => m.id !== lastAssistantMsg.id));
 
@@ -496,18 +545,34 @@ export default function AgentAssistantSection({
       });
 
       if (assistantMsgRes.success && assistantMsgRes.message) {
-        setAgentMessagesList((prev) => [...prev.filter((m) => m.id !== lastAssistantMsg.id), assistantMsgRes.message!]);
+        const newMsg = assistantMsgRes.message!;
+        setAgentMessagesList((prev) => [...prev.filter((m) => m.id !== lastAssistantMsg.id), newMsg]);
+
+        // Mémorisation des propositions de mémoire pour la réponse régénérée
+        if (Array.isArray(data?.memory_proposals) && data.memory_proposals.length > 0) {
+          setMemoryProposalsByMessage((prev) => ({
+            ...prev,
+            [newMsg.id]: data.memory_proposals,
+          }));
+        }
       } else {
+        const tempMsg: AgentChatMessage = {
+          id: 'temp-' + Date.now(),
+          conversation_id: selectedConversationId,
+          sender: 'assistant',
+          text: responseText,
+          created_at: new Date().toISOString(),
+        };
         setAgentMessagesList((prev) => [
           ...prev.filter((m) => m.id !== lastAssistantMsg.id),
-          {
-            id: 'temp-' + Date.now(),
-            conversation_id: selectedConversationId,
-            sender: 'assistant',
-            text: responseText,
-            created_at: new Date().toISOString(),
-          },
+          tempMsg,
         ]);
+        if (Array.isArray(data?.memory_proposals) && data.memory_proposals.length > 0) {
+          setMemoryProposalsByMessage((prev) => ({
+            ...prev,
+            [tempMsg.id]: data.memory_proposals,
+          }));
+        }
       }
     } catch {
       const errorMsg = 'Erreur de connexion avec le serveur de l assistant IA.';
@@ -523,6 +588,152 @@ export default function AgentAssistantSection({
       ]);
     } finally {
       setIsRegeneratingAgentMessage(false);
+    }
+  };
+
+  // Gestion des propositions de mémoire (action commerçant)
+  const getMemorySectionLabel = (sectionId?: string) => {
+    if (!sectionId) return '';
+    const configuredSections = business?.config?.oracle?.agent?.memory?.sections;
+    if (Array.isArray(configuredSections)) {
+      const match = configuredSections.find((s) => s.id === sectionId);
+      if (match?.label) return match.label;
+    }
+    return sectionId;
+  };
+
+  const handleIgnoreMemoryProposal = (messageId: string, index: number) => {
+    setMemoryProposalsByMessage((prev) => {
+      const currentList = prev[messageId];
+      if (!currentList) return prev;
+      const updatedList = currentList.filter((_, idx) => idx !== index);
+      const next = { ...prev };
+      if (updatedList.length === 0) {
+        delete next[messageId];
+      } else {
+        next[messageId] = updatedList;
+      }
+      return next;
+    });
+  };
+
+  const handleAcceptMemoryProposal = async (
+    messageId: string,
+    index: number,
+    proposal: {
+      action: 'add' | 'replace' | 'forget';
+      content?: string;
+      section?: string;
+      target_id?: string;
+      target_content?: string;
+      target_section?: string;
+    }
+  ) => {
+    const propKey = `${messageId}-${index}`;
+    if (savingProposalKey) return;
+
+    setSavingProposalKey(propKey);
+    setProposalErrorKey((prev) => {
+      const next = { ...prev };
+      delete next[propKey];
+      return next;
+    });
+
+    try {
+      const memoryConfig = await fetchAgentMemoryConfig(business.id);
+      if (!memoryConfig) {
+        setProposalErrorKey((prev) => ({
+          ...prev,
+          [propKey]: "La mémoire n'est pas configurée pour ce commerce.",
+        }));
+        setSavingProposalKey(null);
+        return;
+      }
+
+      if (proposal.action === 'add') {
+        const targetSection = proposal.section || memoryConfig.sections[0]?.id || '';
+        const res = await insertAgentMemory({
+          business_id: business.id,
+          content: proposal.content || '',
+          section: targetSection,
+          source: 'agent',
+          config: memoryConfig,
+        });
+
+        if (!res.success) {
+          setProposalErrorKey((prev) => ({
+            ...prev,
+            [propKey]: res.error || "Impossible d'enregistrer le souvenir.",
+          }));
+          setSavingProposalKey(null);
+          return;
+        }
+
+        setProposalSuccessKey((prev) => ({
+          ...prev,
+          [propKey]: 'Souvenir enregistré',
+        }));
+      } else if (proposal.action === 'replace') {
+        const targetId = proposal.target_id?.replace(/^id:/i, '').trim() || '';
+        const res = await updateAgentMemory({
+          id: targetId,
+          business_id: business.id,
+          content: proposal.content || '',
+          section: proposal.section,
+          config: memoryConfig,
+        });
+
+        if (!res.success) {
+          setProposalErrorKey((prev) => ({
+            ...prev,
+            [propKey]: res.error || 'Impossible de mettre à jour le souvenir.',
+          }));
+          setSavingProposalKey(null);
+          return;
+        }
+
+        setProposalSuccessKey((prev) => ({
+          ...prev,
+          [propKey]: 'Souvenir mis à jour',
+        }));
+      } else if (proposal.action === 'forget') {
+        const targetId = proposal.target_id?.replace(/^id:/i, '').trim() || '';
+        const res = await softDeleteAgentMemory({
+          id: targetId,
+          business_id: business.id,
+        });
+
+        if (!res.success) {
+          setProposalErrorKey((prev) => ({
+            ...prev,
+            [propKey]: res.error || "Impossible d'oublier le souvenir.",
+          }));
+          setSavingProposalKey(null);
+          return;
+        }
+
+        setProposalSuccessKey((prev) => ({
+          ...prev,
+          [propKey]: 'Souvenir oublié',
+        }));
+      }
+
+      // Après succès, attend un instant pour que l'utilisateur lise la confirmation, puis fait disparaître la carte
+      setTimeout(() => {
+        handleIgnoreMemoryProposal(messageId, index);
+        setProposalSuccessKey((prev) => {
+          const next = { ...prev };
+          delete next[propKey];
+          return next;
+        });
+      }, 1500);
+    } catch (err: any) {
+      setProposalErrorKey((prev) => ({
+        ...prev,
+        [propKey]: err?.message || 'Erreur lors du traitement de la proposition.',
+      }));
+    } finally {
+      setSavingProposalKey(null);
     }
   };
 
@@ -1776,6 +1987,130 @@ export default function AgentAssistantSection({
                                     )}
                                   </div>
                                 </div>
+
+                                {/* Cartes discrètes de proposition de mémoire (action commerçant) */}
+                                {msg.sender === 'assistant' &&
+                                  memoryProposalsByMessage[msg.id] &&
+                                  memoryProposalsByMessage[msg.id].length > 0 && (
+                                    <div className="mt-2 space-y-2">
+                                      {memoryProposalsByMessage[msg.id].map((proposal, pIdx) => {
+                                        const propKey = `${msg.id}-${pIdx}`;
+                                        const isSaving = savingProposalKey === propKey;
+                                        const successMsg = proposalSuccessKey[propKey];
+                                        const errorMsg = proposalErrorKey[propKey];
+                                        const sectionLabel =
+                                          getMemorySectionLabel(proposal.section) ||
+                                          proposal.section ||
+                                          'Information';
+
+                                        return (
+                                          <div
+                                            key={propKey}
+                                            className="p-3 bg-[#FAF7F2] border border-[#E5DCD0] rounded-xl text-xs text-[#241F1B] space-y-2 transition-all shadow-2xs font-sans"
+                                          >
+                                            {successMsg ? (
+                                              <div className="flex items-center space-x-2 text-emerald-700 font-semibold py-1">
+                                                <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                                                <span>{successMsg}</span>
+                                              </div>
+                                            ) : (
+                                              <>
+                                                <div className="flex items-start space-x-2">
+                                                  <Bookmark className="w-4 h-4 text-[#1B4B4A] shrink-0 mt-0.5" />
+                                                  <div className="space-y-1 flex-1 min-w-0">
+                                                    {proposal.action === 'add' && (
+                                                      <div>
+                                                        <span className="font-semibold text-[#1B4B4A]">
+                                                          Ajouter à la mémoire :
+                                                        </span>{' '}
+                                                        <span className="text-[#241F1B] break-words">
+                                                          {proposal.content}
+                                                        </span>
+                                                        <span className="ml-2 inline-block text-[10px] font-mono px-2 py-0.5 rounded-full bg-white border border-[#E5DCD0] text-slate-600">
+                                                          {sectionLabel}
+                                                        </span>
+                                                      </div>
+                                                    )}
+
+                                                    {proposal.action === 'replace' && (
+                                                      <div className="space-y-0.5">
+                                                        <div>
+                                                          <span className="font-semibold text-[#1B4B4A]">
+                                                            Remplacer :
+                                                          </span>{' '}
+                                                          <span className="line-through text-slate-500 break-words">
+                                                            {proposal.target_content || '(ancien contenu)'}
+                                                          </span>
+                                                        </div>
+                                                        <div>
+                                                          <span className="font-semibold text-emerald-700">
+                                                            par :
+                                                          </span>{' '}
+                                                          <span className="text-[#241F1B] font-medium break-words">
+                                                            {proposal.content}
+                                                          </span>
+                                                          {proposal.section && (
+                                                            <span className="ml-2 inline-block text-[10px] font-mono px-2 py-0.5 rounded-full bg-white border border-[#E5DCD0] text-slate-600">
+                                                              {sectionLabel}
+                                                            </span>
+                                                          )}
+                                                        </div>
+                                                      </div>
+                                                    )}
+
+                                                    {proposal.action === 'forget' && (
+                                                      <div>
+                                                        <span className="font-semibold text-[#B5451B]">
+                                                          Oublier :
+                                                        </span>{' '}
+                                                        <span className="text-[#241F1B] break-words">
+                                                          {proposal.target_content || '(souvenir ciblé)'}
+                                                        </span>
+                                                      </div>
+                                                    )}
+                                                  </div>
+                                                </div>
+
+                                                {errorMsg && (
+                                                  <div className="p-2 rounded-lg bg-red-50 border border-red-200 text-[#B5451B] text-[11px] leading-relaxed">
+                                                    {errorMsg}
+                                                  </div>
+                                                )}
+
+                                                <div className="flex items-center justify-end space-x-2 pt-1 border-t border-[#E5DCD0]/60">
+                                                  <button
+                                                    type="button"
+                                                    disabled={isSaving}
+                                                    onClick={() => handleIgnoreMemoryProposal(msg.id, pIdx)}
+                                                    className="px-2.5 py-1 text-[11px] font-medium text-slate-600 hover:text-[#241F1B] hover:bg-white rounded-lg border border-transparent hover:border-[#E5DCD0] transition-colors cursor-pointer disabled:opacity-50"
+                                                  >
+                                                    Ignorer
+                                                  </button>
+                                                  <button
+                                                    type="button"
+                                                    disabled={isSaving}
+                                                    onClick={() =>
+                                                      handleAcceptMemoryProposal(msg.id, pIdx, proposal)
+                                                    }
+                                                    className="flex items-center space-x-1.5 px-3 py-1 text-[11px] font-semibold text-white bg-[#1B4B4A] hover:bg-[#143736] rounded-lg shadow-2xs transition-colors cursor-pointer disabled:opacity-50"
+                                                  >
+                                                    {isSaving ? (
+                                                      <>
+                                                        <Loader2 className="w-3 h-3 animate-spin" />
+                                                        <span>Enregistrement...</span>
+                                                      </>
+                                                    ) : (
+                                                      <span>Enregistrer</span>
+                                                    )}
+                                                  </button>
+                                                </div>
+                                              </>
+                                            )}
+                                          </div>
+                                        );
+                                      })}
+                                    </div>
+                                  )}
                               </div>
                             </div>
                           )}
