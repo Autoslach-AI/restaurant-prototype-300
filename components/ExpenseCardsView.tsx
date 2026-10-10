@@ -196,8 +196,8 @@ export default function ExpenseCardsView({
 
         {/* Milieu de la carte : Montant en gras + Pastilles Reçu et Récurrente */}
         <div className="space-y-2.5 pt-1">
-          <div className="flex items-baseline justify-between gap-2">
-            <span className="text-base font-black text-[#241F1B] tracking-tight">
+          <div className="flex flex-wrap items-baseline justify-between gap-x-2 gap-y-1.5">
+            <span className="text-base font-black text-[#241F1B] tracking-tight whitespace-nowrap shrink-0">
               {amount.toLocaleString('fr-FR')} {currency}
             </span>
 
@@ -207,7 +207,7 @@ export default function ExpenseCardsView({
                 <button
                   type="button"
                   onClick={() => onOpenReceipt(exp.receipt_url!, exp.label)}
-                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[10px] font-bold bg-indigo-50 text-indigo-700 hover:bg-indigo-100 border border-indigo-200/80 transition-all cursor-pointer"
+                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[10px] font-bold bg-indigo-50 text-indigo-700 hover:bg-indigo-100 border border-indigo-200/80 transition-all cursor-pointer whitespace-nowrap"
                   title="Ouvrir le reçu"
                 >
                   <Paperclip className="w-2.5 h-2.5 text-indigo-500" />
@@ -216,7 +216,7 @@ export default function ExpenseCardsView({
               )}
 
               {exp.is_recurring && (
-                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-emerald-50 text-emerald-700 border border-emerald-200 whitespace-nowrap">
                   <Check className="w-2.5 h-2.5" />
                   <span>Récurrente</span>
                 </span>

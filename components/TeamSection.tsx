@@ -13,10 +13,13 @@ import {
   X,
   Check,
   Settings,
+  LayoutGrid,
+  List,
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
+import TeamCardsView from '@/components/TeamCardsView';
 import {
   Document,
   Packer,
@@ -71,6 +74,29 @@ export const TeamSection: React.FC<TeamSectionProps> = ({
   const [selectedTeamMemberIds, setSelectedTeamMemberIds] = useState<string[]>([]);
   const [teamSortActive, setTeamSortActive] = useState<boolean>(true);
   const [selectedTeamMemberForDetail, setSelectedTeamMemberForDetail] = useState<TeamMemberRow | null>(null);
+  const [displayLayout, setDisplayLayout] = useState<'list' | 'cards'>('list');
+
+  // Mémorisation de la bascule Liste / Cartes dans localStorage
+  useEffect(() => {
+    try {
+      const savedLayout = localStorage.getItem('platform_team_display_layout');
+      if (savedLayout === 'cards' || savedLayout === 'list') {
+        setDisplayLayout(savedLayout);
+      }
+    } catch {
+      // Ignorer si localStorage non accessible
+    }
+  }, []);
+
+  const handleChangeDisplayLayout = (layout: 'list' | 'cards') => {
+    setDisplayLayout(layout);
+    try {
+      localStorage.setItem('platform_team_display_layout', layout);
+    } catch {
+      // Ignorer si localStorage non accessible
+    }
+  };
+
   const [isExportMenuOpen, setIsExportMenuOpen] = useState(false);
   const exportMenuRef = useRef<HTMLDivElement>(null);
 
@@ -330,6 +356,36 @@ export const TeamSection: React.FC<TeamSectionProps> = ({
               </option>
             ))}
           </select>
+
+          {/* Bascule « Liste / Cartes » avec mémorisation localStorage */}
+          <div className="flex items-center p-0.5 bg-[#FAF7F2] border border-[#E5DCD0] rounded-xl shadow-2xs">
+            <button
+              type="button"
+              onClick={() => handleChangeDisplayLayout('list')}
+              className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                displayLayout === 'list'
+                  ? 'bg-white text-[#1B4B4A] shadow-2xs border border-[#E5DCD0]/80'
+                  : 'text-slate-500 hover:text-[#241F1B] hover:bg-white/60 border border-transparent'
+              }`}
+              title="Vue Liste"
+            >
+              <List className="w-3.5 h-3.5" />
+              <span>Liste</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => handleChangeDisplayLayout('cards')}
+              className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                displayLayout === 'cards'
+                  ? 'bg-white text-[#1B4B4A] shadow-2xs border border-[#E5DCD0]/80'
+                  : 'text-slate-500 hover:text-[#241F1B] hover:bg-white/60 border border-transparent'
+              }`}
+              title="Vue Cartes"
+            >
+              <LayoutGrid className="w-3.5 h-3.5" />
+              <span>Cartes</span>
+            </button>
+          </div>
         </div>
 
         {/* Toolbar Action Buttons */}
@@ -408,166 +464,176 @@ export const TeamSection: React.FC<TeamSectionProps> = ({
         </div>
       </div>
 
-      {/* Table Card - Fond Blanc */}
-      <div className="bg-white rounded-2xl border border-slate-200/80 overflow-hidden shadow-2xs">
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-xs text-slate-700 border-collapse">
-            <thead className="bg-slate-50/80 text-slate-500 font-medium text-[11px] border-b border-slate-200/80">
-              <tr>
-                <th className="py-3 px-3.5 w-10 text-center">
-                  <input
-                    type="checkbox"
-                    checked={displayTeamRows.length > 0 && selectedTeamMemberIds.length === displayTeamRows.length}
-                    onChange={(e) => {
-                      if (e.target.checked) {
-                        setSelectedTeamMemberIds(displayTeamRows.map((r) => r.id));
-                      } else {
-                        setSelectedTeamMemberIds([]);
-                      }
-                    }}
-                    className="rounded border-slate-300 text-slate-900 focus:ring-slate-900 cursor-pointer"
-                  />
-                </th>
-                <th className="py-3 px-3.5 font-medium text-slate-600">Avatar</th>
-                <th className="py-3 px-3.5 font-medium text-slate-600">Employee</th>
-                <th className="py-3 px-3.5 font-medium text-slate-600">Téléphone</th>
-                <th className="py-3 px-3.5 font-medium text-slate-600">Rôle</th>
-                <th className="py-3 px-3.5 font-medium text-slate-600">Position</th>
-                <th className="py-3 px-3.5 font-medium text-slate-600">Permissions</th>
-                <th className="py-3 px-3.5 font-medium text-slate-600 text-right">Salaire</th>
-                <th className="py-3 px-3.5 font-medium text-slate-600">Hire Date</th>
-                <th className="py-3 px-3.5 font-medium text-slate-600">Status</th>
-                <th className="py-3 px-3.5 font-medium text-slate-600 text-center">Actions</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100">
-              {displayTeamRows.map((emp) => {
-                const isChecked = selectedTeamMemberIds.includes(emp.id);
-                return (
-                  <tr
-                    key={emp.id}
-                    onClick={() => setSelectedTeamMemberForDetail(emp)}
-                    className={`hover:bg-slate-50/80 transition-colors cursor-pointer ${isChecked ? 'bg-slate-50/90' : ''}`}
-                  >
-                    <td className="py-3.5 px-3.5 text-center" onClick={(e) => e.stopPropagation()}>
-                      <input
-                        type="checkbox"
-                        checked={isChecked}
-                        onChange={(e) => {
-                          if (e.target.checked) {
-                            setSelectedTeamMemberIds([...selectedTeamMemberIds, emp.id]);
-                          } else {
-                            setSelectedTeamMemberIds(selectedTeamMemberIds.filter((id) => id !== emp.id));
-                          }
-                        }}
-                        className="rounded border-slate-300 text-slate-900 focus:ring-slate-900 cursor-pointer"
-                      />
-                    </td>
-
-                    <td className="py-3.5 px-3.5">
-                      {(() => {
-                        const photoSrc = emp.photo_url || emp.avatar_url;
-                        return photoSrc ? (
-                          <Image
-                            src={photoSrc}
-                            alt={emp.name}
-                            width={32}
-                            height={32}
-                            className="w-8 h-8 rounded-full object-cover border border-slate-200/80 shadow-2xs"
-                            referrerPolicy="no-referrer"
-                          />
-                        ) : (
-                          <div className="w-8 h-8 rounded-full bg-slate-100 border border-slate-200 text-slate-700 flex items-center justify-center text-xs font-black shrink-0 shadow-2xs">
-                            {getInitials(emp.name)}
-                          </div>
-                        );
-                      })()}
-                    </td>
-
-                    <td className="py-3.5 px-3.5 font-medium text-slate-900 whitespace-nowrap">
-                      {emp.name}
-                    </td>
-
-                    <td
-                      className="py-3.5 px-3.5 font-normal text-blue-600 hover:text-blue-700 hover:underline whitespace-nowrap cursor-pointer"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setSelectedTeamMemberForDetail(emp);
+      {/* Content: Cards View or Table Card */}
+      {displayLayout === 'cards' ? (
+        <TeamCardsView
+          teamMembers={displayTeamRows}
+          business={business}
+          activeStaff={activeStaff}
+          getInitials={getInitials}
+          onSelectMember={(emp) => setSelectedTeamMemberForDetail(emp)}
+        />
+      ) : (
+        <div className="bg-white rounded-2xl border border-slate-200/80 overflow-hidden shadow-2xs">
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-xs text-slate-700 border-collapse">
+              <thead className="bg-slate-50/80 text-slate-500 font-medium text-[11px] border-b border-slate-200/80">
+                <tr>
+                  <th className="py-3 px-3.5 w-10 text-center">
+                    <input
+                      type="checkbox"
+                      checked={displayTeamRows.length > 0 && selectedTeamMemberIds.length === displayTeamRows.length}
+                      onChange={(e) => {
+                        if (e.target.checked) {
+                          setSelectedTeamMemberIds(displayTeamRows.map((r) => r.id));
+                        } else {
+                          setSelectedTeamMemberIds([]);
+                        }
                       }}
+                      className="rounded border-slate-300 text-slate-900 focus:ring-slate-900 cursor-pointer"
+                    />
+                  </th>
+                  <th className="py-3 px-3.5 font-medium text-slate-600">Avatar</th>
+                  <th className="py-3 px-3.5 font-medium text-slate-600">Employee</th>
+                  <th className="py-3 px-3.5 font-medium text-slate-600">Téléphone</th>
+                  <th className="py-3 px-3.5 font-medium text-slate-600">Rôle</th>
+                  <th className="py-3 px-3.5 font-medium text-slate-600">Position</th>
+                  <th className="py-3 px-3.5 font-medium text-slate-600">Permissions</th>
+                  <th className="py-3 px-3.5 font-medium text-slate-600 text-right">Salaire</th>
+                  <th className="py-3 px-3.5 font-medium text-slate-600">Hire Date</th>
+                  <th className="py-3 px-3.5 font-medium text-slate-600">Status</th>
+                  <th className="py-3 px-3.5 font-medium text-slate-600 text-center">Actions</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {displayTeamRows.map((emp) => {
+                  const isChecked = selectedTeamMemberIds.includes(emp.id);
+                  return (
+                    <tr
+                      key={emp.id}
+                      onClick={() => setSelectedTeamMemberForDetail(emp)}
+                      className={`hover:bg-slate-50/80 transition-colors cursor-pointer ${isChecked ? 'bg-slate-50/90' : ''}`}
                     >
-                      {emp.phone}
-                    </td>
+                      <td className="py-3.5 px-3.5 text-center" onClick={(e) => e.stopPropagation()}>
+                        <input
+                          type="checkbox"
+                          checked={isChecked}
+                          onChange={(e) => {
+                            if (e.target.checked) {
+                              setSelectedTeamMemberIds([...selectedTeamMemberIds, emp.id]);
+                            } else {
+                              setSelectedTeamMemberIds(selectedTeamMemberIds.filter((id) => id !== emp.id));
+                            }
+                          }}
+                          className="rounded border-slate-300 text-slate-900 focus:ring-slate-900 cursor-pointer"
+                        />
+                      </td>
 
-                    <td className="py-3.5 px-3.5 text-slate-700 font-normal whitespace-nowrap">
-                      {emp.role}
-                    </td>
+                      <td className="py-3.5 px-3.5">
+                        {(() => {
+                          const photoSrc = emp.photo_url || emp.avatar_url;
+                          return photoSrc ? (
+                            <Image
+                              src={photoSrc}
+                              alt={emp.name}
+                              width={32}
+                              height={32}
+                              className="w-8 h-8 rounded-full object-cover border border-slate-200/80 shadow-2xs"
+                              referrerPolicy="no-referrer"
+                            />
+                          ) : (
+                            <div className="w-8 h-8 rounded-full bg-slate-100 border border-slate-200 text-slate-700 flex items-center justify-center text-xs font-black shrink-0 shadow-2xs">
+                              {getInitials(emp.name)}
+                            </div>
+                          );
+                        })()}
+                      </td>
 
-                    <td className="py-3.5 px-3.5 text-slate-700 font-normal whitespace-nowrap">
-                      {emp.position}
-                    </td>
+                      <td className="py-3.5 px-3.5 font-medium text-slate-900 whitespace-nowrap">
+                        {emp.name}
+                      </td>
 
-                    <td className="py-3.5 px-3.5 font-normal text-slate-900 whitespace-nowrap">
-                      {emp.permissions}
-                    </td>
+                      <td
+                        className="py-3.5 px-3.5 font-normal text-blue-600 hover:text-blue-700 hover:underline whitespace-nowrap cursor-pointer"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setSelectedTeamMemberForDetail(emp);
+                        }}
+                      >
+                        {emp.phone}
+                      </td>
 
-                    <td className="py-3.5 px-3.5 font-bold text-slate-900 text-right whitespace-nowrap">
-                      {activeStaff.role === 'owner'
-                        ? typeof emp.salary === 'number'
-                          ? `${emp.salary.toLocaleString('fr-FR')} ${business.currency || 'FCFA'}`
-                          : emp.salary
-                        : '—'}
-                    </td>
+                      <td className="py-3.5 px-3.5 text-slate-700 font-normal whitespace-nowrap">
+                        {emp.role}
+                      </td>
 
-                    <td className="py-3.5 px-3.5 text-slate-600 font-normal whitespace-nowrap">
-                      {emp.hireDate}
-                    </td>
+                      <td className="py-3.5 px-3.5 text-slate-700 font-normal whitespace-nowrap">
+                        {emp.position}
+                      </td>
 
-                    <td className="py-3.5 px-3.5 whitespace-nowrap">
-                      {emp.status === 'active' && (
-                        <span className="inline-flex items-center space-x-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-medium bg-emerald-50 text-emerald-800 border border-emerald-200/80">
-                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0" />
-                          <span>Active</span>
-                        </span>
-                      )}
-                      {emp.status === 'inactive' && (
-                        <span className="inline-flex items-center space-x-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-medium bg-rose-50 text-rose-800 border border-rose-200/80">
-                          <span className="w-1.5 h-1.5 rounded-full bg-rose-500 shrink-0" />
-                          <span>Inactive</span>
-                        </span>
-                      )}
-                      {(emp.status === 'on_leave' || emp.status === 'on leave') && (
-                        <span className="inline-flex items-center space-x-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-medium bg-amber-50 text-amber-900 border border-amber-200/80">
-                          <span className="w-1.5 h-1.5 rounded-full bg-amber-500 shrink-0" />
-                          <span>On leave</span>
-                        </span>
-                      )}
-                    </td>
+                      <td className="py-3.5 px-3.5 font-normal text-slate-900 whitespace-nowrap">
+                        {emp.permissions}
+                      </td>
 
-                    <td className="py-3.5 px-3.5 text-center whitespace-nowrap text-slate-300">
-                      —
+                      <td className="py-3.5 px-3.5 font-bold text-slate-900 text-right whitespace-nowrap">
+                        {activeStaff.role === 'owner'
+                          ? typeof emp.salary === 'number'
+                            ? `${emp.salary.toLocaleString('fr-FR')} ${business.currency || 'FCFA'}`
+                            : emp.salary
+                          : '—'}
+                      </td>
+
+                      <td className="py-3.5 px-3.5 text-slate-600 font-normal whitespace-nowrap">
+                        {emp.hireDate}
+                      </td>
+
+                      <td className="py-3.5 px-3.5 whitespace-nowrap">
+                        {emp.status === 'active' && (
+                          <span className="inline-flex items-center space-x-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-medium bg-emerald-50 text-emerald-800 border border-emerald-200/80">
+                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0" />
+                            <span>Active</span>
+                          </span>
+                        )}
+                        {emp.status === 'inactive' && (
+                          <span className="inline-flex items-center space-x-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-medium bg-rose-50 text-rose-800 border border-rose-200/80">
+                            <span className="w-1.5 h-1.5 rounded-full bg-rose-500 shrink-0" />
+                            <span>Inactive</span>
+                          </span>
+                        )}
+                        {(emp.status === 'on_leave' || emp.status === 'on leave') && (
+                          <span className="inline-flex items-center space-x-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-medium bg-amber-50 text-amber-900 border border-amber-200/80">
+                            <span className="w-1.5 h-1.5 rounded-full bg-amber-500 shrink-0" />
+                            <span>On leave</span>
+                          </span>
+                        )}
+                      </td>
+
+                      <td className="py-3.5 px-3.5 text-center whitespace-nowrap text-slate-300">
+                        —
+                      </td>
+                    </tr>
+                  );
+                })}
+                {displayTeamRows.length === 0 && (
+                  <tr>
+                    <td colSpan={11} className="py-12 text-center text-slate-400 text-xs">
+                      Aucun membre de l&apos;équipe ne correspond aux critères.
                     </td>
                   </tr>
-                );
-              })}
-              {displayTeamRows.length === 0 && (
-                <tr>
-                  <td colSpan={11} className="py-12 text-center text-slate-400 text-xs">
-                    Aucun membre de l&apos;équipe ne correspond aux critères.
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
+                )}
+              </tbody>
+            </table>
+          </div>
 
-        {/* Bottom bar summary */}
-        <div className="px-4 py-3 bg-slate-50/60 border-t border-slate-100 flex items-center justify-between text-xs text-slate-500">
-          <span>Total : <strong className="font-medium text-slate-700">{displayTeamRows.length}</strong> membre(s)</span>
-          {selectedTeamMemberIds.length > 0 && (
-            <span className="text-slate-700 font-medium">{selectedTeamMemberIds.length} sélectionné(s)</span>
-          )}
+          {/* Bottom bar summary */}
+          <div className="px-4 py-3 bg-slate-50/60 border-t border-slate-100 flex items-center justify-between text-xs text-slate-500">
+            <span>Total : <strong className="font-medium text-slate-700">{displayTeamRows.length}</strong> membre(s)</span>
+            {selectedTeamMemberIds.length > 0 && (
+              <span className="text-slate-700 font-medium">{selectedTeamMemberIds.length} sélectionné(s)</span>
+            )}
+          </div>
         </div>
-      </div>
+      )}
 
       {/* Slide-over Panel: Détails Membre d'Équipe */}
       <AnimatePresence>
