@@ -2498,6 +2498,100 @@ export async function uploadExpenseReceipt(
 }
 
 /**
+ * Upload an invoice logo to Supabase Storage.
+ * Uses bucket 'platform-product-images' with path 'invoice/<businessId>/logo_<timestamp>.<ext>'.
+ * Image only (PNG, JPG, WEBP), max 2MB. Strict: NO local fallback, fails if no credentials or error.
+ */
+export async function uploadInvoiceLogo(
+  file: File,
+  businessId: string
+): Promise<{ success: boolean; url?: string; error?: string }> {
+  if (!file) {
+    return { success: false, error: 'Fichier manquant' };
+  }
+
+  const MAX_FILE_SIZE = 2 * 1024 * 1024; // 2 Mo
+  if (file.size > MAX_FILE_SIZE) {
+    const sizeMo = (file.size / (1024 * 1024)).toFixed(1);
+    return {
+      success: false,
+      error: `Le logo dépasse la taille maximale autorisée de 2 Mo (taille actuelle : ${sizeMo} Mo).`,
+    };
+  }
+
+  const contentType = file.type || '';
+  const validMimes = ['image/png', 'image/jpeg', 'image/jpg', 'image/webp'];
+  const extMatch = file.name.split('.').pop()?.toLowerCase();
+  const validExts = ['png', 'jpg', 'jpeg', 'webp'];
+
+  const isValidMime = validMimes.includes(contentType.toLowerCase());
+  const isValidExt = extMatch ? validExts.includes(extMatch) : false;
+
+  if (!isValidMime && !isValidExt) {
+    return {
+      success: false,
+      error: 'Format non supporté. Veuillez sélectionner une image PNG, JPG ou WEBP.',
+    };
+  }
+
+  let fileExt = 'png';
+  if (extMatch && validExts.includes(extMatch)) {
+    fileExt = extMatch === 'jpeg' ? 'jpg' : extMatch;
+  } else if (contentType === 'image/jpeg' || contentType === 'image/jpg') {
+    fileExt = 'jpg';
+  } else if (contentType === 'image/webp') {
+    fileExt = 'webp';
+  }
+
+  const cleanBusinessId = businessId ? businessId.replace(/[^a-zA-Z0-9_-]/g, '') : 'default';
+  const fileName = `logo_${Date.now()}.${fileExt}`;
+  const filePath = `invoice/${cleanBusinessId}/${fileName}`;
+
+  const hasCredentials =
+    Boolean(process.env.NEXT_PUBLIC_SUPABASE_URL?.trim()) &&
+    Boolean(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY?.trim());
+
+  if (!hasCredentials) {
+    return { success: false, error: 'Configuration Supabase manquante' };
+  }
+
+  try {
+    const client = getSupabase();
+    const BUCKET_NAME = 'platform-product-images';
+    const uploadRes = await client.storage
+      .from(BUCKET_NAME)
+      .upload(filePath, file, {
+        upsert: true,
+        contentType: contentType || (fileExt === 'png' ? 'image/png' : fileExt === 'webp' ? 'image/webp' : 'image/jpeg'),
+      });
+
+    if (uploadRes.error) {
+      console.error(`Upload invoice logo to ${BUCKET_NAME} failed:`, uploadRes.error.message);
+      return {
+        success: false,
+        error: `Échec de l'upload sur Supabase Storage : ${uploadRes.error.message}`,
+      };
+    }
+
+    const { data: publicUrlData } = client.storage
+      .from(BUCKET_NAME)
+      .getPublicUrl(filePath);
+
+    if (publicUrlData?.publicUrl) {
+      return {
+        success: true,
+        url: publicUrlData.publicUrl,
+      };
+    }
+
+    return { success: false, error: "Impossible de récupérer l'URL publique du logo." };
+  } catch (err: any) {
+    console.error('Supabase storage invoice logo upload exception:', err);
+    return { success: false, error: err?.message || "Erreur lors de l'upload du logo" };
+  }
+}
+
+/**
  * 2. Insert a new expense into platform_expenses in Supabase.
  * Generates an id with 'exp_' prefix.
  * Enforces strict verification that insertedRows.length > 0.

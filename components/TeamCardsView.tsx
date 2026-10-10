@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+import React from 'react';
 import Image from 'next/image';
 import { Business, Staff } from '@/lib/types';
 import { TeamMemberRow } from '@/components/TeamSection';
@@ -37,14 +37,6 @@ export default function TeamCardsView({
   getInitials,
   onSelectMember,
 }: TeamCardsViewProps) {
-  // Calcul réel de la masse salariale affichée (somme des salaires numériques > 0)
-  const totalPayroll = useMemo(() => {
-    return teamMembers.reduce((sum, emp) => {
-      const salaryNum = typeof emp.salary === 'number' ? emp.salary : parseFloat(String(emp.salary).replace(/[^0-9.-]+/g, ''));
-      return sum + (!isNaN(salaryNum) && salaryNum > 0 ? salaryNum : 0);
-    }, 0);
-  }, [teamMembers]);
-
   // État vide identique au tableau de la vue Liste
   if (teamMembers.length === 0) {
     return (
@@ -60,18 +52,6 @@ export default function TeamCardsView({
     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3.5 sm:gap-4 p-4 sm:p-6 bg-[#FAF7F2]/40 rounded-2xl border border-[#E5DCD0]/70">
       {teamMembers.map((emp) => {
         const photoSrc = emp.photo_url || emp.avatar_url;
-        const salaryNum = typeof emp.salary === 'number' ? emp.salary : parseFloat(String(emp.salary).replace(/[^0-9.-]+/g, ''));
-        const hasValidSalary = !isNaN(salaryNum) && salaryNum > 0;
-
-        // Calcul réel de la part dans la masse salariale
-        const percentage = hasValidSalary && totalPayroll > 0 ? (salaryNum / totalPayroll) * 100 : 0;
-        const formattedPercentage =
-          percentage < 0.1 && percentage > 0
-            ? '< 0,1'
-            : percentage.toLocaleString('fr-FR', {
-                minimumFractionDigits: 1,
-                maximumFractionDigits: 1,
-              });
 
         const formattedSalary =
           activeStaff.role === 'owner'
@@ -153,8 +133,8 @@ export default function TeamCardsView({
               </div>
             </div>
 
-            {/* Milieu / Bas de la carte : Salaire + Barre de part de masse salariale */}
-            <div className="pt-2 border-t border-[#E5DCD0]/60 space-y-2">
+            {/* Bas de la carte : Salaire uniquement */}
+            <div className="pt-2 border-t border-[#E5DCD0]/60">
               <div className="flex items-baseline justify-between gap-2">
                 <span className="text-[10px] font-extrabold text-slate-400 uppercase tracking-wider">
                   Salaire
@@ -163,22 +143,6 @@ export default function TeamCardsView({
                   {formattedSalary}
                 </span>
               </div>
-
-              {/* Barre fine : part de la masse salariale (uniquement si salaire > 0 et consultation autorisée) */}
-              {activeStaff.role === 'owner' && hasValidSalary && totalPayroll > 0 && (
-                <div className="pt-1 space-y-1.5">
-                  <div className="flex items-center justify-between text-[10px] text-slate-500 font-semibold">
-                    <span>Part de la masse salariale</span>
-                    <span className="font-bold text-[#1B4B4A]">{formattedPercentage}%</span>
-                  </div>
-                  <div className="w-full h-1.5 bg-[#FAF7F2] border border-[#E5DCD0]/70 rounded-full overflow-hidden">
-                    <div
-                      className="h-full bg-[#1B4B4A] rounded-full transition-all duration-300"
-                      style={{ width: `${Math.min(Math.max(percentage, 0), 100)}%` }}
-                    />
-                  </div>
-                </div>
-              )}
             </div>
           </div>
         );

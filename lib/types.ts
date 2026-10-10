@@ -24,6 +24,14 @@ export interface BusinessConfig {
       };
     };
   };
+  invoice?: {
+    legal_name?: string;
+    address?: string;
+    phone?: string;
+    tax_id?: string;
+    logo_url?: string;
+    footer_text?: string;
+  };
 }
 
 export interface Business {

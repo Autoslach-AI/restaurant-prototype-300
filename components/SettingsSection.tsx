@@ -13,6 +13,7 @@ import {
   ShieldCheck,
   Trash2,
   Truck,
+  Upload,
   UserPlus,
   X,
 } from 'lucide-react';
@@ -22,6 +23,8 @@ import {
   updateDeliveryZone,
   toggleDeliveryZoneActive,
   deleteDeliveryZone,
+  uploadInvoiceLogo,
+  updateBusinessConfig,
 } from '@/lib/supabase';
 import { getStore } from '@/lib/store';
 import { Business, Staff, StaffPermissions, Order, DeliveryZone } from '@/lib/types';
@@ -133,6 +136,108 @@ export default function SettingsSection({
   const [testOrderId, setTestOrderId] = useState('');
   const [testPaymentRef, setTestPaymentRef] = useState(() => 'WAVE_REF_' + Math.floor(100000 + Math.random() * 900000));
   const [webhookLogs, setWebhookLogs] = useState<string[]>([]);
+
+  // Invoice Configuration state
+  const [invoiceLegalName, setInvoiceLegalName] = useState(() => business.config?.invoice?.legal_name || '');
+  const [invoiceAddress, setInvoiceAddress] = useState(() => business.config?.invoice?.address || '');
+  const [invoicePhone, setInvoicePhone] = useState(() => business.config?.invoice?.phone || '');
+  const [invoiceTaxId, setInvoiceTaxId] = useState(() => business.config?.invoice?.tax_id || '');
+  const [invoiceFooterText, setInvoiceFooterText] = useState(() => business.config?.invoice?.footer_text || '');
+  const [invoiceLogoUrl, setInvoiceLogoUrl] = useState(() => business.config?.invoice?.logo_url || '');
+
+  const [isInvoiceSaving, setIsInvoiceSaving] = useState(false);
+  const [isInvoiceUploading, setIsInvoiceUploading] = useState(false);
+  const [invoiceFeedback, setInvoiceFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+
+  // Sync state if business prop updates
+  useEffect(() => {
+    setInvoiceLegalName(business.config?.invoice?.legal_name || '');
+    setInvoiceAddress(business.config?.invoice?.address || '');
+    setInvoicePhone(business.config?.invoice?.phone || '');
+    setInvoiceTaxId(business.config?.invoice?.tax_id || '');
+    setInvoiceFooterText(business.config?.invoice?.footer_text || '');
+    setInvoiceLogoUrl(business.config?.invoice?.logo_url || '');
+  }, [
+    business.id,
+    business.config?.invoice?.legal_name,
+    business.config?.invoice?.address,
+    business.config?.invoice?.phone,
+    business.config?.invoice?.tax_id,
+    business.config?.invoice?.footer_text,
+    business.config?.invoice?.logo_url,
+  ]);
+
+  const handleInvoiceLogoChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setInvoiceFeedback(null);
+    setIsInvoiceUploading(true);
+
+    try {
+      const res = await uploadInvoiceLogo(file, business.id);
+      if (res.success && res.url) {
+        setInvoiceLogoUrl(res.url);
+        setInvoiceFeedback({ type: 'success', message: 'Logo téléversé avec succès. Pensez à enregistrer les modifications.' });
+      } else {
+        setInvoiceFeedback({ type: 'error', message: res.error || "Échec du téléversement du logo." });
+      }
+    } catch (err: any) {
+      setInvoiceFeedback({ type: 'error', message: err?.message || "Erreur imprévue lors de l'upload du logo." });
+    } finally {
+      setIsInvoiceUploading(false);
+      e.target.value = '';
+    }
+  };
+
+  const handleRemoveInvoiceLogo = () => {
+    setInvoiceLogoUrl('');
+    setInvoiceFeedback({ type: 'success', message: 'Logo retiré. Cliquez sur Enregistrer pour confirmer.' });
+  };
+
+  const handleSaveInvoiceSettings = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    setInvoiceFeedback(null);
+    setIsInvoiceSaving(true);
+
+    try {
+      const invoicePayload = {
+        legal_name: invoiceLegalName.trim(),
+        address: invoiceAddress.trim(),
+        phone: invoicePhone.trim(),
+        tax_id: invoiceTaxId.trim(),
+        footer_text: invoiceFooterText.trim(),
+        logo_url: invoiceLogoUrl.trim(),
+      };
+
+      const res = await updateBusinessConfig(business.id, {
+        config: {
+          ...(business.config || {}),
+          message_templates: business.config?.message_templates || {
+            confirmation: '',
+            alert: '',
+            relance: '',
+            follow_up: '',
+          },
+          invoice: invoicePayload,
+        },
+      });
+
+      if (res.success) {
+        // Enforce store in-memory update
+        store.updateBusinessConfig(business.id, {
+          invoice: invoicePayload,
+        });
+        setInvoiceFeedback({ type: 'success', message: 'Paramètres de facturation enregistrés avec succès !' });
+      } else {
+        setInvoiceFeedback({ type: 'error', message: res.error || 'Erreur lors de la sauvegarde.' });
+      }
+    } catch (err: any) {
+      setInvoiceFeedback({ type: 'error', message: err?.message || 'Erreur inattendue lors de la sauvegarde.' });
+    } finally {
+      setIsInvoiceSaving(false);
+    }
+  };
 
   // Load delivery zones from Supabase
   const loadDeliveryZones = async () => {
@@ -294,6 +399,205 @@ export default function SettingsSection({
               disabled={isBizLoading || isBizSaving}
               className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs text-slate-900 font-bold focus:outline-none focus:border-emerald-500 shadow-2xs disabled:opacity-60"
             />
+          </div>
+        </form>
+      </div>
+
+      {/* 1.bis Bloc Facture */}
+      <div className="bg-white p-6 rounded-3xl border border-slate-200/80 shadow-2xs">
+        <div className="flex items-center justify-between pb-4 border-b border-slate-100">
+          <div>
+            <span className="text-xs font-black text-slate-800 uppercase tracking-wider block">Facture</span>
+            <span className="text-[11px] text-slate-500 font-medium">
+              Coordonnées et mentions légales affichées sur les factures imprimées de vos commandes.
+            </span>
+          </div>
+          <span className="px-3 py-1 bg-emerald-50 text-emerald-800 border border-emerald-200 rounded-full text-[10px] font-black uppercase">
+            Personnalisation
+          </span>
+        </div>
+
+        {/* Feedback Messages (Never window.alert) */}
+        {invoiceFeedback && (
+          <div
+            className={`mt-4 p-3 rounded-xl text-xs font-bold border flex items-center justify-between ${
+              invoiceFeedback.type === 'success'
+                ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                : 'bg-rose-50 border-rose-200 text-rose-800'
+            }`}
+          >
+            <span>{invoiceFeedback.message}</span>
+            <button
+              type="button"
+              onClick={() => setInvoiceFeedback(null)}
+              className="text-slate-400 hover:text-slate-600 ml-2"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        )}
+
+        <form onSubmit={handleSaveInvoiceSettings} className="mt-6 space-y-5 max-w-xl">
+          {/* Logo */}
+          <div>
+            <label className="text-xs font-extrabold text-slate-700 block mb-1">
+              Logo de la facture (PNG, JPG, WEBP · 2 Mo max)
+            </label>
+            <div className="flex items-center gap-4 mt-2">
+              <div className="w-20 h-20 rounded-2xl border-2 border-dashed border-slate-200 bg-slate-50 flex items-center justify-center overflow-hidden shrink-0 relative">
+                {invoiceLogoUrl ? (
+                  <img
+                    src={invoiceLogoUrl}
+                    alt="Logo facture"
+                    className="w-full h-full object-contain p-1"
+                  />
+                ) : (
+                  <span className="text-[10px] text-slate-400 font-medium text-center px-1">Aucun logo</span>
+                )}
+                {isInvoiceUploading && (
+                  <div className="absolute inset-0 bg-white/80 backdrop-blur-xs flex items-center justify-center">
+                    <Loader2 className="w-5 h-5 text-emerald-600 animate-spin" />
+                  </div>
+                )}
+              </div>
+
+              <div className="space-y-2 flex-1">
+                <div className="flex flex-wrap gap-2">
+                  <label className="inline-flex items-center gap-1.5 px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold cursor-pointer transition-colors">
+                    <Upload className="w-3.5 h-3.5" />
+                    <span>{invoiceLogoUrl ? 'Changer le logo' : 'Ajouter un logo'}</span>
+                    <input
+                      type="file"
+                      accept="image/png,image/jpeg,image/jpg,image/webp"
+                      onChange={handleInvoiceLogoChange}
+                      disabled={isInvoiceUploading || isInvoiceSaving}
+                      className="hidden"
+                    />
+                  </label>
+
+                  {invoiceLogoUrl && (
+                    <button
+                      type="button"
+                      onClick={handleRemoveInvoiceLogo}
+                      disabled={isInvoiceUploading || isInvoiceSaving}
+                      className="inline-flex items-center gap-1.5 px-3 py-2 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded-xl text-xs font-bold transition-colors"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                      <span>Retirer</span>
+                    </button>
+                  )}
+                </div>
+                <p className="text-[11px] text-slate-400">
+                  {invoiceLogoUrl ? 'Logo prêt. Cliquez sur Enregistrer pour valider.' : 'Aucun fichier sélectionné.'}
+                </p>
+              </div>
+            </div>
+          </div>
+
+          {/* Nom légal */}
+          <div>
+            <div className="flex items-center justify-between mb-1">
+              <label className="text-xs font-extrabold text-slate-700">Nom légal</label>
+              <span className="text-[10px] text-slate-400 font-mono">{invoiceLegalName.length}/120</span>
+            </div>
+            <input
+              type="text"
+              maxLength={120}
+              value={invoiceLegalName}
+              onChange={(e) => setInvoiceLegalName(e.target.value)}
+              disabled={isInvoiceSaving}
+              placeholder="Ex: Auto Slashai SARL"
+              className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs text-slate-900 font-medium focus:outline-none focus:border-emerald-500 shadow-2xs disabled:opacity-60"
+            />
+          </div>
+
+          {/* Adresse */}
+          <div>
+            <div className="flex items-center justify-between mb-1">
+              <label className="text-xs font-extrabold text-slate-700">Adresse</label>
+              <span className="text-[10px] text-slate-400 font-mono">{invoiceAddress.length}/200</span>
+            </div>
+            <textarea
+              rows={2}
+              maxLength={200}
+              value={invoiceAddress}
+              onChange={(e) => setInvoiceAddress(e.target.value)}
+              disabled={isInvoiceSaving}
+              placeholder="Ex: 14 Rue Carnot, Plateau, Dakar, Sénégal"
+              className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs text-slate-900 font-medium focus:outline-none focus:border-emerald-500 shadow-2xs disabled:opacity-60 resize-none"
+            />
+          </div>
+
+          {/* Téléphone */}
+          <div>
+            <div className="flex items-center justify-between mb-1">
+              <label className="text-xs font-extrabold text-slate-700">Téléphone</label>
+              <span className="text-[10px] text-slate-400 font-mono">{invoicePhone.length}/30</span>
+            </div>
+            <input
+              type="text"
+              maxLength={30}
+              value={invoicePhone}
+              onChange={(e) => setInvoicePhone(e.target.value)}
+              disabled={isInvoiceSaving}
+              placeholder="Ex: +221 77 123 45 67"
+              className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs text-slate-900 font-medium focus:outline-none focus:border-emerald-500 shadow-2xs disabled:opacity-60 font-mono"
+            />
+          </div>
+
+          {/* Identifiant fiscal */}
+          <div>
+            <div className="flex items-center justify-between mb-1">
+              <label className="text-xs font-extrabold text-slate-700">Identifiant fiscal (ex: NINEA ou RCCM)</label>
+              <span className="text-[10px] text-slate-400 font-mono">{invoiceTaxId.length}/60</span>
+            </div>
+            <input
+              type="text"
+              maxLength={60}
+              value={invoiceTaxId}
+              onChange={(e) => setInvoiceTaxId(e.target.value)}
+              disabled={isInvoiceSaving}
+              placeholder="Ex: NINEA 001234567 2V2 / RCCM SN-DKR-2024-B-1234"
+              className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs text-slate-900 font-medium focus:outline-none focus:border-emerald-500 shadow-2xs disabled:opacity-60 font-mono"
+            />
+          </div>
+
+          {/* Pied de page */}
+          <div>
+            <div className="flex items-center justify-between mb-1">
+              <label className="text-xs font-extrabold text-slate-700">Pied de page</label>
+              <span className="text-[10px] text-slate-400 font-mono">{invoiceFooterText.length}/300</span>
+            </div>
+            <textarea
+              rows={3}
+              maxLength={300}
+              value={invoiceFooterText}
+              onChange={(e) => setInvoiceFooterText(e.target.value)}
+              disabled={isInvoiceSaving}
+              placeholder="Ex: Merci pour votre confiance ! Marchandises ni reprises ni échangées après 48h."
+              className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs text-slate-900 font-medium focus:outline-none focus:border-emerald-500 shadow-2xs disabled:opacity-60 resize-none"
+            />
+          </div>
+
+          {/* Submit button */}
+          <div className="pt-2">
+            <button
+              type="submit"
+              disabled={isInvoiceSaving || isInvoiceUploading}
+              className="inline-flex items-center gap-2 px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold shadow-xs transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
+            >
+              {isInvoiceSaving ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  <span>Enregistrement...</span>
+                </>
+              ) : (
+                <>
+                  <Check className="w-4 h-4" />
+                  <span>Enregistrer la facture</span>
+                </>
+              )}
+            </button>
           </div>
         </form>
       </div>

@@ -10,10 +10,13 @@ import {
   X,
   Calendar,
   Loader2,
+  LayoutGrid,
+  List,
 } from 'lucide-react';
 import { Business, Staff, AttendanceRecord } from '@/lib/types';
 import { fetchAttendanceRecords, upsertAttendanceRecord } from '@/lib/supabase';
 import { TeamMemberRow } from './TeamSection';
+import AttendanceCardsView from '@/components/AttendanceCardsView';
 
 export interface AttendanceCounts {
   all: number;
@@ -49,6 +52,28 @@ export const AttendanceSection: React.FC<AttendanceSectionProps> = ({
   const [selectedAttendanceMember, setSelectedAttendanceMember] = useState<TeamMemberRow | null>(null);
   const [attendanceHistoryFilter, setAttendanceHistoryFilter] = useState<string>('all');
   const [attendance30DaysRecords, setAttendance30DaysRecords] = useState<AttendanceRecord[]>([]);
+  const [displayLayout, setDisplayLayout] = useState<'list' | 'cards'>('list');
+
+  // Mémorisation de la bascule Liste / Cartes dans localStorage
+  useEffect(() => {
+    try {
+      const savedLayout = localStorage.getItem('platform_attendance_display_layout');
+      if (savedLayout === 'cards' || savedLayout === 'list') {
+        setDisplayLayout(savedLayout);
+      }
+    } catch {
+      // Ignorer si localStorage non accessible
+    }
+  }, []);
+
+  const handleChangeDisplayLayout = (layout: 'list' | 'cards') => {
+    setDisplayLayout(layout);
+    try {
+      localStorage.setItem('platform_attendance_display_layout', layout);
+    } catch {
+      // Ignorer si localStorage non accessible
+    }
+  };
 
   const [attendanceReasonModal, setAttendanceReasonModal] = useState<{
     isOpen: boolean;
@@ -71,11 +96,11 @@ export const AttendanceSection: React.FC<AttendanceSectionProps> = ({
     });
   }, [todayAttendanceMap]);
 
-  // Load 30-day attendance history for selected member
+  // Load 30-day attendance history (for selected member or for cards view)
   useEffect(() => {
     let isMounted = true;
     async function load30DaysHistory() {
-      if (!business?.id || !selectedAttendanceMember) return;
+      if (!business?.id || (!selectedAttendanceMember && displayLayout !== 'cards')) return;
       const endDateStr = todayStr;
       const startDateObj = new Date();
       startDateObj.setDate(startDateObj.getDate() - 29);
@@ -89,7 +114,7 @@ export const AttendanceSection: React.FC<AttendanceSectionProps> = ({
     return () => {
       isMounted = false;
     };
-  }, [business?.id, selectedAttendanceMember, todayStr]);
+  }, [business?.id, selectedAttendanceMember, displayLayout, todayStr]);
 
   const last30DaysList = useMemo(() => {
     if (!selectedAttendanceMember) return [];
@@ -280,181 +305,225 @@ export const AttendanceSection: React.FC<AttendanceSectionProps> = ({
               className="w-full bg-slate-50 hover:bg-slate-100/80 focus:bg-white border border-slate-200/80 rounded-xl pl-10 pr-4 py-2 text-xs text-slate-900 placeholder:text-slate-400 focus:outline-none focus:border-emerald-500 transition-all font-medium"
             />
           </div>
+
+          {/* Bascule « Liste / Cartes » avec mémorisation localStorage */}
+          <div className="flex items-center p-0.5 bg-[#FAF7F2] border border-[#E5DCD0] rounded-xl shadow-2xs shrink-0">
+            <button
+              type="button"
+              onClick={() => handleChangeDisplayLayout('list')}
+              className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                displayLayout === 'list'
+                  ? 'bg-white text-[#1B4B4A] shadow-2xs border border-[#E5DCD0]/80'
+                  : 'text-slate-500 hover:text-[#241F1B] hover:bg-white/60 border border-transparent'
+              }`}
+              title="Vue Liste"
+            >
+              <List className="w-3.5 h-3.5" />
+              <span>Liste</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => handleChangeDisplayLayout('cards')}
+              className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                displayLayout === 'cards'
+                  ? 'bg-white text-[#1B4B4A] shadow-2xs border border-[#E5DCD0]/80'
+                  : 'text-slate-500 hover:text-[#241F1B] hover:bg-white/60 border border-transparent'
+              }`}
+              title="Vue Cartes"
+            >
+              <LayoutGrid className="w-3.5 h-3.5" />
+              <span>Cartes</span>
+            </button>
+          </div>
         </div>
       </div>
 
-      {/* Attendance Table Card */}
-      <div className="bg-white rounded-2xl border border-slate-200/80 overflow-hidden shadow-2xs">
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-xs text-slate-700 border-collapse">
-            <thead className="bg-slate-50/80 text-slate-500 font-medium text-[11px] border-b border-slate-200/80">
-              <tr>
-                <th className="py-3 px-3.5 font-medium text-slate-600">Avatar</th>
-                <th className="py-3 px-3.5 font-medium text-slate-600">Membre</th>
-                <th className="py-3 px-3.5 font-medium text-slate-600">Email</th>
-                <th className="py-3 px-3.5 font-medium text-slate-600">Téléphone</th>
-                <th className="py-3 px-3.5 font-bold text-slate-900 bg-emerald-50/50">Pointage du Jour</th>
-                <th className="py-3 px-3.5 font-medium text-slate-600">Rôle</th>
-                <th className="py-3 px-3.5 font-medium text-slate-600">Position</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100">
-              {displayAttendanceRows.map((emp) => {
-                const att = todayAttendanceMap[emp.id];
-                const status = att?.status;
-                const reason = att?.reason;
+      {/* Content: Cards View or Table Card */}
+      {displayLayout === 'cards' ? (
+        <AttendanceCardsView
+          displayRows={displayAttendanceRows}
+          todayAttendanceMap={todayAttendanceMap}
+          attendance30DaysRecords={attendance30DaysRecords}
+          todayStr={todayStr}
+          canMarkAttendance={canMarkAttendance}
+          getInitials={getInitials}
+          onSelectMember={(emp) => setSelectedAttendanceMember(emp)}
+          onMarkStatus={(staffId, status) => handleMarkAttendanceStatus(staffId, status)}
+          onOpenReasonModal={(staff, status) => handleOpenAttendanceReasonModal(staff, status)}
+        />
+      ) : (
+        <div className="bg-white rounded-2xl border border-slate-200/80 overflow-hidden shadow-2xs">
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-xs text-slate-700 border-collapse">
+              <thead className="bg-slate-50/80 text-slate-500 font-medium text-[11px] border-b border-slate-200/80">
+                <tr>
+                  <th className="py-3 px-3.5 font-medium text-slate-600">Avatar</th>
+                  <th className="py-3 px-3.5 font-medium text-slate-600">Membre</th>
+                  <th className="py-3 px-3.5 font-medium text-slate-600">Email</th>
+                  <th className="py-3 px-3.5 font-medium text-slate-600">Téléphone</th>
+                  <th className="py-3 px-3.5 font-bold text-slate-900 bg-emerald-50/50">Pointage du Jour</th>
+                  <th className="py-3 px-3.5 font-medium text-slate-600">Rôle</th>
+                  <th className="py-3 px-3.5 font-medium text-slate-600">Position</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {displayAttendanceRows.map((emp) => {
+                  const att = todayAttendanceMap[emp.id];
+                  const status = att?.status;
+                  const reason = att?.reason;
 
-                return (
-                  <tr
-                    key={emp.id}
-                    onClick={() => setSelectedAttendanceMember(emp)}
-                    className="hover:bg-slate-50/80 transition-colors cursor-pointer"
-                  >
-                    <td className="py-3.5 px-3.5">
-                      {(() => {
-                        const photoSrc = emp.photo_url || emp.avatar_url;
-                        return photoSrc ? (
-                          <Image
-                            src={photoSrc}
-                            alt={emp.name}
-                            width={32}
-                            height={32}
-                            className="w-8 h-8 rounded-full object-cover border border-slate-200/80 shadow-2xs"
-                            referrerPolicy="no-referrer"
-                          />
-                        ) : (
-                          <div className="w-8 h-8 rounded-full bg-slate-100 border border-slate-200 text-slate-700 flex items-center justify-center text-xs font-black shrink-0 shadow-2xs">
-                            {getInitials(emp.name)}
-                          </div>
-                        );
-                      })()}
-                    </td>
-
-                    <td className="py-3.5 px-3.5 font-bold text-slate-900 whitespace-nowrap">
-                      {emp.name}
-                    </td>
-
-                    <td className="py-3.5 px-3.5 font-normal text-slate-600 whitespace-nowrap">
-                      {emp.email}
-                    </td>
-
-                    <td className="py-3.5 px-3.5 font-normal text-slate-700 whitespace-nowrap">
-                      {emp.phone}
-                    </td>
-
-                    {/* Pointage Cell */}
-                    <td className="py-3.5 px-3.5 whitespace-nowrap bg-emerald-50/10" onClick={(e) => e.stopPropagation()}>
-                      <div className="flex items-center space-x-2">
-                        {/* Integrated Status Dropdown Select */}
-                        {canMarkAttendance ? (
-                          <select
-                            value={status || ''}
-                            onChange={(e) => {
-                              const val = e.target.value;
-                              if (val === 'present') {
-                                handleMarkAttendanceStatus(emp.id, 'present');
-                              } else if (val === 'late') {
-                                handleOpenAttendanceReasonModal(emp.rawStaff, 'late');
-                              } else if (val === 'absent') {
-                                handleOpenAttendanceReasonModal(emp.rawStaff, 'absent');
-                              }
-                            }}
-                            className={`px-3 py-1.5 rounded-xl text-xs font-bold border focus:outline-none transition-all cursor-pointer shadow-2xs ${
-                              status === 'present'
-                                ? 'bg-emerald-50 text-emerald-800 border-emerald-300 hover:bg-emerald-100'
-                                : status === 'late'
-                                ? 'bg-amber-50 text-amber-800 border-amber-300 hover:bg-amber-100'
-                                : status === 'absent'
-                                ? 'bg-rose-50 text-rose-800 border-rose-300 hover:bg-rose-100'
-                                : 'bg-slate-100 text-slate-600 border-slate-200 hover:bg-slate-200/70'
-                            }`}
-                          >
-                            <option value="" disabled className="text-slate-400 bg-white">
-                              ― Choisir statut (Non pointé)
-                            </option>
-                            <option value="present" className="text-emerald-800 font-bold bg-white">
-                              ✓ Présent
-                            </option>
-                            <option value="late" className="text-amber-800 font-bold bg-white">
-                              ⏰ Retard
-                            </option>
-                            <option value="absent" className="text-rose-800 font-bold bg-white">
-                              ✕ Absent
-                            </option>
-                          </select>
-                        ) : (
-                          <span
-                            className={`inline-flex items-center space-x-1.5 px-2.5 py-1 rounded-lg text-xs font-bold border shadow-2xs ${
-                              status === 'present'
-                                ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
-                                : status === 'late'
-                                ? 'bg-amber-50 text-amber-800 border-amber-200'
-                                : status === 'absent'
-                                ? 'bg-rose-50 text-rose-800 border-rose-200'
-                                : 'bg-slate-100 text-slate-500 border-slate-200'
-                            }`}
-                          >
-                            {status === 'present' && <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />}
-                            {status === 'late' && <Clock className="w-3.5 h-3.5 text-amber-600 shrink-0" />}
-                            {status === 'absent' && <X className="w-3.5 h-3.5 text-rose-600 shrink-0" />}
-                            <span>
-                              {status === 'present'
-                                ? 'Présent'
-                                : status === 'late'
-                                ? 'Retard'
-                                : status === 'absent'
-                                ? 'Absent'
-                                : 'Non pointé'}
-                            </span>
-                          </span>
-                        )}
-
-                        {/* Justification Pill Badge for Late or Absent */}
-                        {(status === 'late' || status === 'absent') && (
-                          reason && reason.trim() ? (
-                            <span
-                              className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-sky-50 text-sky-800 border border-sky-200/80 shadow-2xs cursor-help"
-                              title={`Motif : ${reason}`}
-                            >
-                              <span>Justifié</span>
-                            </span>
+                  return (
+                    <tr
+                      key={emp.id}
+                      onClick={() => setSelectedAttendanceMember(emp)}
+                      className="hover:bg-slate-50/80 transition-colors cursor-pointer"
+                    >
+                      <td className="py-3.5 px-3.5">
+                        {(() => {
+                          const photoSrc = emp.photo_url || emp.avatar_url;
+                          return photoSrc ? (
+                            <Image
+                              src={photoSrc}
+                              alt={emp.name}
+                              width={32}
+                              height={32}
+                              className="w-8 h-8 rounded-full object-cover border border-slate-200/80 shadow-2xs"
+                              referrerPolicy="no-referrer"
+                            />
                           ) : (
-                            <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-amber-50 text-amber-800 border border-amber-200/80 shadow-2xs">
-                              <span>Non justifié</span>
+                            <div className="w-8 h-8 rounded-full bg-slate-100 border border-slate-200 text-slate-700 flex items-center justify-center text-xs font-black shrink-0 shadow-2xs">
+                              {getInitials(emp.name)}
+                            </div>
+                          );
+                        })()}
+                      </td>
+
+                      <td className="py-3.5 px-3.5 font-bold text-slate-900 whitespace-nowrap">
+                        {emp.name}
+                      </td>
+
+                      <td className="py-3.5 px-3.5 font-normal text-slate-600 whitespace-nowrap">
+                        {emp.email}
+                      </td>
+
+                      <td className="py-3.5 px-3.5 font-normal text-slate-700 whitespace-nowrap">
+                        {emp.phone}
+                      </td>
+
+                      {/* Pointage Cell */}
+                      <td className="py-3.5 px-3.5 whitespace-nowrap bg-emerald-50/10" onClick={(e) => e.stopPropagation()}>
+                        <div className="flex items-center space-x-2">
+                          {/* Integrated Status Dropdown Select */}
+                          {canMarkAttendance ? (
+                            <select
+                              value={status || ''}
+                              onChange={(e) => {
+                                const val = e.target.value;
+                                if (val === 'present') {
+                                  handleMarkAttendanceStatus(emp.id, 'present');
+                                } else if (val === 'late') {
+                                  handleOpenAttendanceReasonModal(emp.rawStaff, 'late');
+                                } else if (val === 'absent') {
+                                  handleOpenAttendanceReasonModal(emp.rawStaff, 'absent');
+                                }
+                              }}
+                              className={`px-3 py-1.5 rounded-xl text-xs font-bold border focus:outline-none transition-all cursor-pointer shadow-2xs ${
+                                status === 'present'
+                                  ? 'bg-emerald-50 text-emerald-800 border-emerald-300 hover:bg-emerald-100'
+                                  : status === 'late'
+                                  ? 'bg-amber-50 text-amber-800 border-amber-300 hover:bg-amber-100'
+                                  : status === 'absent'
+                                  ? 'bg-rose-50 text-rose-800 border-rose-300 hover:bg-rose-100'
+                                  : 'bg-slate-100 text-slate-600 border-slate-200 hover:bg-slate-200/70'
+                              }`}
+                            >
+                              <option value="" disabled className="text-slate-400 bg-white">
+                                ― Choisir statut (Non pointé)
+                              </option>
+                              <option value="present" className="text-emerald-800 font-bold bg-white">
+                                ✓ Présent
+                              </option>
+                              <option value="late" className="text-amber-800 font-bold bg-white">
+                                ⏰ Retard
+                              </option>
+                              <option value="absent" className="text-rose-800 font-bold bg-white">
+                                ✕ Absent
+                              </option>
+                            </select>
+                          ) : (
+                            <span
+                              className={`inline-flex items-center space-x-1.5 px-2.5 py-1 rounded-lg text-xs font-bold border shadow-2xs ${
+                                status === 'present'
+                                  ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                                  : status === 'late'
+                                  ? 'bg-amber-50 text-amber-800 border-amber-200'
+                                  : status === 'absent'
+                                  ? 'bg-rose-50 text-rose-800 border-rose-200'
+                                  : 'bg-slate-100 text-slate-500 border-slate-200'
+                              }`}
+                            >
+                              {status === 'present' && <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />}
+                              {status === 'late' && <Clock className="w-3.5 h-3.5 text-amber-600 shrink-0" />}
+                              {status === 'absent' && <X className="w-3.5 h-3.5 text-rose-600 shrink-0" />}
+                              <span>
+                                {status === 'present'
+                                  ? 'Présent'
+                                  : status === 'late'
+                                  ? 'Retard'
+                                  : status === 'absent'
+                                  ? 'Absent'
+                                  : 'Non pointé'}
+                              </span>
                             </span>
-                          )
-                        )}
-                      </div>
-                    </td>
+                          )}
 
-                    <td className="py-3.5 px-3.5 text-slate-700 font-normal whitespace-nowrap">
-                      {emp.role}
-                    </td>
+                          {/* Justification Pill Badge for Late or Absent */}
+                          {(status === 'late' || status === 'absent') && (
+                            reason && reason.trim() ? (
+                              <span
+                                className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-sky-50 text-sky-800 border border-sky-200/80 shadow-2xs cursor-help"
+                                title={`Motif : ${reason}`}
+                              >
+                                <span>Justifié</span>
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-amber-50 text-amber-800 border border-amber-200/80 shadow-2xs">
+                                <span>Non justifié</span>
+                              </span>
+                            )
+                          )}
+                        </div>
+                      </td>
 
-                    <td className="py-3.5 px-3.5 text-slate-700 font-normal whitespace-nowrap">
-                      {emp.position}
+                      <td className="py-3.5 px-3.5 text-slate-700 font-normal whitespace-nowrap">
+                        {emp.role}
+                      </td>
+
+                      <td className="py-3.5 px-3.5 text-slate-700 font-normal whitespace-nowrap">
+                        {emp.position}
+                      </td>
+                    </tr>
+                  );
+                })}
+
+                {displayAttendanceRows.length === 0 && (
+                  <tr>
+                    <td colSpan={7} className="py-12 text-center text-slate-400 text-xs font-medium">
+                      Aucun membre trouvé dans cette catégorie de pointage.
                     </td>
                   </tr>
-                );
-              })}
+                )}
+              </tbody>
+            </table>
+          </div>
 
-              {displayAttendanceRows.length === 0 && (
-                <tr>
-                  <td colSpan={7} className="py-12 text-center text-slate-400 text-xs font-medium">
-                    Aucun membre trouvé dans cette catégorie de pointage.
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
+          {/* Bottom Bar Summary */}
+          <div className="px-4 py-3 bg-slate-50/60 border-t border-slate-100 flex items-center justify-between text-xs text-slate-500">
+            <span>Affichés : <strong className="font-bold text-slate-700">{displayAttendanceRows.length}</strong> membre(s) sur {allTeamRows.length}</span>
+            <span className="text-slate-500">Pointage enregistré sur Supabase (table <code className="text-emerald-700 font-mono text-[10px] bg-emerald-50 px-1 py-0.5 rounded">attendance</code>)</span>
+          </div>
         </div>
-
-        {/* Bottom Bar Summary */}
-        <div className="px-4 py-3 bg-slate-50/60 border-t border-slate-100 flex items-center justify-between text-xs text-slate-500">
-          <span>Affichés : <strong className="font-bold text-slate-700">{displayAttendanceRows.length}</strong> membre(s) sur {allTeamRows.length}</span>
-          <span className="text-slate-500">Pointage enregistré sur Supabase (table <code className="text-emerald-700 font-mono text-[10px] bg-emerald-50 px-1 py-0.5 rounded">attendance</code>)</span>
-        </div>
-      </div>
+      )}
 
       {/* Slide-over Panel: Historique de Pointage Membre (30 derniers jours) */}
       <AnimatePresence>
