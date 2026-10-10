@@ -14,6 +14,8 @@ import {
   FileText,
   UploadCloud,
   Eye,
+  LayoutGrid,
+  List,
 } from 'lucide-react';
 import {
   Business,
@@ -38,6 +40,7 @@ import {
   uploadExpenseReceipt,
 } from '@/lib/supabase';
 import { MediaViewer, MediaViewerItem } from '@/components/MediaViewer';
+import ExpenseCardsView from '@/components/ExpenseCardsView';
 
 function getCategoryBadgeStyle(category?: string | null): string {
   const palette = [
@@ -75,6 +78,47 @@ export default function ExpensesSection({
   const [businessExpenses, setBusinessExpenses] = useState<Expense[]>([]);
   const [trashedExpenses, setTrashedExpenses] = useState<Expense[]>([]);
   const [expensesViewMode, setExpensesViewMode] = useState<'active' | 'history'>('active');
+  const [displayLayout, setDisplayLayout] = useState<'list' | 'cards'>('list');
+  const [groupByCategory, setGroupByCategory] = useState<boolean>(false);
+
+  // Mémorisation de la bascule Liste / Cartes et du groupement dans localStorage
+  useEffect(() => {
+    try {
+      const savedLayout = localStorage.getItem('platform_expenses_display_layout');
+      if (savedLayout === 'cards' || savedLayout === 'list') {
+        setDisplayLayout(savedLayout);
+      }
+      const savedGrouping = localStorage.getItem('platform_expenses_group_by_category');
+      if (savedGrouping === 'true') {
+        setGroupByCategory(true);
+      } else if (savedGrouping === 'false') {
+        setGroupByCategory(false);
+      }
+    } catch {
+      // Ignorer l erreur si localStorage non accessible
+    }
+  }, []);
+
+  const handleChangeDisplayLayout = (layout: 'list' | 'cards') => {
+    setDisplayLayout(layout);
+    try {
+      localStorage.setItem('platform_expenses_display_layout', layout);
+    } catch {
+      // Ignorer si localStorage indisponible
+    }
+  };
+
+  const handleToggleGroupByCategory = () => {
+    setGroupByCategory((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem('platform_expenses_group_by_category', String(next));
+      } catch {
+        // Ignorer si localStorage indisponible
+      }
+      return next;
+    });
+  };
   const [expenseCategories, setExpenseCategories] = useState<ExpenseCategoryItem[]>([]);
   const [expensesLoading, setExpensesLoading] = useState<boolean>(false);
   const [expenseSearch, setExpenseSearch] = useState<string>('');
@@ -584,6 +628,57 @@ export default function ExpensesSection({
             <Trash2 className="w-3.5 h-3.5" />
             <span>Corbeille ({trashedCategories.length})</span>
           </button>
+
+          {/* Bascule « Liste / Cartes » avec mémorisation localStorage */}
+          <div className="flex items-center p-0.5 bg-[#FAF7F2] border border-[#E5DCD0] rounded-xl shadow-2xs">
+            <button
+              type="button"
+              onClick={() => handleChangeDisplayLayout('list')}
+              className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                displayLayout === 'list'
+                  ? 'bg-white text-[#1B4B4A] shadow-2xs border border-[#E5DCD0]/80'
+                  : 'text-slate-500 hover:text-[#241F1B] hover:bg-white/60 border border-transparent'
+              }`}
+              title="Vue Liste"
+            >
+              <List className="w-3.5 h-3.5" />
+              <span>Liste</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => handleChangeDisplayLayout('cards')}
+              className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                displayLayout === 'cards'
+                  ? 'bg-white text-[#1B4B4A] shadow-2xs border border-[#E5DCD0]/80'
+                  : 'text-slate-500 hover:text-[#241F1B] hover:bg-white/60 border border-transparent'
+              }`}
+              title="Vue Cartes"
+            >
+              <LayoutGrid className="w-3.5 h-3.5" />
+              <span>Cartes</span>
+            </button>
+          </div>
+
+          {/* Interrupteur « Grouper par catégorie » (visible uniquement en vue Cartes) */}
+          {displayLayout === 'cards' && (
+            <button
+              type="button"
+              onClick={handleToggleGroupByCategory}
+              className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-bold border transition-all cursor-pointer shadow-2xs ${
+                groupByCategory
+                  ? 'bg-[#1B4B4A] text-white border-[#1B4B4A]'
+                  : 'bg-white text-slate-600 hover:text-[#241F1B] border-[#E5DCD0] hover:bg-[#FAF7F2]'
+              }`}
+              title="Grouper les cartes par catégorie"
+            >
+              <span
+                className={`w-2 h-2 rounded-full transition-all ${
+                  groupByCategory ? 'bg-emerald-300' : 'bg-slate-300'
+                }`}
+              />
+              <span>Grouper par catégorie</span>
+            </button>
+          )}
         </div>
 
         {/* Boutons d'actions à droite */}
@@ -642,6 +737,24 @@ export default function ExpensesSection({
                   </>
                 )}
               </div>
+            );
+          }
+
+          if (displayLayout === 'cards') {
+            return (
+              <ExpenseCardsView
+                expenses={filteredExpenses}
+                business={business}
+                expensesViewMode={expensesViewMode}
+                groupByCategory={groupByCategory}
+                expenseDeletingId={expenseDeletingId}
+                expenseRestoringId={expenseRestoringId}
+                getCategoryBadgeStyle={getCategoryBadgeStyle}
+                onEditExpense={handleOpenEditExpenseModal}
+                onDeleteExpense={handleDeleteExpense}
+                onRestoreExpense={handleRestoreExpense}
+                onOpenReceipt={handleOpenReceiptViewer}
+              />
             );
           }
 
