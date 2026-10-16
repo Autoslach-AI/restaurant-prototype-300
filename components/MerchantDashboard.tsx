@@ -75,6 +75,7 @@ import {
   CheckSquare,
   Square,
   Receipt,
+  Truck,
 } from 'lucide-react';
 import {
   uploadStaffAvatar,
@@ -120,6 +121,7 @@ import SettingsSection from './SettingsSection';
 import { TeamSection } from './TeamSection';
 import { AttendanceSection } from './AttendanceSection';
 import OrdersSection from './OrdersSection';
+import DeliveriesSection from './DeliveriesSection';
 import ProductsSection from './ProductsSection';
 
 interface MerchantDashboardProps {
@@ -142,7 +144,7 @@ interface MerchantDashboardProps {
   onToggleWhatsAppSim: () => void;
 }
 
-type TabType = 'overview' | 'finance' | 'expenses' | 'orders' | 'products' | 'customers' | 'agent' | 'settings' | 'profile' | 'conversion' | 'team' | 'attendance';
+type TabType = 'overview' | 'finance' | 'expenses' | 'orders' | 'deliveries' | 'products' | 'customers' | 'agent' | 'settings' | 'profile' | 'conversion' | 'team' | 'attendance';
 
 export default function MerchantDashboard({
   business,
@@ -772,6 +774,7 @@ export default function MerchantDashboard({
     if (activeStaff.role === 'owner') return true;
     if (tab === 'team' || tab === 'attendance') return true;
     if (tab === 'overview' || tab === 'profile' || tab === 'conversion') return true;
+    if (tab === 'deliveries') return Boolean(activeStaff.permissions?.orders);
     if (tab === 'finance' || tab === 'expenses') return Boolean(activeStaff.permissions?.finance);
     return Boolean(activeStaff.permissions[tab as keyof StaffPermissions]);
   };
@@ -978,12 +981,24 @@ export default function MerchantDashboard({
     alert('Modifications enregistrées sur votre compte personnel !');
   };
 
+  // Badge for Deliveries: count of unassigned active delivery orders
+  const unassignedDeliveriesCount = useMemo(() => {
+    return businessOrders.filter((o) => {
+      const isDeliv = o.order_type === 'delivery';
+      const isStatusEligible =
+        o.status === 'confirmed' || o.status === 'preparing' || o.status === 'ready';
+      const isUnassigned = !o.assigned_to || o.assigned_to.trim() === '';
+      return isDeliv && isStatusEligible && isUnassigned;
+    }).length;
+  }, [businessOrders]);
+
   // Sidebar Menu Items Configuration
   const navItems: { id: TabType; label: string; icon: React.ComponentType<{ className?: string }>; badge?: number | string; ownerOnly?: boolean; hidden?: boolean }[] = [
     { id: 'overview', label: 'Tableau de bord', icon: TrendingUp },
     { id: 'finance', label: 'Finance', icon: CreditCard },
     { id: 'expenses', label: 'Dépenses', icon: Receipt, hidden: !hasPermission('finance') },
     { id: 'orders', label: 'Commandes', icon: ListFilter, badge: totalSubAlertsCount > 0 ? totalSubAlertsCount : undefined },
+    { id: 'deliveries', label: 'Livraisons', icon: Truck, badge: unassignedDeliveriesCount > 0 ? unassignedDeliveriesCount : undefined },
     { id: 'products', label: 'Produits & Catégories', icon: Package, badge: businessProducts.length },
     { id: 'customers', label: 'Clients', icon: Users, badge: businessCustomers.length },
     { id: 'team', label: 'Équipe', icon: ShieldCheck, badge: allTeamRows.length },
@@ -1390,6 +1405,16 @@ export default function MerchantDashboard({
             getInitials={getInitials}
             onUpdateOrderStatus={onUpdateOrderStatus}
             onCancelOrder={onCancelOrder}
+          />
+        )}
+
+        {/* TAB LIVRAISONS & TOURNÉES */}
+        {hasPermission('deliveries') && activeTab === 'deliveries' && (
+          <DeliveriesSection
+            business={business}
+            orders={businessOrders}
+            staff={businessStaff}
+            nowMs={nowMs}
           />
         )}
 

@@ -145,6 +145,18 @@ export interface DeliveryZone {
   active: boolean;
 }
 
+export interface Driver {
+  id: string;
+  business_id: string;
+  name: string;
+  phone?: string | null;
+  photo_url?: string | null;
+  neighborhood?: string | null;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
 export type PaymentChannelId = 'wave' | 'orange_money' | 'card';
 
 export type PaymentGatewayProvider = 'paydunya' | 'cinetpay';
@@ -201,6 +213,7 @@ export interface Order {
   delivery_fee?: number; // fixed fee
   customer_lat?: number | null; // optional GPS lat
   customer_lng?: number | null; // optional GPS lng
+  driver_id?: string | null; // UUID or string id from platform_drivers
   assigned_to?: string | null; // name of driver (simple text)
   cancellation_reason?: string | null; // mandatory if status = 'cancelled'
   internal_note?: string | null; // free text note

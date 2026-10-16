@@ -1,5 +1,5 @@
 import { createClient } from '@supabase/supabase-js';
-import { AgentChatMessage, AgentChatMessageAttachment, AgentConversation, AgentMemory, AgentProject, AttendanceRecord, Business, Category, Customer, CustomerMessage, DeliveryZone, Expense, ExpenseCategory, ExpenseCategoryItem, Order, OrderItem, OrderStatus, PaymentStatus, Product, Staff, StaffPermissions } from './types';
+import { AgentChatMessage, AgentChatMessageAttachment, AgentConversation, AgentMemory, AgentProject, AttendanceRecord, Business, Category, Customer, CustomerMessage, DeliveryZone, Driver, Expense, ExpenseCategory, ExpenseCategoryItem, Order, OrderItem, OrderStatus, PaymentStatus, Product, Staff, StaffPermissions } from './types';
 import { getStore } from './store';
 import { isSensitiveMemoryText, resolveAgentConfig, ResolvedAgentMemoryConfig } from './agent-config';
 
@@ -1940,6 +1940,7 @@ export async function insertOrder(data: {
   delivery_fee?: number;
   customer_lat?: number | null;
   customer_lng?: number | null;
+  driver_id?: string | null;
   assigned_to?: string | null;
   cancellation_reason?: string | null;
   internal_note?: string | null;
@@ -1975,6 +1976,7 @@ export async function insertOrder(data: {
     delivery_fee: data.delivery_fee !== undefined ? Number(data.delivery_fee) : 0,
     customer_lat: data.customer_lat !== undefined ? data.customer_lat : null,
     customer_lng: data.customer_lng !== undefined ? data.customer_lng : null,
+    driver_id: data.driver_id || null,
     assigned_to: data.assigned_to || null,
     cancellation_reason: data.cancellation_reason || null,
     internal_note: data.internal_note || null,
@@ -2254,6 +2256,121 @@ export async function updateOrderPaymentInSupabase(
   } catch (err: any) {
     console.warn('Supabase update order payment exception:', err?.message || err);
     return { success: false, error: err?.message || 'Erreur de connexion à la base de données' };
+  }
+}
+
+/**
+ * Assign or unassign a driver to one or multiple orders in platform_orders.
+ * Updates driver_id, assigned_to and updated_at with business_id filter.
+ * Syncs the in-memory store using store.orders updates.
+ * On failure, rolls back any changes in memory and returns { success: false, error }.
+ * A null or empty driverId unassigns the driver.
+ */
+export async function assignDriverToOrders(
+  orderIds: string[],
+  driverId: string | null,
+  businessId: string,
+  driverName?: string | null
+): Promise<{ success: boolean; error?: string }> {
+  if (!orderIds || orderIds.length === 0) {
+    return { success: true };
+  }
+
+  const store = getStore();
+  const now = new Date().toISOString();
+  const cleanDriverId = driverId && driverId.trim() ? driverId.trim() : null;
+
+  // Resolve driverName if not supplied
+  let cleanDriverName = driverName && driverName.trim() ? driverName.trim() : null;
+  if (cleanDriverId && !cleanDriverName) {
+    // If not supplied, try to fetch driver name from active drivers
+    const d = store.orders.find((o) => o.driver_id === cleanDriverId);
+    if (d?.assigned_to) {
+      cleanDriverName = d.assigned_to;
+    }
+  }
+  if (!cleanDriverId) {
+    cleanDriverName = null;
+  }
+
+  // Snapshot previous in-memory state for rollback on error
+  const previousState = new Map<string, { driver_id: string | null; assigned_to: string | null; updated_at: string }>();
+  for (const id of orderIds) {
+    const o = store.orders.find((ord) => ord.id === id);
+    if (o) {
+      previousState.set(id, {
+        driver_id: o.driver_id ?? null,
+        assigned_to: o.assigned_to ?? null,
+        updated_at: o.updated_at,
+      });
+    }
+  }
+
+  const hasCredentials =
+    Boolean(process.env.NEXT_PUBLIC_SUPABASE_URL?.trim()) &&
+    Boolean(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY?.trim());
+
+  if (!hasCredentials) {
+    for (const id of orderIds) {
+      const o = store.orders.find((ord) => ord.id === id);
+      if (o) {
+        o.driver_id = cleanDriverId;
+        o.assigned_to = cleanDriverName;
+        o.updated_at = now;
+      }
+    }
+    store.notify();
+    return { success: true };
+  }
+
+  try {
+    const client = getSupabase();
+    const { data: updatedRows, error } = await (client as any)
+      .from('platform_orders')
+      .update({
+        driver_id: cleanDriverId,
+        assigned_to: cleanDriverName,
+        updated_at: now,
+      })
+      .in('id', orderIds)
+      .eq('business_id', businessId)
+      .select();
+
+    if (error) {
+      console.warn('Supabase assign driver to orders error:', error.message);
+      return { success: false, error: error.message };
+    }
+
+    if (!updatedRows || updatedRows.length === 0) {
+      console.warn('Supabase assign driver to orders: 0 rows affected');
+      return { success: false, error: 'Aucune commande mise à jour (commandes introuvables ou accès non autorisé).' };
+    }
+
+    // Apply to in-memory store
+    for (const id of orderIds) {
+      const o = store.orders.find((ord) => ord.id === id);
+      if (o) {
+        o.driver_id = cleanDriverId;
+        o.assigned_to = cleanDriverName;
+        o.updated_at = now;
+      }
+    }
+    store.notify();
+
+    return { success: true };
+  } catch (err: any) {
+    console.warn('Supabase assign driver to orders exception:', err?.message || err);
+    // Rollback store changes in memory if any
+    for (const [id, prev] of previousState.entries()) {
+      const o = store.orders.find((ord) => ord.id === id);
+      if (o) {
+        o.driver_id = prev.driver_id;
+        o.assigned_to = prev.assigned_to;
+        o.updated_at = prev.updated_at;
+      }
+    }
+    store.notify();
+    return { success: false, error: err?.message || 'Erreur de connexion lors de l’assignation du livreur.' };
   }
 }
 
@@ -3311,6 +3428,374 @@ export async function deleteDeliveryZone(
   } catch (err: any) {
     console.warn('Supabase delete delivery zone exception:', err?.message || err);
     return { success: false, error: err?.message || 'Erreur de connexion lors de la suppression' };
+  }
+}
+
+/**
+ * ============================================================================
+ * DRIVERS CRUD (platform_drivers)
+ * ============================================================================
+ */
+
+/**
+ * 1. Fetch drivers for a business from platform_drivers in Supabase.
+ * Returns empty array if error or no credentials.
+ */
+export async function fetchDrivers(
+  businessId: string
+): Promise<Driver[]> {
+  const hasCredentials =
+    Boolean(process.env.NEXT_PUBLIC_SUPABASE_URL?.trim()) &&
+    Boolean(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY?.trim());
+
+  if (!hasCredentials) {
+    return [];
+  }
+
+  try {
+    const client = getSupabase();
+    const { data, error } = await (client as any)
+      .from('platform_drivers')
+      .select('*')
+      .eq('business_id', businessId)
+      .order('name', { ascending: true });
+
+    if (error) {
+      console.warn('Supabase fetch drivers error:', error.message);
+      return [];
+    }
+
+    return (data as Driver[]) || [];
+  } catch (err: any) {
+    console.warn('Supabase fetch drivers exception:', err?.message || err);
+    return [];
+  }
+}
+
+/**
+ * Upload a driver photo to platform-product-images in Supabase Storage.
+ * - Strict: NO local fallback, fails if no credentials or error.
+ * - Max 2MB, formats: PNG, JPG, JPEG, WEBP.
+ * - Path: drivers/<cleanBusinessId>/photo_<timestamp>.<ext>
+ */
+export async function uploadDriverPhoto(
+  file: File,
+  businessId: string
+): Promise<{ success: boolean; url?: string; error?: string }> {
+  if (!file) {
+    return { success: false, error: 'Fichier manquant' };
+  }
+
+  const MAX_FILE_SIZE = 2 * 1024 * 1024; // 2 Mo
+  if (file.size > MAX_FILE_SIZE) {
+    const sizeMo = (file.size / (1024 * 1024)).toFixed(1);
+    return {
+      success: false,
+      error: `La photo dépasse la taille maximale autorisée de 2 Mo (taille actuelle : ${sizeMo} Mo).`,
+    };
+  }
+
+  const contentType = file.type || '';
+  const validMimes = ['image/png', 'image/jpeg', 'image/jpg', 'image/webp'];
+  const extMatch = file.name.split('.').pop()?.toLowerCase();
+  const validExts = ['png', 'jpg', 'jpeg', 'webp'];
+
+  const isValidMime = validMimes.includes(contentType.toLowerCase());
+  const isValidExt = extMatch ? validExts.includes(extMatch) : false;
+
+  if (!isValidMime && !isValidExt) {
+    return {
+      success: false,
+      error: 'Format non supporté. Veuillez sélectionner une image PNG, JPG ou WEBP.',
+    };
+  }
+
+  let fileExt = 'png';
+  if (extMatch && validExts.includes(extMatch)) {
+    fileExt = extMatch === 'jpeg' ? 'jpg' : extMatch;
+  } else if (contentType === 'image/jpeg' || contentType === 'image/jpg') {
+    fileExt = 'jpg';
+  } else if (contentType === 'image/webp') {
+    fileExt = 'webp';
+  }
+
+  const cleanBusinessId = businessId ? businessId.replace(/[^a-zA-Z0-9_-]/g, '') : 'default';
+  const fileName = `photo_${Date.now()}.${fileExt}`;
+  const filePath = `drivers/${cleanBusinessId}/${fileName}`;
+
+  const hasCredentials =
+    Boolean(process.env.NEXT_PUBLIC_SUPABASE_URL?.trim()) &&
+    Boolean(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY?.trim());
+
+  if (!hasCredentials) {
+    return { success: false, error: 'Configuration Supabase manquante' };
+  }
+
+  try {
+    const client = getSupabase();
+    const BUCKET_NAME = 'platform-product-images';
+    const uploadRes = await client.storage
+      .from(BUCKET_NAME)
+      .upload(filePath, file, {
+        upsert: true,
+        contentType: contentType || (fileExt === 'png' ? 'image/png' : fileExt === 'webp' ? 'image/webp' : 'image/jpeg'),
+      });
+
+    if (uploadRes.error) {
+      console.error(`Upload driver photo to ${BUCKET_NAME} failed:`, uploadRes.error.message);
+      return {
+        success: false,
+        error: `Échec de l'upload sur Supabase Storage : ${uploadRes.error.message}`,
+      };
+    }
+
+    const { data: publicUrlData } = client.storage
+      .from(BUCKET_NAME)
+      .getPublicUrl(filePath);
+
+    if (publicUrlData?.publicUrl) {
+      return {
+        success: true,
+        url: publicUrlData.publicUrl,
+      };
+    }
+
+    return { success: false, error: "Impossible de récupérer l'URL publique de la photo." };
+  } catch (err: any) {
+    console.error('Supabase storage driver photo upload exception:', err);
+    return { success: false, error: err?.message || "Erreur lors de l'upload de la photo" };
+  }
+}
+
+/**
+ * 2. Insert a new driver into platform_drivers.
+ * - id is omitted: generated as UUID by Supabase DB!
+ * - Validates name (non-empty, max 80 chars), phone (max 30 chars), neighborhood (max 80 chars).
+ * - Accepts photo_url and neighborhood.
+ */
+export async function insertDriver(data: {
+  business_id: string;
+  name: string;
+  phone?: string | null;
+  photo_url?: string | null;
+  neighborhood?: string | null;
+  is_active?: boolean;
+}): Promise<{ success: boolean; driver?: Driver; error?: string }> {
+  const trimmedName = data.name?.trim();
+  if (!trimmedName) {
+    return { success: false, error: 'Le nom du livreur est requis.' };
+  }
+  if (trimmedName.length > 80) {
+    return { success: false, error: 'Le nom du livreur ne doit pas dépasser 80 caractères.' };
+  }
+
+  const trimmedPhone = data.phone?.trim() || null;
+  if (trimmedPhone && trimmedPhone.length > 30) {
+    return { success: false, error: 'Le téléphone ne doit pas dépasser 30 caractères.' };
+  }
+
+  const trimmedNeighborhood = data.neighborhood?.trim() || null;
+  if (trimmedNeighborhood && trimmedNeighborhood.length > 80) {
+    return { success: false, error: 'Le quartier ne doit pas dépasser 80 caractères.' };
+  }
+
+  const trimmedPhotoUrl = data.photo_url?.trim() || null;
+  const now = new Date().toISOString();
+
+  // For insert: DO NOT pass id so the PostgreSQL database generates the UUID default
+  const recordToInsert = {
+    business_id: data.business_id,
+    name: trimmedName,
+    phone: trimmedPhone,
+    photo_url: trimmedPhotoUrl,
+    neighborhood: trimmedNeighborhood,
+    is_active: data.is_active !== undefined ? Boolean(data.is_active) : true,
+    created_at: now,
+    updated_at: now,
+  };
+
+  const hasCredentials =
+    Boolean(process.env.NEXT_PUBLIC_SUPABASE_URL?.trim()) &&
+    Boolean(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY?.trim());
+
+  if (!hasCredentials) {
+    // In local mode without credentials, use crypto.randomUUID() for valid UUID
+    const fallbackId = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : '00000000-0000-4000-8000-000000000000';
+    return { success: true, driver: { id: fallbackId, ...recordToInsert } };
+  }
+
+  try {
+    const client = getSupabase();
+    const { data: insertedRows, error } = await (client as any)
+      .from('platform_drivers')
+      .insert(recordToInsert)
+      .select();
+
+    if (error) {
+      console.warn('Supabase insert driver error:', error.message);
+      return { success: false, error: error.message };
+    }
+
+    if (!insertedRows || insertedRows.length === 0) {
+      console.warn('Supabase insert driver: 0 rows affected');
+      return { success: false, error: 'Échec de la création du livreur.' };
+    }
+
+    return { success: true, driver: insertedRows[0] as Driver };
+  } catch (err: any) {
+    console.warn('Supabase insert driver exception:', err?.message || err);
+    return { success: false, error: err?.message || 'Erreur de connexion à la base de données' };
+  }
+}
+
+/**
+ * 3. Update a driver in platform_drivers.
+ * Validates name (non-empty, max 80 chars), phone (max 30 chars), neighborhood (max 80 chars).
+ * Filters by business_id. Accepts photo_url and neighborhood.
+ */
+export async function updateDriver(
+  driverId: string,
+  businessId: string,
+  data: {
+    name: string;
+    phone?: string | null;
+    photo_url?: string | null;
+    neighborhood?: string | null;
+    is_active?: boolean;
+  }
+): Promise<{ success: boolean; driver?: Driver; error?: string }> {
+  const trimmedName = data.name?.trim();
+  if (!trimmedName) {
+    return { success: false, error: 'Le nom du livreur est requis.' };
+  }
+  if (trimmedName.length > 80) {
+    return { success: false, error: 'Le nom du livreur ne doit pas dépasser 80 caractères.' };
+  }
+
+  const trimmedPhone = data.phone !== undefined ? (data.phone?.trim() || null) : undefined;
+  if (trimmedPhone && trimmedPhone.length > 30) {
+    return { success: false, error: 'Le téléphone ne doit pas dépasser 30 caractères.' };
+  }
+
+  const trimmedNeighborhood =
+    data.neighborhood !== undefined ? (data.neighborhood?.trim() || null) : undefined;
+  if (trimmedNeighborhood && trimmedNeighborhood.length > 80) {
+    return { success: false, error: 'Le quartier ne doit pas dépasser 80 caractères.' };
+  }
+
+  const trimmedPhotoUrl =
+    data.photo_url !== undefined ? (data.photo_url?.trim() || null) : undefined;
+
+  const now = new Date().toISOString();
+  const updatePayload: Record<string, any> = {
+    name: trimmedName,
+    updated_at: now,
+  };
+  if (trimmedPhone !== undefined) {
+    updatePayload.phone = trimmedPhone;
+  }
+  if (trimmedNeighborhood !== undefined) {
+    updatePayload.neighborhood = trimmedNeighborhood;
+  }
+  if (trimmedPhotoUrl !== undefined) {
+    updatePayload.photo_url = trimmedPhotoUrl;
+  }
+  if (data.is_active !== undefined) {
+    updatePayload.is_active = Boolean(data.is_active);
+  }
+
+  const hasCredentials =
+    Boolean(process.env.NEXT_PUBLIC_SUPABASE_URL?.trim()) &&
+    Boolean(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY?.trim());
+
+  if (!hasCredentials) {
+    return {
+      success: true,
+      driver: {
+        id: driverId,
+        business_id: businessId,
+        name: trimmedName,
+        phone: trimmedPhone !== undefined ? trimmedPhone : null,
+        photo_url: trimmedPhotoUrl !== undefined ? trimmedPhotoUrl : null,
+        neighborhood: trimmedNeighborhood !== undefined ? trimmedNeighborhood : null,
+        is_active: data.is_active !== undefined ? Boolean(data.is_active) : true,
+        created_at: now,
+        updated_at: now,
+      },
+    };
+  }
+
+  try {
+    const client = getSupabase();
+    const { data: updatedRows, error } = await (client as any)
+      .from('platform_drivers')
+      .update(updatePayload)
+      .eq('id', driverId)
+      .eq('business_id', businessId)
+      .select();
+
+    if (error) {
+      console.warn('Supabase update driver error:', error.message);
+      return { success: false, error: error.message };
+    }
+
+    if (!updatedRows || updatedRows.length === 0) {
+      console.warn('Supabase update driver: 0 rows affected');
+      return { success: false, error: 'Livreur introuvable ou non modifié.' };
+    }
+
+    return { success: true, driver: updatedRows[0] as Driver };
+  } catch (err: any) {
+    console.warn('Supabase update driver exception:', err?.message || err);
+    return { success: false, error: err?.message || 'Erreur de connexion à la base de données' };
+  }
+}
+
+/**
+ * 4. Set driver active status (activation ou désactivation/archivage, jamais de suppression définitive).
+ * Filters by business_id.
+ */
+export async function setDriverActive(
+  driverId: string,
+  businessId: string,
+  isActive: boolean
+): Promise<{ success: boolean; driver?: Driver; error?: string }> {
+  const now = new Date().toISOString();
+
+  const hasCredentials =
+    Boolean(process.env.NEXT_PUBLIC_SUPABASE_URL?.trim()) &&
+    Boolean(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY?.trim());
+
+  if (!hasCredentials) {
+    return { success: true };
+  }
+
+  try {
+    const client = getSupabase();
+    const { data: updatedRows, error } = await (client as any)
+      .from('platform_drivers')
+      .update({
+        is_active: Boolean(isActive),
+        updated_at: now,
+      })
+      .eq('id', driverId)
+      .eq('business_id', businessId)
+      .select();
+
+    if (error) {
+      console.warn('Supabase set driver active error:', error.message);
+      return { success: false, error: error.message };
+    }
+
+    if (!updatedRows || updatedRows.length === 0) {
+      console.warn('Supabase set driver active: 0 rows affected');
+      return { success: false, error: 'Livreur introuvable ou statut non modifié.' };
+    }
+
+    return { success: true, driver: updatedRows[0] as Driver };
+  } catch (err: any) {
+    console.warn('Supabase set driver active exception:', err?.message || err);
+    return { success: false, error: err?.message || 'Erreur de connexion à la base de données' };
   }
 }
 
