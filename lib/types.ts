@@ -223,6 +223,7 @@ export interface Order {
   priority_level?: 'urgent' | 'moyen' | 'faible' | string;
   urgent_surcharge_applied?: number | null;
   requested_delivery_time?: string | null; // Heure ou créneau souhaité par le client
+  delivered_at?: string | null; // Timestamp de livraison effective
 
   // Included fields for convenience in UI
   customer_name?: string;

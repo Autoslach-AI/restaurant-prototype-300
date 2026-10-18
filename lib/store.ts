@@ -401,8 +401,10 @@ export class AppStore {
     const order = this.orders.find((o) => o.id === orderId);
     if (!order) return;
 
+    const now = new Date().toISOString();
     order.status = status;
-    order.updated_at = new Date().toISOString();
+    order.delivered_at = status === 'delivered' ? now : null;
+    order.updated_at = now;
 
     const activeBiz = this.businesses.find((b) => b.id === order.business_id) || this.getActiveBusiness();
 

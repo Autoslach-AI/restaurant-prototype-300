@@ -1919,6 +1919,92 @@ export async function fetchOrderItemsForOrder(orderId: string): Promise<OrderIte
 }
 
 /**
+ * 2b. Fetch order items for multiple orders in a SINGLE query from platform_order_items.
+ * Returns items grouped by order_id: Record<string, OrderItem[]>
+ * product_name is retrieved from platform_order_items (with fallback to store product if null).
+ */
+export async function fetchOrderItemsForOrders(
+  orderIds: string[]
+): Promise<Record<string, OrderItem[]>> {
+  const result: Record<string, OrderItem[]> = {};
+  if (!orderIds || orderIds.length === 0) {
+    return result;
+  }
+  for (const id of orderIds) {
+    result[id] = [];
+  }
+
+  const store = getStore();
+  const hasCredentials =
+    Boolean(process.env.NEXT_PUBLIC_SUPABASE_URL?.trim()) &&
+    Boolean(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY?.trim());
+
+  if (!hasCredentials) {
+    for (const id of orderIds) {
+      const order = store.orders.find((o) => o.id === id);
+      const items = (order?.items || []).map((item) => {
+        const prodName =
+          item.product_name ||
+          store.products.find((p) => p.id === item.product_id)?.name ||
+          'Article';
+        return {
+          ...item,
+          product_name: prodName,
+        };
+      });
+      result[id] = items;
+    }
+    return result;
+  }
+
+  try {
+    const client = getSupabase();
+    const { data, error } = await (client as any)
+      .from('platform_order_items')
+      .select('*')
+      .in('order_id', orderIds);
+
+    if (error) {
+      console.warn('Supabase fetch order items for orders error:', error.message);
+      for (const id of orderIds) {
+        const order = store.orders.find((o) => o.id === id);
+        result[id] = order?.items || [];
+      }
+      return result;
+    }
+
+    const rows = (data as any[]) || [];
+    for (const row of rows) {
+      const ordId = row.order_id;
+      if (!result[ordId]) {
+        result[ordId] = [];
+      }
+      const prodName =
+        row.product_name ||
+        store.products.find((p) => p.id === row.product_id)?.name ||
+        'Article';
+      result[ordId].push({
+        id: row.id,
+        order_id: ordId,
+        product_id: row.product_id,
+        quantity: Number(row.quantity || 1),
+        unit_price: Number(row.unit_price || 0),
+        product_name: prodName,
+      });
+    }
+
+    return result;
+  } catch (err: any) {
+    console.warn('Supabase fetch order items for orders exception:', err?.message || err);
+    for (const id of orderIds) {
+      const order = store.orders.find((o) => o.id === id);
+      result[id] = order?.items || [];
+    }
+    return result;
+  }
+}
+
+/**
  * 3. Insert an order AND its items into platform_orders and platform_order_items.
  * - Generates order ID: `order_${crypto.randomUUID() || Date.now()}`
  * - Inserts row in platform_orders with strict anti-false-success check
@@ -1949,6 +2035,7 @@ export async function insertOrder(data: {
   priority_level?: string | null;
   urgent_surcharge_applied?: number | null;
   requested_delivery_time?: string | null;
+  delivered_at?: string | null;
   items?: Array<{
     product_id: string;
     quantity: number;
@@ -1985,6 +2072,7 @@ export async function insertOrder(data: {
     priority_level: data.priority_level || null,
     urgent_surcharge_applied: data.urgent_surcharge_applied !== undefined ? data.urgent_surcharge_applied : null,
     requested_delivery_time: data.requested_delivery_time || null,
+    delivered_at: data.delivered_at !== undefined ? data.delivered_at : (data.status === 'delivered' ? now : null),
     created_at: now,
     updated_at: now,
   };
@@ -2088,7 +2176,9 @@ export async function insertOrder(data: {
 
 /**
  * 4. Update order status in platform_orders.
- * Updates status and updated_at, with strict anti-false-success check.
+ * When status is 'delivered', sets delivered_at = now().
+ * When leaving 'delivered', sets delivered_at = null.
+ * Strict anti-false-success check on updatedRows.
  */
 export async function updateOrderStatus(
   orderId: string,
@@ -2096,6 +2186,8 @@ export async function updateOrderStatus(
 ): Promise<{ success: boolean; error?: string }> {
   const store = getStore();
   const now = new Date().toISOString();
+  const isDelivered = newStatus === 'delivered';
+  const deliveredAtValue = isDelivered ? now : null;
 
   const hasCredentials =
     Boolean(process.env.NEXT_PUBLIC_SUPABASE_URL?.trim()) &&
@@ -2105,6 +2197,7 @@ export async function updateOrderStatus(
     const order = store.orders.find((o) => o.id === orderId);
     if (order) {
       order.status = newStatus as OrderStatus;
+      order.delivered_at = deliveredAtValue;
       order.updated_at = now;
       store.notify();
     }
@@ -2117,6 +2210,7 @@ export async function updateOrderStatus(
       .from('platform_orders')
       .update({
         status: newStatus,
+        delivered_at: deliveredAtValue,
         updated_at: now,
       })
       .eq('id', orderId)
@@ -2135,6 +2229,7 @@ export async function updateOrderStatus(
     const order = store.orders.find((o) => o.id === orderId);
     if (order) {
       order.status = newStatus as OrderStatus;
+      order.delivered_at = deliveredAtValue;
       order.updated_at = now;
       store.notify();
     }

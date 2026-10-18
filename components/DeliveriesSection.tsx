@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useMemo, useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import {
   Search,
   CheckSquare,
@@ -20,6 +21,14 @@ import {
   ArrowDown,
   ArrowUpDown,
   Layers,
+  ChevronUp,
+  Users,
+  CheckCircle2,
+  Clock,
+  Printer,
+  FileText,
+  Receipt,
+  MoreVertical,
 } from 'lucide-react';
 import { Order, OrderStatus, Business, Staff, Driver } from '@/lib/types';
 import {
@@ -30,7 +39,9 @@ import {
   assignDriverToOrders,
   uploadDriverPhoto,
   updateOrderStatus,
+  fetchOrderItemsForOrders,
 } from '@/lib/supabase';
+import { generateRoutePdf, generateTicketsPdf } from '@/lib/print-docs';
 import { getStore } from '@/lib/store';
 import {
   buildCustomerDriverHistory,
@@ -51,20 +62,52 @@ export default function DeliveriesSection({
   orders,
   nowMs,
 }: DeliveriesSectionProps) {
-  // Navigation segmentée
-  const [activeSubTab, setActiveSubTab] = useState<'pending' | 'routes' | 'drivers'>('pending');
+  // Navigation segmentée : « À assigner », « En tournée », « Livrées »
+  const [activeSubTab, setActiveSubTab] = useState<'pending' | 'routes' | 'delivered'>('pending');
+
+  // Panneau latéral de gestion des livreurs
+  const [isDriversDrawerOpen, setIsDriversDrawerOpen] = useState(false);
+
+  // Cartes de livreurs repliées dans l'onglet « En tournée »
+  const [collapsedDriverIds, setCollapsedDriverIds] = useState<Record<string, boolean>>({});
+
+  // Filtres de l'onglet « Livrées »
+  const [deliveredPeriodFilter, setDeliveredPeriodFilter] = useState<
+    'today' | 'yesterday' | '7days' | '30days' | 'this_month' | 'last_month' | 'all' | 'custom'
+  >('today');
+  const [customStartDate, setCustomStartDate] = useState<string>('');
+  const [customEndDate, setCustomEndDate] = useState<string>('');
+  const [deliveredDriverFilter, setDeliveredDriverFilter] = useState<string>('all');
+  const [deliveredZoneFilter, setDeliveredZoneFilter] = useState<string>('all');
+  const [deliveredSearchQuery, setDeliveredSearchQuery] = useState<string>('');
+  const [deliveredVisibleLimit, setDeliveredVisibleLimit] = useState<number>(50);
 
   // Filtre pour inclure les commandes déjà assignées dans l'onglet « À assigner » (désactivé par défaut)
   const [includeAssignedOrders, setIncludeAssignedOrders] = useState<boolean>(false);
 
-  // Livreur ciblé / centré pour l'onglet « Tournées »
+  // Livreur ciblé / centré pour l'onglet « En tournée »
   const [focusedDriverId, setFocusedDriverId] = useState<string | null>(null);
 
-  // Commande en cours de réassignation (dropdown ouvert)
-  const [reassigningOrderId, setReassigningOrderId] = useState<string | null>(null);
+  // Menu ⋮ d'une commande en tournée (rendu via portail pour éviter le clipping par overflow-hidden)
+  const [orderMenu, setOrderMenu] = useState<{
+    order: Order;
+    driver: Driver;
+    coords: {
+      top?: number;
+      bottom?: number;
+      right: number;
+    };
+  } | null>(null);
+  const orderMenuButtonRef = useRef<HTMLButtonElement | null>(null);
+  const orderMenuDropdownRef = useRef<HTMLDivElement | null>(null);
 
   // Commande en cours de traitement asynchrone (réassigner / retirer / marquer livrée)
   const [processingOrderId, setProcessingOrderId] = useState<string | null>(null);
+
+  // Menu Imprimer pour l'onglet « En cours »
+  const [openPrintMenuDriverId, setOpenPrintMenuDriverId] = useState<string | null>(null);
+  const [printingDriverId, setPrintingDriverId] = useState<string | null>(null);
+  const [printError, setPrintError] = useState<{ driverId: string; message: string } | null>(null);
 
   // État des livreurs chargés depuis Supabase
   const [drivers, setDrivers] = useState<Driver[]>([]);
@@ -149,16 +192,388 @@ export default function DeliveriesSection({
     return map;
   }, [drivers, deliveryOrders]);
 
-  // Livreurs ayant au moins une commande en cours (confirmed, preparing, ready) pour l'onglet « Tournées »
+  // Livreurs ayant au moins une commande en cours (confirmed, preparing, ready) pour l'onglet « En tournée »
   const driversWithRoutes = useMemo(() => {
     return drivers.filter((d) => (driverActiveOrdersMap.get(d.id)?.length || 0) > 0);
   }, [drivers, driverActiveOrdersMap]);
 
-  // Calcul du nombre de courses aujourd'hui par livreur
+  // Commandes livrées (traçabilité)
+  const deliveredOrders = useMemo(() => {
+    return orders.filter((o) => {
+      const isBiz = o.business_id === business.id;
+      const isDeliv = o.order_type === 'delivery';
+      return isBiz && isDeliv && o.status === 'delivered';
+    });
+  }, [orders, business.id]);
+
+  // Helper pour formater une Date en YYYY-MM-DD local
+  const formatLocalDate = (d: Date) => {
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+  };
+
+  // Début de la journée pour les calculs de dates et filtres
   const startOfTodayMs = useMemo(() => {
     const d = new Date(nowMs);
     return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
   }, [nowMs]);
+
+  // Calcul des bornes de la période sélectionnée (fuseau local de l'utilisateur)
+  const deliveredDateBounds = useMemo(() => {
+    const base = new Date(nowMs);
+    const y = base.getFullYear();
+    const m = base.getMonth();
+    const d = base.getDate();
+
+    if (deliveredPeriodFilter === 'today') {
+      const start = new Date(y, m, d, 0, 0, 0, 0).getTime();
+      const end = new Date(y, m, d, 23, 59, 59, 999).getTime();
+      return { start, end };
+    }
+
+    if (deliveredPeriodFilter === 'yesterday') {
+      const yesterday = new Date(y, m, d - 1);
+      const start = new Date(yesterday.getFullYear(), yesterday.getMonth(), yesterday.getDate(), 0, 0, 0, 0).getTime();
+      const end = new Date(yesterday.getFullYear(), yesterday.getMonth(), yesterday.getDate(), 23, 59, 59, 999).getTime();
+      return { start, end };
+    }
+
+    if (deliveredPeriodFilter === '7days') {
+      const past7 = new Date(y, m, d - 6);
+      const start = new Date(past7.getFullYear(), past7.getMonth(), past7.getDate(), 0, 0, 0, 0).getTime();
+      const end = new Date(y, m, d, 23, 59, 59, 999).getTime();
+      return { start, end };
+    }
+
+    if (deliveredPeriodFilter === '30days') {
+      const past30 = new Date(y, m, d - 29);
+      const start = new Date(past30.getFullYear(), past30.getMonth(), past30.getDate(), 0, 0, 0, 0).getTime();
+      const end = new Date(y, m, d, 23, 59, 59, 999).getTime();
+      return { start, end };
+    }
+
+    if (deliveredPeriodFilter === 'this_month') {
+      const start = new Date(y, m, 1, 0, 0, 0, 0).getTime();
+      const end = new Date(y, m + 1, 0, 23, 59, 59, 999).getTime();
+      return { start, end };
+    }
+
+    if (deliveredPeriodFilter === 'last_month') {
+      const start = new Date(y, m - 1, 1, 0, 0, 0, 0).getTime();
+      const end = new Date(y, m, 0, 23, 59, 59, 999).getTime();
+      return { start, end };
+    }
+
+    if (deliveredPeriodFilter === 'custom') {
+      let start = -Infinity;
+      let end = Infinity;
+      if (customStartDate) {
+        const parts = customStartDate.split('-').map(Number);
+        if (parts.length === 3) {
+          start = new Date(parts[0], parts[1] - 1, parts[2], 0, 0, 0, 0).getTime();
+        }
+      }
+      if (customEndDate) {
+        const parts = customEndDate.split('-').map(Number);
+        if (parts.length === 3) {
+          end = new Date(parts[0], parts[1] - 1, parts[2], 23, 59, 59, 999).getTime();
+        }
+      }
+      return { start, end };
+    }
+
+    // 'all' : aucune restriction temporelle
+    return { start: -Infinity, end: Infinity };
+  }, [deliveredPeriodFilter, customStartDate, customEndDate, nowMs]);
+
+  // Navigation ‹ et › pour reculer ou avancer d'un jour
+  const isSingleDayCustom =
+    deliveredPeriodFilter === 'custom' &&
+    Boolean(customStartDate) &&
+    customStartDate === customEndDate;
+
+  const isNavDisabled =
+    deliveredPeriodFilter === 'all' ||
+    deliveredPeriodFilter === '7days' ||
+    deliveredPeriodFilter === '30days' ||
+    deliveredPeriodFilter === 'this_month' ||
+    deliveredPeriodFilter === 'last_month' ||
+    (deliveredPeriodFilter === 'custom' && !isSingleDayCustom);
+
+  const isNextDayDisabled =
+    isNavDisabled || deliveredPeriodFilter === 'today';
+
+  const isPrevDayDisabled = isNavDisabled;
+
+  const handlePrevDay = () => {
+    if (isPrevDayDisabled) return;
+    const base = new Date(nowMs);
+    const y = base.getFullYear();
+    const m = base.getMonth();
+    const d = base.getDate();
+
+    if (deliveredPeriodFilter === 'today') {
+      setDeliveredPeriodFilter('yesterday');
+      return;
+    }
+
+    if (deliveredPeriodFilter === 'yesterday') {
+      const dayBefore = new Date(y, m, d - 2);
+      const s = formatLocalDate(dayBefore);
+      setCustomStartDate(s);
+      setCustomEndDate(s);
+      setDeliveredPeriodFilter('custom');
+      return;
+    }
+
+    if (isSingleDayCustom) {
+      const parts = customStartDate.split('-').map(Number);
+      const prevDate = new Date(parts[0], parts[1] - 1, parts[2] - 1);
+      const s = formatLocalDate(prevDate);
+      setCustomStartDate(s);
+      setCustomEndDate(s);
+    }
+  };
+
+  const handleNextDay = () => {
+    if (isNextDayDisabled) return;
+    const base = new Date(nowMs);
+    const y = base.getFullYear();
+    const m = base.getMonth();
+    const d = base.getDate();
+    const yesterdayStr = formatLocalDate(new Date(y, m, d - 1));
+    const todayStr = formatLocalDate(base);
+
+    if (deliveredPeriodFilter === 'yesterday') {
+      setDeliveredPeriodFilter('today');
+      return;
+    }
+
+    if (isSingleDayCustom) {
+      const parts = customStartDate.split('-').map(Number);
+      const nextDate = new Date(parts[0], parts[1] - 1, parts[2] + 1);
+      const nextStr = formatLocalDate(nextDate);
+
+      if (nextStr === todayStr) {
+        setDeliveredPeriodFilter('today');
+      } else if (nextStr === yesterdayStr) {
+        setDeliveredPeriodFilter('yesterday');
+      } else {
+        setCustomStartDate(nextStr);
+        setCustomEndDate(nextStr);
+      }
+    }
+  };
+
+  // Filtrage et tri des commandes livrées (triées par date de livraison décroissante : delivered_at, sinon updated_at)
+  const filteredDeliveredOrders = useMemo(() => {
+    const list = deliveredOrders.filter((ord) => {
+      // 1. Période (utilise delivered_at, sinon updated_at)
+      if (deliveredPeriodFilter !== 'all') {
+        const dateStr = ord.delivered_at || ord.updated_at;
+        if (!dateStr) return false;
+        const timeMs = new Date(dateStr).getTime();
+        if (isNaN(timeMs)) return false;
+        if (timeMs < deliveredDateBounds.start || timeMs > deliveredDateBounds.end) {
+          return false;
+        }
+      }
+
+      // 2. Filtre livreur
+      if (deliveredDriverFilter !== 'all') {
+        const matchesId = ord.driver_id === deliveredDriverFilter;
+        const matchesName = ord.assigned_to?.trim().toLowerCase() === deliveredDriverFilter.toLowerCase();
+        if (!matchesId && !matchesName) return false;
+      }
+
+      // 3. Filtre zone
+      if (deliveredZoneFilter !== 'all') {
+        const ordZoneId = ord.delivery_zone_id || '__no_zone__';
+        if (ordZoneId !== deliveredZoneFilter) return false;
+      }
+
+      // 4. Recherche client, tél, réf, adresse, livreur
+      if (deliveredSearchQuery.trim()) {
+        const q = deliveredSearchQuery.toLowerCase().trim();
+        const matchesClient = ord.customer_name?.toLowerCase().includes(q) ?? false;
+        const matchesPhone = ord.customer_phone?.toLowerCase().includes(q) ?? false;
+        const matchesRef =
+          ord.id.toLowerCase().includes(q) ||
+          (ord.payment_reference?.toLowerCase().includes(q) ?? false);
+        const matchesAddress = ord.delivery_address?.toLowerCase().includes(q) ?? false;
+        const matchesDriver = ord.assigned_to?.toLowerCase().includes(q) ?? false;
+        if (!matchesClient && !matchesPhone && !matchesRef && !matchesAddress && !matchesDriver) {
+          return false;
+        }
+      }
+
+      return true;
+    });
+
+    // Tri par date de livraison décroissante (delivered_at, sinon updated_at)
+    list.sort((a, b) => {
+      const timeA = a.delivered_at || a.updated_at ? new Date(a.delivered_at || a.updated_at!).getTime() : 0;
+      const timeB = b.delivered_at || b.updated_at ? new Date(b.delivered_at || b.updated_at!).getTime() : 0;
+      return timeB - timeA;
+    });
+
+    return list;
+  }, [
+    deliveredOrders,
+    deliveredPeriodFilter,
+    deliveredDateBounds,
+    deliveredDriverFilter,
+    deliveredZoneFilter,
+    deliveredSearchQuery,
+  ]);
+
+  // Montant total des commandes livrées filtrées
+  const totalDeliveredFilteredAmount = useMemo(() => {
+    return filteredDeliveredOrders.reduce((sum, o) => sum + Number(o.total_amount || 0), 0);
+  }, [filteredDeliveredOrders]);
+
+  // Extraction des zones distinctes pour le filtre Livrées
+  const deliveredZonesList = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const ord of deliveredOrders) {
+      const zId = ord.delivery_zone_id || '__no_zone__';
+      const zName = ord.delivery_zone_name || (zId === '__no_zone__' ? 'Sans zone' : 'Zone non nommée');
+      map.set(zId, zName);
+    }
+    return Array.from(map.entries()).map(([id, name]) => ({ id, name }));
+  }, [deliveredOrders]);
+
+  // Formatage de l'heure de livraison pour l'onglet « Livrées » (la date étant dans l'en-tête du jour)
+  const formatDeliveryTime = (ord: Order) => {
+    if (!ord.delivered_at) {
+      return { timeText: '—', isApproximate: true };
+    }
+    try {
+      const d = new Date(ord.delivered_at);
+      if (isNaN(d.getTime())) return { timeText: '—', isApproximate: true };
+      const hours = String(d.getHours()).padStart(2, '0');
+      const minutes = String(d.getMinutes()).padStart(2, '0');
+      return {
+        timeText: `${hours}:${minutes}`,
+        isApproximate: false,
+      };
+    } catch {
+      return { timeText: '—', isApproximate: true };
+    }
+  };
+
+  // Groupement de TOUTES les commandes livrées filtrées par jour, avec totaux réels et pagination (50 lignes visibles à la fois)
+  const deliveredDayGroups = useMemo(() => {
+    // 1. Groupement complet de toutes les commandes filtrées pour calculer les vrais totaux du jour
+    const fullGroupsMap = new Map<
+      string,
+      { dayKey: string; dayLabel: string; allOrders: Order[]; totalAmount: number; totalCount: number }
+    >();
+
+    for (const ord of filteredDeliveredOrders) {
+      const dateStr = ord.delivered_at || ord.updated_at;
+      let dayKey = '__no_date__';
+      let dayLabel = 'Sans date';
+
+      if (dateStr) {
+        const d = new Date(dateStr);
+        if (!isNaN(d.getTime())) {
+          const y = d.getFullYear();
+          const m = String(d.getMonth() + 1).padStart(2, '0');
+          const day = String(d.getDate()).padStart(2, '0');
+          dayKey = `${y}-${m}-${day}`;
+
+          const rawLabel = d.toLocaleDateString('fr-FR', {
+            weekday: 'long',
+            day: 'numeric',
+            month: 'short',
+          });
+          dayLabel = rawLabel.charAt(0).toUpperCase() + rawLabel.slice(1);
+        }
+      }
+
+      let grp = fullGroupsMap.get(dayKey);
+      if (!grp) {
+        grp = { dayKey, dayLabel, allOrders: [], totalAmount: 0, totalCount: 0 };
+        fullGroupsMap.set(dayKey, grp);
+      }
+      grp.allOrders.push(ord);
+      grp.totalAmount += Number(ord.total_amount || 0);
+      grp.totalCount += 1;
+    }
+
+    // 2. Découpage pour n'afficher que jusqu'à deliveredVisibleLimit commandes au total
+    let remainingSlots = deliveredVisibleLimit;
+    const visibleGroups: {
+      dayKey: string;
+      dayLabel: string;
+      orders: Order[];
+      totalAmount: number;
+      totalCount: number;
+    }[] = [];
+
+    for (const grp of fullGroupsMap.values()) {
+      if (remainingSlots <= 0) break;
+      const countToTake = Math.min(grp.allOrders.length, remainingSlots);
+      const visibleOrdersForDay = grp.allOrders.slice(0, countToTake);
+      visibleGroups.push({
+        dayKey: grp.dayKey,
+        dayLabel: grp.dayLabel,
+        orders: visibleOrdersForDay,
+        totalAmount: grp.totalAmount, // Vrai total de TOUTES les livraisons de ce jour
+        totalCount: grp.totalCount,   // Vrai nombre de TOUTES les livraisons de ce jour
+      });
+      remainingSlots -= countToTake;
+    }
+
+    return visibleGroups;
+  }, [filteredDeliveredOrders, deliveredVisibleLimit]);
+
+  // Réinitialiser à 50 commandes visibles lorsque les filtres changent
+  useEffect(() => {
+    setDeliveredVisibleLimit(50);
+  }, [
+    deliveredPeriodFilter,
+    customStartDate,
+    customEndDate,
+    deliveredDriverFilter,
+    deliveredZoneFilter,
+    deliveredSearchQuery,
+  ]);
+
+  // Gestion du repliage des cartes livreurs dans l'onglet « En tournée »
+  const toggleDriverCollapse = (driverId: string) => {
+    setCollapsedDriverIds((prev) => ({
+      ...prev,
+      [driverId]: !prev[driverId],
+    }));
+  };
+
+  const collapseAllDrivers = () => {
+    const map: Record<string, boolean> = {};
+    for (const d of driversWithRoutes) {
+      map[d.id] = true;
+    }
+    setCollapsedDriverIds(map);
+  };
+
+  const expandAllDrivers = () => {
+    setCollapsedDriverIds({});
+  };
+
+  const areAllDriversCollapsed =
+    driversWithRoutes.length > 0 &&
+    driversWithRoutes.every((d) => Boolean(collapsedDriverIds[d.id]));
+
+  const toggleAllDriversCollapse = () => {
+    if (areAllDriversCollapsed) {
+      expandAllDrivers();
+    } else {
+      collapseAllDrivers();
+    }
+  };
 
   const todayDriverDeliveriesCount = useMemo(() => {
     const map = new Map<string, number>();
@@ -491,7 +906,7 @@ export default function DeliveriesSection({
   // Actions par commande dans l'onglet « Tournées »
   const handleReassignOrder = async (orderId: string, targetDriver: Driver) => {
     setProcessingOrderId(orderId);
-    setReassigningOrderId(null);
+    setOrderMenu(null);
     setBannerMessage(null);
     const res = await assignDriverToOrders(
       [orderId],
@@ -515,13 +930,14 @@ export default function DeliveriesSection({
 
   const handleRemoveFromRoute = async (orderId: string) => {
     setProcessingOrderId(orderId);
+    setOrderMenu(null);
     setBannerMessage(null);
     const res = await assignDriverToOrders([orderId], null, business.id, null);
     setProcessingOrderId(null);
     if (res.success) {
       setBannerMessage({
         type: 'success',
-        text: 'Commande retirée de la tournée.',
+        text: 'Commande retirée des livraisons en cours.',
       });
     } else {
       setBannerMessage({
@@ -533,6 +949,7 @@ export default function DeliveriesSection({
 
   const handleMarkOrderDelivered = async (orderId: string) => {
     setProcessingOrderId(orderId);
+    setOrderMenu(null);
     setBannerMessage(null);
     const res = await updateOrderStatus(orderId, 'delivered');
     getStore().updateOrderStatus(orderId, 'delivered');
@@ -564,19 +981,128 @@ export default function DeliveriesSection({
     }
   }, [activeSubTab, focusedDriverId]);
 
-  // Fermer le menu déroulant de réassignation en cas de clic extérieur
+  // Calcul et ouverture du menu ⋮ d'une commande (position fixed calculée avec getBoundingClientRect)
+  const handleOpenOrderMenu = (
+    e: React.MouseEvent<HTMLButtonElement>,
+    ord: Order,
+    drv: Driver
+  ) => {
+    e.stopPropagation();
+    if (orderMenu?.order.id === ord.id) {
+      setOrderMenu(null);
+      return;
+    }
+
+    const btn = e.currentTarget;
+    orderMenuButtonRef.current = btn;
+    const rect = btn.getBoundingClientRect();
+    const right = Math.max(8, window.innerWidth - rect.right);
+    const estimatedMenuHeight = 280; // Hauteur max estimée du menu
+    const spaceBelow = window.innerHeight - rect.bottom;
+    const openUpwards = spaceBelow < estimatedMenuHeight && rect.top > estimatedMenuHeight;
+
+    if (openUpwards) {
+      setOrderMenu({
+        order: ord,
+        driver: drv,
+        coords: {
+          bottom: window.innerHeight - rect.top + 4,
+          right,
+        },
+      });
+    } else {
+      setOrderMenu({
+        order: ord,
+        driver: drv,
+        coords: {
+          top: rect.bottom + 4,
+          right,
+        },
+      });
+    }
+  };
+
+  // Fermeture du menu ⋮ : clic extérieur, touche Échap, défilement et redimensionnement
+  // Un seul mécanisme unifié qui considère à la fois le bouton ET le menu comme intérieurs
   useEffect(() => {
-    const handleOutsideReassignClick = (e: MouseEvent) => {
-      const target = e.target as HTMLElement;
-      if (reassigningOrderId && !target.closest('.reassign-dropdown-container')) {
-        setReassigningOrderId(null);
+    if (!orderMenu) return;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setOrderMenu(null);
       }
     };
-    if (reassigningOrderId) {
-      document.addEventListener('mousedown', handleOutsideReassignClick);
+
+    const handleMouseDown = (e: MouseEvent) => {
+      const target = e.target as Node | null;
+      if (!target) return;
+      if (
+        orderMenuDropdownRef.current?.contains(target) ||
+        orderMenuButtonRef.current?.contains(target)
+      ) {
+        return;
+      }
+      setOrderMenu(null);
+    };
+
+    const handleScrollOrResize = () => {
+      setOrderMenu(null);
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    document.addEventListener('mousedown', handleMouseDown, true);
+    window.addEventListener('scroll', handleScrollOrResize, true);
+    window.addEventListener('resize', handleScrollOrResize);
+
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      document.removeEventListener('mousedown', handleMouseDown, true);
+      window.removeEventListener('scroll', handleScrollOrResize, true);
+      window.removeEventListener('resize', handleScrollOrResize);
+    };
+  }, [orderMenu]);
+
+  // Fermer le menu Imprimer en cas de clic extérieur
+  useEffect(() => {
+    const handleOutsidePrintClick = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      if (openPrintMenuDriverId && !target.closest('.print-menu-container')) {
+        setOpenPrintMenuDriverId(null);
+      }
+    };
+    if (openPrintMenuDriverId) {
+      document.addEventListener('mousedown', handleOutsidePrintClick);
     }
-    return () => document.removeEventListener('mousedown', handleOutsideReassignClick);
-  }, [reassigningOrderId]);
+    return () => document.removeEventListener('mousedown', handleOutsidePrintClick);
+  }, [openPrintMenuDriverId]);
+
+  // Action d'impression : Bon de tournée (A4) ou Tickets (80 mm)
+  const handlePrint = async (
+    driver: Driver,
+    driverOrders: Order[],
+    type: 'route' | 'tickets'
+  ) => {
+    if (!driverOrders || driverOrders.length === 0) return;
+    setPrintingDriverId(driver.id);
+    setPrintError(null);
+    try {
+      const orderIds = driverOrders.map((o) => o.id);
+      const itemsByOrder = await fetchOrderItemsForOrders(orderIds);
+      if (type === 'route') {
+        await generateRoutePdf(driver, driverOrders, itemsByOrder, business);
+      } else {
+        await generateTicketsPdf(driverOrders, itemsByOrder, driver, business);
+      }
+    } catch (err: any) {
+      console.warn('Erreur génération impression:', err?.message || err);
+      setPrintError({
+        driverId: driver.id,
+        message: err?.message || 'Erreur lors de la génération du document.',
+      });
+    } finally {
+      setPrintingDriverId(null);
+    }
+  };
 
   // Gestion formulaire livreur (Création / Modification)
   const openNewDriverModal = () => {
@@ -742,6 +1268,31 @@ export default function DeliveriesSection({
     }
   };
 
+  // Pastille de statut pour l'onglet « En cours » : masquer « Confirmée » (cas normal),
+  // afficher « En préparation » et « Prête » en petit (point de couleur et texte).
+  const getRouteStatusBadge = (status: OrderStatus) => {
+    switch (status) {
+      case 'confirmed':
+        return null;
+      case 'preparing':
+        return (
+          <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-50 text-amber-800 border border-amber-200/60">
+            <span className="w-1.5 h-1.5 rounded-full bg-amber-500 shrink-0" />
+            <span>En préparation</span>
+          </span>
+        );
+      case 'ready':
+        return (
+          <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-emerald-50 text-emerald-800 border border-emerald-200/60">
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0" />
+            <span>Prête</span>
+          </span>
+        );
+      default:
+        return null;
+    }
+  };
+
   return (
     <div className="space-y-3 pb-36">
       {/* 1. Cadre unifié compact : En-tête et barre d'outils sur une seule ligne (flex-wrap sous xl) */}
@@ -771,28 +1322,35 @@ export default function DeliveriesSection({
                     : 'text-slate-700 hover:text-slate-900'
                 }`}
               >
-                Tournées ({driversWithRoutes.length})
+                En cours ({driversWithRoutes.length})
               </button>
               <button
                 type="button"
-                onClick={() => setActiveSubTab('drivers')}
+                onClick={() => setActiveSubTab('delivered')}
                 className={`px-2.5 py-1 rounded-md font-semibold transition-colors cursor-pointer ${
-                  activeSubTab === 'drivers'
+                  activeSubTab === 'delivered'
                     ? 'bg-[#1B4B4A] text-white'
                     : 'text-slate-700 hover:text-slate-900'
                 }`}
               >
-                Livreurs ({drivers.filter((d) => d.is_active).length})
+                Livrées ({deliveredOrders.length})
               </button>
             </div>
           </div>
 
-          {/* Éléments de la barre d'outils dans l'onglet « Tournées » */}
+          {/* Éléments de la barre d'outils dans l'onglet « En cours » */}
           {activeSubTab === 'routes' && (
-            <div className="flex items-center justify-end gap-2.5 shrink-0 ml-auto">
+            <div className="flex items-center gap-2 shrink-0">
               <div className="text-xs text-slate-600 font-medium whitespace-nowrap">
-                <span className="font-semibold text-slate-900 tabular-nums">{driversWithRoutes.length}</span> tournée{driversWithRoutes.length > 1 ? 's' : ''} active{driversWithRoutes.length > 1 ? 's' : ''}
+                <span className="font-semibold text-slate-900 tabular-nums">{driversWithRoutes.length}</span> livreur{driversWithRoutes.length > 1 ? 's' : ''} en cours
               </div>
+              <button
+                type="button"
+                onClick={toggleAllDriversCollapse}
+                className="px-2 py-1 rounded-md border border-[#E5DCD0] bg-white hover:bg-slate-50 text-slate-700 text-[11px] font-medium cursor-pointer transition-colors whitespace-nowrap"
+              >
+                {areAllDriversCollapsed ? 'Tout déplier' : 'Tout replier'}
+              </button>
             </div>
           )}
 
@@ -1014,6 +1572,20 @@ export default function DeliveriesSection({
               </div>
             </>
           )}
+
+          {/* Bouton Livreurs (ouvre le panneau latéral de gestion des livreurs) */}
+          <button
+            type="button"
+            onClick={() => setIsDriversDrawerOpen(true)}
+            className="px-2.5 py-1 rounded-lg border border-[#E5DCD0] bg-white hover:bg-slate-50 text-slate-700 text-xs font-semibold flex items-center gap-1.5 cursor-pointer transition-colors shrink-0 ml-auto"
+            title="Ouvrir la gestion des livreurs"
+          >
+            <Users className="w-3.5 h-3.5 text-[#1B4B4A]" />
+            <span>Livreurs</span>
+            <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-[#FAF7F2] border border-[#E5DCD0] text-slate-700 font-mono">
+              {drivers.filter((d) => d.is_active).length}
+            </span>
+          </button>
         </div>
 
         {/* Message d'information discret */}
@@ -1823,13 +2395,13 @@ export default function DeliveriesSection({
       )}
 
       {/* ========================================================================= */}
-      {/* 2. NOUVEL ONGLET : TOURNÉES */}
+      {/* 2. ONGLET : EN COURS */}
       {/* ========================================================================= */}
       {activeSubTab === 'routes' && (
         <div className="space-y-4">
           {driversWithRoutes.length === 0 ? (
             <div className="bg-white p-4 rounded-xl border border-[#E5DCD0] text-center text-xs text-slate-500">
-              Aucune tournée active pour le moment.
+              Aucune livraison en cours pour le moment.
             </div>
           ) : (
             <div className="space-y-4">
@@ -1865,6 +2437,19 @@ export default function DeliveriesSection({
                 const totalOrdersCount = driverOrders.length;
                 const totalZonesCount = zonesList.length;
                 const isFocused = focusedDriverId === driver.id;
+                const isCollapsed = Boolean(collapsedDriverIds[driver.id]);
+
+                // Nombre de clients = clients distincts (customer_id), sinon une commande sans client identifié compte pour un client
+                const clientIds = new Set<string>();
+                let anonymousClientsCount = 0;
+                for (const ord of driverOrders) {
+                  if (ord.customer_id && ord.customer_id.trim()) {
+                    clientIds.add(ord.customer_id.trim());
+                  } else {
+                    anonymousClientsCount++;
+                  }
+                }
+                const distinctClientsCount = clientIds.size + anonymousClientsCount;
 
                 return (
                   <div
@@ -1874,11 +2459,23 @@ export default function DeliveriesSection({
                       isFocused
                         ? 'border-[#1B4B4A] ring-2 ring-[#1B4B4A]/20'
                         : 'border-[#E5DCD0]'
-                    } p-4 space-y-3.5`}
+                    } p-4 space-y-3`}
                   >
-                    {/* En-tête : photo ou initiales, nom, téléphone, quartier, et « n commandes · n zones · total X devise » */}
-                    <div className="flex flex-wrap sm:flex-nowrap items-center justify-between gap-3 pb-3 border-b border-slate-100">
-                      <div className="flex items-center gap-3 min-w-0">
+                    {/* En-tête repliable (clic sur l'en-tête, chevron) : photo ou initiales, nom, téléphone, quartier, et « n clients · n commandes · total X devise » */}
+                    <div
+                      onClick={() => toggleDriverCollapse(driver.id)}
+                      className={`flex flex-wrap sm:flex-nowrap items-center justify-between gap-3 cursor-pointer select-none transition-colors ${
+                        !isCollapsed ? 'pb-3 border-b border-slate-100' : ''
+                      }`}
+                    >
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        <div className="text-slate-400 hover:text-slate-700 transition-transform p-0.5">
+                          {isCollapsed ? (
+                            <ChevronRight className="w-4 h-4 text-slate-500" />
+                          ) : (
+                            <ChevronDown className="w-4 h-4 text-slate-500" />
+                          )}
+                        </div>
                         {driver.photo_url ? (
                           <img
                             src={driver.photo_url}
@@ -1907,21 +2504,100 @@ export default function DeliveriesSection({
                         </div>
                       </div>
 
-                      <div className="px-3 py-1.5 rounded-lg bg-[#FAF7F2] border border-[#E5DCD0] text-xs font-semibold text-slate-800 whitespace-nowrap">
-                        {totalOrdersCount} commande{totalOrdersCount > 1 ? 's' : ''} · {totalZonesCount} zone{totalZonesCount > 1 ? 's' : ''} · total {totalAmount.toLocaleString()} {business.currency}
+                      <div className="flex items-center gap-2">
+                        <div className="px-3 py-1.5 rounded-lg bg-[#FAF7F2] border border-[#E5DCD0] text-xs font-semibold text-slate-800 whitespace-nowrap">
+                          {distinctClientsCount} client{distinctClientsCount > 1 ? 's' : ''} · {totalOrdersCount} commande{totalOrdersCount > 1 ? 's' : ''} · total {totalAmount.toLocaleString()} {business.currency}
+                        </div>
+
+                        {/* Menu Imprimer */}
+                        <div className="relative print-menu-container" onClick={(e) => e.stopPropagation()}>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setOpenPrintMenuDriverId((prev) => (prev === driver.id ? null : driver.id));
+                            }}
+                            disabled={printingDriverId === driver.id || driverOrders.length === 0}
+                            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-[#E5DCD0] bg-white hover:bg-[#FAF7F2] text-xs font-semibold text-slate-700 hover:text-slate-900 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed shadow-xs"
+                          >
+                            {printingDriverId === driver.id ? (
+                              <Loader2 className="w-3.5 h-3.5 animate-spin text-[#1B4B4A]" />
+                            ) : (
+                              <Printer className="w-3.5 h-3.5 text-[#1B4B4A]" />
+                            )}
+                            <span>Imprimer</span>
+                            <ChevronDown className={`w-3 h-3 text-slate-400 transition-transform ${openPrintMenuDriverId === driver.id ? 'rotate-180' : ''}`} />
+                          </button>
+
+                          {openPrintMenuDriverId === driver.id && (
+                            <div className="absolute right-0 mt-1 w-52 bg-white rounded-lg border border-[#E5DCD0] shadow-lg py-1 z-30 animate-in fade-in zoom-in-95 duration-100">
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setOpenPrintMenuDriverId(null);
+                                  handlePrint(driver, driverOrders, 'route');
+                                }}
+                                disabled={printingDriverId === driver.id}
+                                className="w-full text-left px-3.5 py-2 text-xs text-slate-700 hover:bg-[#FAF7F2] hover:text-[#1B4B4A] flex items-center gap-2 cursor-pointer transition-colors"
+                              >
+                                <FileText className="w-3.5 h-3.5 text-[#1B4B4A]" />
+                                <div>
+                                  <div className="font-semibold">Bon de tournée (A4)</div>
+                                  <div className="text-[10px] text-slate-400">Arrêts groupés & signature</div>
+                                </div>
+                              </button>
+                              <div className="h-px bg-slate-100 my-0.5" />
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setOpenPrintMenuDriverId(null);
+                                  handlePrint(driver, driverOrders, 'tickets');
+                                }}
+                                disabled={printingDriverId === driver.id}
+                                className="w-full text-left px-3.5 py-2 text-xs text-slate-700 hover:bg-[#FAF7F2] hover:text-[#1B4B4A] flex items-center gap-2 cursor-pointer transition-colors"
+                              >
+                                <Receipt className="w-3.5 h-3.5 text-[#1B4B4A]" />
+                                <div>
+                                  <div className="font-semibold">Tickets (80 mm)</div>
+                                  <div className="text-[10px] text-slate-400">1 ticket thermique par commande</div>
+                                </div>
+                              </button>
+                            </div>
+                          )}
+                        </div>
                       </div>
                     </div>
 
-                    {/* Corps : commandes groupées par zone */}
-                    <div className="space-y-3">
+                    {/* Alerte d'erreur d'impression */}
+                    {printError && printError.driverId === driver.id && (
+                      <div className="p-2.5 rounded-lg bg-red-50 border border-red-200 text-xs text-red-700 flex items-center justify-between gap-2">
+                        <span>{printError.message}</span>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setPrintError(null);
+                          }}
+                          className="text-red-500 hover:text-red-700 font-bold p-0.5 cursor-pointer"
+                        >
+                          <X className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    )}
+
+                    {/* Corps déplié : commandes groupées par zone */}
+                    {!isCollapsed && (
+                      <div className="space-y-3">
                       {zonesList.map((group) => (
                         <div
                           key={group.zoneId}
                           className="rounded-lg border border-[#E5DCD0]/70 overflow-hidden"
                         >
-                          <div className="bg-[#FAF7F2] px-3 py-1.5 text-xs font-bold text-slate-800 flex items-center justify-between border-b border-[#E5DCD0]/60">
+                          <div className="bg-[#FAF7F2]/50 px-3 py-1 text-[11px] font-semibold text-slate-700 flex items-center justify-between border-b border-[#E5DCD0]/40">
                             <span>{group.zoneName}</span>
-                            <span className="text-[11px] text-slate-500 font-normal">
+                            <span className="text-[10px] text-slate-500 font-normal">
                               {group.orders.length} commande{group.orders.length > 1 ? 's' : ''}
                             </span>
                           </div>
@@ -1930,7 +2606,6 @@ export default function DeliveriesSection({
                             {group.orders.map((ord) => {
                               const refShort = ord.id.replace('order_', '').slice(0, 6);
                               const isProcessing = processingOrderId === ord.id;
-                              const isReassignOpen = reassigningOrderId === ord.id;
                               const clientInitial = ((ord.customer_name || 'C').trim().charAt(0) || 'C').toUpperCase();
 
                               return (
@@ -1960,7 +2635,7 @@ export default function DeliveriesSection({
                                       <span className="font-mono text-slate-400 font-medium text-[11px]">
                                         #{refShort}
                                       </span>
-                                      {getStatusBadge(ord.status)}
+                                      {getRouteStatusBadge(ord.status)}
                                       <span className="font-bold text-slate-900 tabular-nums ml-auto md:ml-2">
                                         {Number(ord.total_amount || 0).toLocaleString()} {business.currency}
                                       </span>
@@ -1979,78 +2654,24 @@ export default function DeliveriesSection({
                                     </div>
                                   </div>
 
-                                  {/* Actions par commande : « Réassigner », « Retirer », « Marquer livrée » */}
-                                  <div className="flex items-center gap-2 shrink-0 self-end md:self-center">
-                                    {/* Menu Réassigner */}
-                                    <div className="relative reassign-dropdown-container">
-                                      <button
-                                        type="button"
-                                        disabled={isProcessing}
-                                        onClick={() =>
-                                          setReassigningOrderId((prev) =>
-                                            prev === ord.id ? null : ord.id
-                                          )
-                                        }
-                                        className="px-2.5 py-1 rounded-md border border-[#E5DCD0] bg-white hover:bg-slate-50 text-slate-700 text-xs font-medium cursor-pointer transition-colors disabled:opacity-50"
-                                      >
-                                        Réassigner
-                                      </button>
-
-                                      {isReassignOpen && (
-                                        <div className="absolute right-0 mt-1 w-56 bg-white border border-[#E5DCD0] rounded-xl shadow-xl z-30 p-1.5 space-y-1 max-h-56 overflow-y-auto">
-                                          <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider px-2 py-1">
-                                            Choisir un livreur actif
-                                          </div>
-                                          {activeDriversList.map((targetDriver) => {
-                                            const targetOrdersCount =
-                                              driverActiveOrdersMap.get(targetDriver.id)?.length || 0;
-                                            const isCurrentDriver = targetDriver.id === driver.id;
-                                            return (
-                                              <button
-                                                key={targetDriver.id}
-                                                type="button"
-                                                disabled={isCurrentDriver}
-                                                onClick={() => handleReassignOrder(ord.id, targetDriver)}
-                                                className={`w-full text-left px-2 py-1.5 rounded-lg text-xs flex items-center justify-between ${
-                                                  isCurrentDriver
-                                                    ? 'opacity-40 cursor-not-allowed bg-slate-50'
-                                                    : 'hover:bg-[#FAF7F2] cursor-pointer'
-                                                }`}
-                                              >
-                                                <span className="font-medium text-slate-800 truncate">
-                                                  {targetDriver.name} {isCurrentDriver ? '(actuel)' : ''}
-                                                </span>
-                                                <span className="text-[10px] text-slate-500 font-mono">
-                                                  {targetOrdersCount} en cours
-                                                </span>
-                                              </button>
-                                            );
-                                          })}
-                                        </div>
-                                      )}
-                                    </div>
-
-                                    {/* Retirer */}
+                                  {/* Actions par commande : bouton ⋮ uniquement */}
+                                  <div className="flex items-center gap-1.5 shrink-0 self-end md:self-center">
                                     <button
                                       type="button"
                                       disabled={isProcessing}
-                                      onClick={() => handleRemoveFromRoute(ord.id)}
-                                      className="px-2.5 py-1 rounded-md border border-rose-200 bg-rose-50/50 hover:bg-rose-50 text-rose-700 text-xs font-medium cursor-pointer transition-colors disabled:opacity-50"
-                                    >
-                                      Retirer
-                                    </button>
-
-                                    {/* Marquer livrée */}
-                                    <button
-                                      type="button"
-                                      disabled={isProcessing}
-                                      onClick={() => handleMarkOrderDelivered(ord.id)}
-                                      className="px-2.5 py-1 rounded-md bg-[#1B4B4A] hover:bg-[#153a39] text-white text-xs font-semibold cursor-pointer transition-colors disabled:opacity-50 flex items-center gap-1.5"
+                                      onClick={(e) => handleOpenOrderMenu(e, ord, driver)}
+                                      className={`p-1.5 rounded-lg border transition-all cursor-pointer disabled:opacity-50 ${
+                                        orderMenu?.order.id === ord.id
+                                          ? 'bg-slate-100 border-[#1B4B4A] text-slate-900 shadow-2xs'
+                                          : 'bg-white hover:bg-slate-100 border-slate-200/80 text-slate-500 hover:text-slate-900'
+                                      }`}
+                                      title="Options de la commande"
                                     >
                                       {isProcessing ? (
-                                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                                      ) : null}
-                                      <span>Marquer livrée</span>
+                                        <Loader2 className="w-4 h-4 animate-spin text-[#1B4B4A]" />
+                                      ) : (
+                                        <MoreVertical className="w-4 h-4" />
+                                      )}
                                     </button>
                                   </div>
                                 </div>
@@ -2060,181 +2681,571 @@ export default function DeliveriesSection({
                         </div>
                       ))}
                     </div>
-                  </div>
-                );
-              })}
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {/* Portail pour le menu ⋮ des commandes de tournée (évite le clipping par les ancêtres en overflow-hidden) */}
+        {orderMenu &&
+          typeof document !== 'undefined' &&
+          createPortal(
+            <div
+              ref={orderMenuDropdownRef}
+              style={{
+                position: 'fixed',
+                top: orderMenu.coords.top !== undefined ? `${orderMenu.coords.top}px` : undefined,
+                bottom:
+                  orderMenu.coords.bottom !== undefined ? `${orderMenu.coords.bottom}px` : undefined,
+                right: `${orderMenu.coords.right}px`,
+              }}
+              className="w-64 bg-white border border-[#E5DCD0] rounded-xl shadow-2xl z-[9999] p-1.5 space-y-1 animate-in fade-in zoom-in-95 duration-100 select-none"
+              onClick={(e) => e.stopPropagation()}
+            >
+              {/* 1. Marquer livrée (icône de coche) */}
+              <button
+                type="button"
+                onClick={async () => {
+                  const ordId = orderMenu.order.id;
+                  setOrderMenu(null);
+                  await handleMarkOrderDelivered(ordId);
+                }}
+                className="w-full px-2.5 py-2 text-left text-xs font-semibold text-slate-800 hover:text-[#1B4B4A] hover:bg-[#FAF7F2] rounded-lg flex items-center gap-2 transition-colors cursor-pointer"
+              >
+                <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                <span>Marquer livrée</span>
+              </button>
+
+              <div className="h-px bg-slate-100 my-1" />
+
+              {/* 2. Réassigner à… (liste des livreurs actifs, actuel désactivé) */}
+              <div>
+                <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider px-2 py-1">
+                  Réassigner à…
+                </div>
+                <div className="max-h-44 overflow-y-auto space-y-0.5">
+                  {activeDriversList.map((targetDriver) => {
+                    const targetOrdersCount =
+                      driverActiveOrdersMap.get(targetDriver.id)?.length || 0;
+                    const isCurrentDriver = targetDriver.id === orderMenu.driver.id;
+                    return (
+                      <button
+                        key={targetDriver.id}
+                        type="button"
+                        disabled={isCurrentDriver}
+                        onClick={async () => {
+                          const ordId = orderMenu.order.id;
+                          setOrderMenu(null);
+                          await handleReassignOrder(ordId, targetDriver);
+                        }}
+                        className={`w-full text-left px-2.5 py-1.5 rounded-lg text-xs flex items-center justify-between transition-colors ${
+                          isCurrentDriver
+                            ? 'opacity-40 cursor-not-allowed bg-slate-50 text-slate-400'
+                            : 'hover:bg-[#FAF7F2] text-slate-800 cursor-pointer'
+                        }`}
+                      >
+                        <span className="font-medium truncate">
+                          {targetDriver.name} {isCurrentDriver ? '(actuel)' : ''}
+                        </span>
+                        <span className="text-[10px] text-slate-500 font-mono ml-2 shrink-0">
+                          {targetOrdersCount} en cours
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="h-px bg-slate-100 my-1" />
+
+              {/* 3. Retirer de la tournée */}
+              <button
+                type="button"
+                onClick={async () => {
+                  const ordId = orderMenu.order.id;
+                  setOrderMenu(null);
+                  await handleRemoveFromRoute(ordId);
+                }}
+                className="w-full px-2.5 py-2 text-left text-xs font-medium text-rose-700 hover:text-rose-800 hover:bg-rose-50 rounded-lg flex items-center gap-2 transition-colors cursor-pointer"
+              >
+                <X className="w-4 h-4 text-rose-600 shrink-0" />
+                <span>Retirer de la tournée</span>
+              </button>
+            </div>,
+            document.body
+          )}
+      </div>
+    )}
+
+      {/* ========================================================================= */}
+      {/* 3. ONGLET 3 : LIVRÉES (TRAÇABILITÉ EN LECTURE SEULE) */}
+      {/* ========================================================================= */}
+      {activeSubTab === 'delivered' && (
+        <div className="space-y-3">
+          {/* Barre de filtres sur UNE seule ligne (flex-wrap sous xl) */}
+          <div className="bg-white p-3 rounded-xl border border-[#E5DCD0] flex flex-wrap xl:flex-nowrap items-center gap-2.5">
+            {/* Menu déroulant Période */}
+            <div className="shrink-0">
+              <select
+                value={deliveredPeriodFilter}
+                onChange={(e) => {
+                  const val = e.target.value as typeof deliveredPeriodFilter;
+                  setDeliveredPeriodFilter(val);
+                  if (val === 'custom') {
+                    const todayStr = formatLocalDate(new Date(nowMs));
+                    if (!customStartDate) setCustomStartDate(todayStr);
+                    if (!customEndDate) setCustomEndDate(todayStr);
+                  }
+                }}
+                className="bg-[#FAF7F2] border border-[#E5DCD0] rounded-lg px-2.5 py-1 text-xs text-slate-900 font-medium focus:outline-none focus:border-[#1B4B4A] cursor-pointer"
+              >
+                <option value="today">{"Aujourd'hui"}</option>
+                <option value="yesterday">Hier</option>
+                <option value="7days">7 derniers jours</option>
+                <option value="30days">30 derniers jours</option>
+                <option value="this_month">Ce mois</option>
+                <option value="last_month">Mois dernier</option>
+                <option value="all">Toutes</option>
+                <option value="custom">Personnalisée</option>
+              </select>
+            </div>
+
+            {/* Boutons ‹ et › à côté du menu pour reculer ou avancer d'un jour */}
+            <div className="flex items-center gap-0.5 shrink-0">
+              <button
+                type="button"
+                onClick={handlePrevDay}
+                disabled={isPrevDayDisabled}
+                className="px-2 py-1 rounded-md border border-[#E5DCD0] bg-[#FAF7F2] hover:bg-slate-100 disabled:opacity-30 disabled:cursor-not-allowed text-slate-700 text-xs font-bold cursor-pointer transition-colors"
+                title="Jour précédent"
+              >
+                ‹
+              </button>
+              <button
+                type="button"
+                onClick={handleNextDay}
+                disabled={isNextDayDisabled}
+                className="px-2 py-1 rounded-md border border-[#E5DCD0] bg-[#FAF7F2] hover:bg-slate-100 disabled:opacity-30 disabled:cursor-not-allowed text-slate-700 text-xs font-bold cursor-pointer transition-colors"
+                title="Jour suivant"
+              >
+                ›
+              </button>
+            </div>
+
+            {/* Si Personnalisée : deux champs date début et fin */}
+            {deliveredPeriodFilter === 'custom' && (
+              <div className="flex items-center gap-1.5 shrink-0">
+                <input
+                  type="date"
+                  value={customStartDate}
+                  onChange={(e) => setCustomStartDate(e.target.value)}
+                  className="bg-[#FAF7F2] border border-[#E5DCD0] rounded-lg px-2 py-1 text-xs text-slate-900 focus:outline-none focus:border-[#1B4B4A]"
+                  title="Date de début"
+                />
+                <span className="text-xs text-slate-400">à</span>
+                <input
+                  type="date"
+                  value={customEndDate}
+                  onChange={(e) => setCustomEndDate(e.target.value)}
+                  className="bg-[#FAF7F2] border border-[#E5DCD0] rounded-lg px-2 py-1 text-xs text-slate-900 focus:outline-none focus:border-[#1B4B4A]"
+                  title="Date de fin"
+                />
+              </div>
+            )}
+
+            {/* Barre de recherche (flexible) */}
+            <div className="relative flex-1 min-w-[180px]">
+              <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
+              <input
+                type="text"
+                value={deliveredSearchQuery}
+                onChange={(e) => setDeliveredSearchQuery(e.target.value)}
+                placeholder="Recherche client, téléphone, réf, livreur..."
+                className="w-full bg-[#FAF7F2] border border-[#E5DCD0] rounded-lg pl-8 pr-2.5 py-1 text-xs text-slate-900 focus:outline-none focus:border-[#1B4B4A]"
+              />
+            </div>
+
+            {/* Menu Livreur */}
+            <div className="shrink-0 min-w-[140px]">
+              <select
+                value={deliveredDriverFilter}
+                onChange={(e) => setDeliveredDriverFilter(e.target.value)}
+                className="w-full bg-[#FAF7F2] border border-[#E5DCD0] rounded-lg px-2.5 py-1 text-xs text-slate-900 focus:outline-none focus:border-[#1B4B4A] cursor-pointer"
+              >
+                <option value="all">Tous les livreurs</option>
+                {drivers.map((drv) => (
+                  <option key={drv.id} value={drv.id}>
+                    {drv.name} {drv.is_active ? '' : '(archivé)'}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {/* Menu Zone */}
+            <div className="shrink-0 min-w-[130px]">
+              <select
+                value={deliveredZoneFilter}
+                onChange={(e) => setDeliveredZoneFilter(e.target.value)}
+                className="w-full bg-[#FAF7F2] border border-[#E5DCD0] rounded-lg px-2.5 py-1 text-xs text-slate-900 focus:outline-none focus:border-[#1B4B4A] cursor-pointer"
+              >
+                <option value="all">Toutes les zones</option>
+                {deliveredZonesList.map((z) => (
+                  <option key={z.id} value={z.id}>
+                    {z.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {/* À droite : « n livraisons · total X devise » */}
+            <div className="shrink-0 whitespace-nowrap text-xs font-semibold text-slate-800 px-3 py-1 bg-[#FAF7F2] border border-[#E5DCD0] rounded-lg ml-auto">
+              <span className="tabular-nums font-bold text-slate-900">
+                {filteredDeliveredOrders.length}
+              </span>{' '}
+              livraison{filteredDeliveredOrders.length > 1 ? 's' : ''} · total{' '}
+              <span className="text-[#1B4B4A] font-bold tabular-nums">
+                {totalDeliveredFilteredAmount.toLocaleString()} {business.currency}
+              </span>
+            </div>
+          </div>
+
+          {/* Liste en lecture seule des commandes livrées groupée par jour */}
+          {filteredDeliveredOrders.length === 0 ? (
+            <div className="bg-white p-6 rounded-xl border border-[#E5DCD0] text-center text-xs text-slate-500">
+              Aucune commande livrée ne correspond aux filtres.
+            </div>
+          ) : (
+            <div className="bg-white rounded-xl border border-[#E5DCD0] overflow-hidden">
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs text-slate-700 table-fixed">
+                  <colgroup>
+                    <col className="w-[85px]" style={{ width: '85px' }} />
+                    <col />
+                    <col className="w-[130px]" style={{ width: '130px' }} />
+                    <col className="w-[140px]" style={{ width: '140px' }} />
+                    <col className="w-[120px]" style={{ width: '120px' }} />
+                    <col className="w-[150px]" style={{ width: '150px' }} />
+                    <col className="w-[85px]" style={{ width: '85px' }} />
+                  </colgroup>
+                  <thead className="bg-slate-50/60 text-slate-400 uppercase font-semibold text-[10px] border-b border-slate-100">
+                    <tr>
+                      <th className="py-2 px-3">Heure</th>
+                      <th className="py-2 px-3">Client</th>
+                      <th className="py-2 px-3">Téléphone</th>
+                      <th className="py-2 px-3">Zone</th>
+                      <th className="py-2 px-3 text-right">Montant</th>
+                      <th className="py-2 px-3">Livreur</th>
+                      <th className="py-2 px-3 text-right">Réf</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {deliveredDayGroups.map((grp) => (
+                      <React.Fragment key={grp.dayKey}>
+                        {/* En-tête de jour : « Mercredi 15 oct. · n livraisons · total X » (porte sur TOUTES les livraisons filtrées de ce jour) */}
+                        <tr className="bg-[#FAF7F2] border-y border-[#E5DCD0]">
+                          <td colSpan={7} className="py-2 px-3 text-xs font-bold text-slate-800">
+                            <span>{grp.dayLabel}</span>
+                            <span className="text-slate-400 font-normal mx-1.5">·</span>
+                            <span className="font-semibold text-slate-700">
+                              {grp.totalCount} livraison{grp.totalCount > 1 ? 's' : ''}
+                            </span>
+                            <span className="text-slate-400 font-normal mx-1.5">·</span>
+                            <span className="font-semibold text-slate-900 tabular-nums">
+                              total {grp.totalAmount.toLocaleString()} {business.currency}
+                            </span>
+                          </td>
+                        </tr>
+
+                        {/* Lignes du groupe */}
+                        {grp.orders.map((ord) => {
+                          const refShort = ord.id.replace('order_', '').slice(0, 6);
+                          const { timeText, isApproximate } = formatDeliveryTime(ord);
+                          const clientInitial = ((ord.customer_name || 'C').trim().charAt(0) || 'C').toUpperCase();
+                          const matchedDriver = ord.driver_id ? drivers.find((d) => d.id === ord.driver_id) : null;
+                          const driverName = matchedDriver?.name || ord.assigned_to || 'Non assigné';
+
+                          return (
+                            <tr key={ord.id} className="hover:bg-slate-50/60 transition-colors bg-white">
+                              {/* Heure (HH:mm, date dans l'en-tête du jour) */}
+                              <td className="py-2 px-3 align-top whitespace-nowrap">
+                                <div className="font-medium text-slate-900 font-mono text-xs">{timeText}</div>
+                                {isApproximate && (
+                                  <div className="text-[10px] text-amber-700 font-medium">date approximative</div>
+                                )}
+                              </td>
+
+                              {/* Client (avatar et nom, sans téléphone dessous) */}
+                              <td className="py-2 px-3 align-top min-w-0">
+                                <div className="flex items-center gap-2 min-w-0">
+                                  {ord.customer_avatar ? (
+                                    <img
+                                      src={ord.customer_avatar}
+                                      alt={ord.customer_name || 'Client'}
+                                      className="w-6 h-6 rounded-full object-cover shrink-0 border border-[#E5DCD0]"
+                                    />
+                                  ) : (
+                                    <div className="w-6 h-6 rounded-full bg-[#FAF7F2] border border-[#E5DCD0] text-[#1B4B4A] flex items-center justify-center font-bold text-[10px] shrink-0">
+                                      {clientInitial}
+                                    </div>
+                                  )}
+                                  <span className="font-semibold text-slate-900 text-xs truncate">
+                                    {ord.customer_name || 'Client anonyme'}
+                                  </span>
+                                </div>
+                              </td>
+
+                              {/* Téléphone (colonne propre, police monospace) */}
+                              <td className="py-2 px-3 align-top whitespace-nowrap font-mono text-xs text-slate-600">
+                                {ord.customer_phone || '—'}
+                              </td>
+
+                              {/* Zone */}
+                              <td className="py-2 px-3 align-top whitespace-nowrap">
+                                <span className="text-xs text-slate-700">
+                                  {ord.delivery_zone_name || (ord.delivery_zone_id ? ord.delivery_zone_id : 'Sans zone')}
+                                </span>
+                              </td>
+
+                              {/* Montant (aligné à droite) */}
+                              <td className="py-2 px-3 align-top text-right font-bold text-slate-900 text-xs tabular-nums whitespace-nowrap">
+                                {Number(ord.total_amount || 0).toLocaleString()} {business.currency}
+                              </td>
+
+                              {/* Livreur (nom de la fiche livreur driver_id en priorité, sinon assigned_to, sinon Non assigné) */}
+                              <td className="py-2 px-3 align-top whitespace-nowrap truncate">
+                                <span className="text-xs font-medium text-slate-800">
+                                  {driverName}
+                                </span>
+                              </td>
+
+                              {/* Référence courte */}
+                              <td className="py-2 px-3 align-top text-right whitespace-nowrap">
+                                <span className="font-mono text-xs text-slate-400 font-medium">
+                                  #{refShort}
+                                </span>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </React.Fragment>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* Bouton Voir plus (50 lignes à la fois) */}
+              {filteredDeliveredOrders.length > deliveredVisibleLimit && (
+                <div className="p-3 text-center bg-white border-t border-[#E5DCD0]">
+                  <button
+                    type="button"
+                    onClick={() => setDeliveredVisibleLimit((prev) => prev + 50)}
+                    className="px-4 py-1.5 rounded-lg border border-[#E5DCD0] bg-[#FAF7F2] hover:bg-slate-100 text-xs font-semibold text-slate-800 cursor-pointer transition-colors"
+                  >
+                    Voir plus ({filteredDeliveredOrders.length - deliveredVisibleLimit} restante{filteredDeliveredOrders.length - deliveredVisibleLimit > 1 ? 's' : ''})
+                  </button>
+                </div>
+              )}
             </div>
           )}
         </div>
       )}
 
       {/* ========================================================================= */}
-      {/* 3. ONGLET 3 : LIVREURS */}
+      {/* 4. PANNEAU LATÉRAL : GESTION DES LIVREURS (TIROIR FLOTTANT À DROITE) */}
       {/* ========================================================================= */}
-      {activeSubTab === 'drivers' && (
-        <div className="space-y-3">
-          <div className="bg-white p-3 rounded-xl border border-[#E5DCD0] flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-            <div className="flex items-center gap-3">
-              <button
-                type="button"
-                onClick={openNewDriverModal}
-                className="px-3 py-1.5 bg-[#1B4B4A] hover:bg-[#153a39] text-white rounded-lg text-xs font-semibold flex items-center gap-1.5 cursor-pointer transition-colors"
-              >
-                <Plus className="w-3.5 h-3.5" />
-                <span>Nouveau livreur</span>
-              </button>
-
-              <label className="flex items-center gap-2 text-xs text-slate-700 select-none cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={showArchivedDrivers}
-                  onChange={(e) => setShowArchivedDrivers(e.target.checked)}
-                  className="rounded border-[#E5DCD0] text-[#1B4B4A] focus:ring-[#1B4B4A]"
-                />
-                <span>Afficher les archivés</span>
-              </label>
-            </div>
-
-            <div className="text-xs text-slate-500">
-              {drivers.filter((d) => (showArchivedDrivers ? true : d.is_active)).length} livreur(s)
-            </div>
-          </div>
-
-          {isDriversLoading ? (
-            <div className="p-6 text-center text-xs text-slate-500">
-              <Loader2 className="w-4 h-4 text-[#1B4B4A] animate-spin mx-auto mb-1.5" />
-              <span>Chargement des livreurs...</span>
-            </div>
-          ) : (
-            <>
-              {drivers.filter((d) => (showArchivedDrivers ? true : d.is_active)).length === 0 ? (
-                <div className="bg-white p-6 rounded-xl border border-[#E5DCD0] text-center">
-                  <p className="text-xs text-slate-500">
-                    Aucun livreur enregistré.{' '}
-                    <button
-                      type="button"
-                      onClick={openNewDriverModal}
-                      className="text-[#1B4B4A] font-bold underline ml-1 cursor-pointer"
-                    >
-                      Ajouter un premier livreur
-                    </button>
-                  </p>
+      {isDriversDrawerOpen && (
+        <div className="fixed inset-0 z-50 overflow-hidden">
+          {/* Fond estompé */}
+          <div
+            className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs transition-opacity"
+            onClick={() => setIsDriversDrawerOpen(false)}
+          />
+          <div className="fixed inset-y-0 right-0 max-w-full flex pl-10">
+            <div className="w-screen max-w-md bg-[#FAF7F2] border-l border-[#E5DCD0] shadow-2xl flex flex-col h-full">
+              {/* En-tête du panneau */}
+              <div className="p-3.5 bg-white border-b border-[#E5DCD0] flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Users className="w-4 h-4 text-[#1B4B4A]" />
+                  <h2 className="text-xs font-bold text-slate-900 uppercase tracking-wider">
+                    Gestion des livreurs
+                  </h2>
+                  <span className="text-xs text-slate-500 font-mono">
+                    ({drivers.filter((d) => (showArchivedDrivers ? true : d.is_active)).length})
+                  </span>
                 </div>
-              ) : (
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                  {drivers
-                    .filter((d) => (showArchivedDrivers ? true : d.is_active))
-                    .map((driver) => {
-                      const initials = (driver.name.trim().charAt(0) || 'L').toUpperCase();
-                      const inProgressCount = driverActiveOrdersMap.get(driver.id)?.length || 0;
+                <button
+                  type="button"
+                  onClick={() => setIsDriversDrawerOpen(false)}
+                  className="p-1 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 cursor-pointer"
+                  title="Fermer le panneau"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
 
-                      return (
-                        <div
-                          key={driver.id}
-                          onClick={() => {
-                            setActiveSubTab('routes');
-                            setFocusedDriverId(driver.id);
-                          }}
-                          className={`bg-white rounded-xl border p-3.5 flex flex-col justify-between transition-all cursor-pointer hover:border-[#1B4B4A] hover:shadow-xs ${
-                            driver.is_active
-                              ? 'border-[#E5DCD0]'
-                              : 'border-slate-200 bg-slate-50/60 opacity-80'
-                          }`}
-                        >
-                          <div>
-                            <div className="flex items-start justify-between gap-2.5 mb-2.5">
-                              <div className="flex items-center gap-2.5 min-w-0">
-                                {driver.photo_url ? (
-                                  <img
-                                    src={driver.photo_url}
-                                    alt={driver.name}
-                                    className="w-9 h-9 rounded-full object-cover border border-[#E5DCD0] shrink-0"
-                                  />
-                                ) : (
-                                  <div className="w-9 h-9 rounded-full bg-[#FAF7F2] border border-[#E5DCD0] text-[#1B4B4A] flex items-center justify-center font-bold text-xs shrink-0">
-                                    {initials}
-                                  </div>
-                                )}
-                                <div className="min-w-0">
-                                  <h3 className="text-xs font-bold text-slate-900 leading-tight truncate">
-                                    {driver.name}
-                                  </h3>
-                                  <div className="text-[11px] text-slate-500 font-mono mt-0.5 truncate">
-                                    {driver.phone || 'Aucun numéro'}
-                                  </div>
-                                  {driver.neighborhood && (
-                                    <div className="text-[10px] text-slate-400 mt-0.5 truncate flex items-center gap-1">
-                                      <span className="font-sans font-medium text-slate-500">{driver.neighborhood}</span>
+              {/* Barre d'outils du panneau : Nouveau livreur + Afficher archivés */}
+              <div className="p-3 bg-white border-b border-[#E5DCD0] flex flex-wrap items-center justify-between gap-2.5">
+                <button
+                  type="button"
+                  onClick={openNewDriverModal}
+                  className="px-3 py-1.5 bg-[#1B4B4A] hover:bg-[#153a39] text-white rounded-lg text-xs font-semibold flex items-center gap-1.5 cursor-pointer transition-colors"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>Nouveau livreur</span>
+                </button>
+
+                <label className="flex items-center gap-2 text-xs text-slate-700 select-none cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={showArchivedDrivers}
+                    onChange={(e) => setShowArchivedDrivers(e.target.checked)}
+                    className="rounded border-[#E5DCD0] text-[#1B4B4A] focus:ring-[#1B4B4A]"
+                  />
+                  <span>Afficher les archivés</span>
+                </label>
+              </div>
+
+              {/* Contenu : liste des livreurs */}
+              <div className="flex-1 overflow-y-auto p-3.5 space-y-3">
+                {isDriversLoading ? (
+                  <div className="p-6 text-center text-xs text-slate-500">
+                    <Loader2 className="w-4 h-4 text-[#1B4B4A] animate-spin mx-auto mb-1.5" />
+                    <span>Chargement des livreurs...</span>
+                  </div>
+                ) : drivers.filter((d) => (showArchivedDrivers ? true : d.is_active)).length === 0 ? (
+                  <div className="bg-white p-6 rounded-xl border border-[#E5DCD0] text-center">
+                    <p className="text-xs text-slate-500">
+                      Aucun livreur enregistré.{' '}
+                      <button
+                        type="button"
+                        onClick={openNewDriverModal}
+                        className="text-[#1B4B4A] font-bold underline ml-1 cursor-pointer"
+                      >
+                        Ajouter un premier livreur
+                      </button>
+                    </p>
+                  </div>
+                ) : (
+                  <div className="space-y-2.5">
+                    {drivers
+                      .filter((d) => (showArchivedDrivers ? true : d.is_active))
+                      .map((driver) => {
+                        const initials = (driver.name.trim().charAt(0) || 'L').toUpperCase();
+                        const inProgressCount = driverActiveOrdersMap.get(driver.id)?.length || 0;
+
+                        return (
+                          <div
+                            key={driver.id}
+                            onClick={() => {
+                              setActiveSubTab('routes');
+                              setFocusedDriverId(driver.id);
+                              setIsDriversDrawerOpen(false);
+                            }}
+                            className={`bg-white rounded-xl border p-3 flex flex-col justify-between transition-all cursor-pointer hover:border-[#1B4B4A] hover:shadow-xs ${
+                              driver.is_active
+                                ? 'border-[#E5DCD0]'
+                                : 'border-slate-200 bg-slate-50/60 opacity-80'
+                            }`}
+                          >
+                            <div>
+                              <div className="flex items-start justify-between gap-2.5 mb-2">
+                                <div className="flex items-center gap-2.5 min-w-0">
+                                  {driver.photo_url ? (
+                                    <img
+                                      src={driver.photo_url}
+                                      alt={driver.name}
+                                      className="w-8 h-8 rounded-full object-cover border border-[#E5DCD0] shrink-0"
+                                    />
+                                  ) : (
+                                    <div className="w-8 h-8 rounded-full bg-[#FAF7F2] border border-[#E5DCD0] text-[#1B4B4A] flex items-center justify-center font-bold text-xs shrink-0">
+                                      {initials}
                                     </div>
                                   )}
+                                  <div className="min-w-0">
+                                    <h3 className="text-xs font-bold text-slate-900 leading-tight truncate">
+                                      {driver.name}
+                                    </h3>
+                                    <div className="text-[11px] text-slate-500 font-mono mt-0.5 truncate">
+                                      {driver.phone || 'Aucun numéro'}
+                                    </div>
+                                    {driver.neighborhood && (
+                                      <div className="text-[10px] text-slate-400 mt-0.5 truncate">
+                                        {driver.neighborhood}
+                                      </div>
+                                    )}
+                                  </div>
                                 </div>
+
+                                <span
+                                  className={`px-2 py-0.5 rounded text-[10px] font-semibold ${
+                                    driver.is_active
+                                      ? 'bg-emerald-50 text-emerald-800 border border-emerald-200'
+                                      : 'bg-slate-100 text-slate-600 border border-slate-200'
+                                  }`}
+                                >
+                                  {driver.is_active ? 'Actif' : 'Archivé'}
+                                </span>
                               </div>
 
-                              <span
-                                className={`px-2 py-0.5 rounded text-[10px] font-semibold ${
+                              <div className="bg-[#FAF7F2] border border-[#E5DCD0] rounded-lg px-2.5 py-1.5 text-[11px] text-slate-700 flex items-center justify-between">
+                                <span>En cours</span>
+                                <span className="font-bold tabular-nums text-slate-900 font-mono">
+                                  {inProgressCount} en cours
+                                </span>
+                              </div>
+                            </div>
+
+                            <div
+                              className="flex items-center justify-end gap-2 mt-2.5 pt-2 border-t border-slate-100"
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  openEditDriverModal(driver);
+                                }}
+                                className="px-2 py-1 text-slate-700 hover:text-slate-900 text-xs font-medium flex items-center gap-1 cursor-pointer"
+                              >
+                                <Edit2 className="w-3 h-3" />
+                                <span>Modifier</span>
+                              </button>
+
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleToggleDriverStatus(driver);
+                                }}
+                                className={`px-2 py-1 rounded text-xs font-medium flex items-center gap-1 cursor-pointer transition-colors ${
                                   driver.is_active
-                                    ? 'bg-emerald-50 text-emerald-800 border border-emerald-200'
-                                    : 'bg-slate-100 text-slate-600 border border-slate-200'
+                                    ? 'text-slate-600 hover:text-rose-700'
+                                    : 'text-[#1B4B4A] hover:bg-[#1B4B4A]/10'
                                 }`}
                               >
-                                {driver.is_active ? 'Actif' : 'Archivé'}
-                              </span>
-                            </div>
-
-                            <div className="bg-[#FAF7F2] border border-[#E5DCD0] rounded-lg px-2.5 py-1.5 text-[11px] text-slate-700 flex items-center justify-between">
-                              <span>En cours</span>
-                              <span className="font-bold tabular-nums text-slate-900">{inProgressCount} en cours</span>
+                                {driver.is_active ? (
+                                  <>
+                                    <Archive className="w-3 h-3" />
+                                    <span>Archiver</span>
+                                  </>
+                                ) : (
+                                  <>
+                                    <RotateCcw className="w-3 h-3" />
+                                    <span>Réactiver</span>
+                                  </>
+                                )}
+                              </button>
                             </div>
                           </div>
-
-                          <div
-                            className="flex items-center justify-end gap-2 mt-3 pt-2.5 border-t border-slate-100"
-                            onClick={(e) => e.stopPropagation()}
-                          >
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                openEditDriverModal(driver);
-                              }}
-                              className="px-2 py-1 text-slate-700 hover:text-slate-900 text-xs font-medium flex items-center gap-1 cursor-pointer"
-                            >
-                              <Edit2 className="w-3 h-3" />
-                              <span>Modifier</span>
-                            </button>
-
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                handleToggleDriverStatus(driver);
-                              }}
-                              className={`px-2 py-1 rounded text-xs font-medium flex items-center gap-1 cursor-pointer transition-colors ${
-                                driver.is_active
-                                  ? 'text-slate-600 hover:text-rose-700'
-                                  : 'text-[#1B4B4A] hover:bg-[#1B4B4A]/10'
-                              }`}
-                            >
-                              {driver.is_active ? (
-                                <>
-                                  <Archive className="w-3 h-3" />
-                                  <span>Archiver</span>
-                                </>
-                              ) : (
-                                <>
-                                  <RotateCcw className="w-3 h-3" />
-                                  <span>Réactiver</span>
-                                </>
-                              )}
-                            </button>
-                          </div>
-                        </div>
-                      );
-                    })}
-                </div>
-              )}
-            </>
-          )}
+                        );
+                      })}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
         </div>
       )}
 
