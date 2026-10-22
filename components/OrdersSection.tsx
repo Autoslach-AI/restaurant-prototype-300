@@ -8,6 +8,7 @@ import {
   X,
 } from 'lucide-react';
 import { Order, OrderStatus, Customer, Business } from '@/lib/types';
+import { getOrderStatusLabel } from '@/lib/order-status';
 
 export interface OrdersSectionProps {
   business: Business;
@@ -122,7 +123,7 @@ export default function OrdersSection({
       if ((o.priority_level || '').toLowerCase() !== 'urgent') return false;
     } else if (alertCategoryFilter === 'preparing_45m') {
       if ((o.priority_level || '').toLowerCase() === 'urgent') return false;
-      if (o.status !== 'preparing' && o.status !== 'ready') return false;
+      if (o.status !== 'ready') return false;
       const startTime = new Date(o.updated_at || o.created_at).getTime();
       if (nowMs - startTime < 45 * 60 * 1000) return false;
     } else if (alertCategoryFilter === 'new_orders') {
@@ -132,8 +133,8 @@ export default function OrdersSection({
       if (nowMs - createdTime > 30 * 60 * 1000) return false;
     } else {
       if (statusFilter !== 'all') {
-        if (statusFilter === 'preparing') {
-          if (o.status !== 'preparing' && o.status !== 'ready') return false;
+        if (statusFilter === 'confirmed') {
+          if (o.status !== 'confirmed' && o.status !== 'pending' && o.status !== 'preparing') return false;
         } else if (o.status !== statusFilter) {
           return false;
         }
@@ -245,16 +246,16 @@ export default function OrdersSection({
             >
               <option value="all">Statut : Toutes ({businessOrders.length})</option>
               <option value="confirmed">
-                Statut : Confirmée ({businessOrders.filter((o) => o.status === 'confirmed' || o.status === 'pending').length})
+                Statut : {getOrderStatusLabel('confirmed')} ({businessOrders.filter((o) => o.status === 'confirmed' || o.status === 'pending' || o.status === 'preparing').length})
               </option>
-              <option value="preparing">
-                Statut : En cours ({businessOrders.filter((o) => o.status === 'preparing' || o.status === 'ready').length})
+              <option value="ready">
+                Statut : {getOrderStatusLabel('ready')} ({businessOrders.filter((o) => o.status === 'ready').length})
               </option>
               <option value="delivered">
-                Statut : Livrée ({businessOrders.filter((o) => o.status === 'delivered').length})
+                Statut : {getOrderStatusLabel('delivered', 'delivery')} ({businessOrders.filter((o) => o.status === 'delivered').length})
               </option>
               <option value="cancelled">
-                Statut : Annulée ({businessOrders.filter((o) => o.status === 'cancelled').length})
+                Statut : {getOrderStatusLabel('cancelled')} ({businessOrders.filter((o) => o.status === 'cancelled').length})
               </option>
               <option value="customer_history">
                 Statut : Historique Client ({businessCustomers.length})
@@ -524,26 +525,91 @@ export default function OrdersSection({
 
                           {/* 9. Statut */}
                           <td className="py-3.5 px-3.5 space-y-1 min-w-[120px]">
-                            <select
-                              value={ord.status}
-                              onClick={(e) => e.stopPropagation()}
-                              onChange={(e) => {
-                                e.stopPropagation();
-                                const newStatus = e.target.value as OrderStatus;
-                                if (newStatus === 'cancelled') {
-                                  setCancellingOrderId(ord.id);
-                                  setCancellationReason(ord.cancellation_reason || '');
-                                } else {
-                                  onUpdateOrderStatus(ord.id, newStatus);
-                                }
-                              }}
-                              className={`border rounded-lg px-2 py-1 text-xs font-medium focus:outline-none cursor-pointer w-full transition-colors ${getStatusSelectClass(ord.status)}`}
-                            >
-                              <option value="confirmed" className="bg-blue-100 text-blue-900">Confirmée</option>
-                              <option value="preparing" className="bg-orange-100 text-orange-900">En cours</option>
-                              <option value="delivered" className="bg-emerald-100 text-emerald-900">Livrée</option>
-                              <option value="cancelled" className="bg-rose-100 text-rose-900">Annulée</option>
-                            </select>
+                            {(() => {
+                              const isPickup = ord.order_type === 'pickup';
+                              const isDelivered = ord.status === 'delivered';
+
+                              // Une commande de livraison déjà delivered s'affiche « Livrée » en lecture seule
+                              if (!isPickup && isDelivered) {
+                                return (
+                                  <div
+                                    className={`border rounded-lg px-2 py-1 text-xs font-medium w-full cursor-default ${getStatusSelectClass('delivered')}`}
+                                    title="Commande livrée (lecture seule)"
+                                  >
+                                    {getOrderStatusLabel('delivered', 'delivery')}
+                                  </div>
+                                );
+                              }
+
+                              // Une commande de retrait déjà delivered s'affiche « Retirée » en lecture seule
+                              if (isPickup && isDelivered) {
+                                return (
+                                  <div
+                                    className={`border rounded-lg px-2 py-1 text-xs font-medium w-full cursor-default ${getStatusSelectClass('delivered')}`}
+                                    title="Commande retirée (lecture seule)"
+                                  >
+                                    {getOrderStatusLabel('delivered', 'pickup')}
+                                  </div>
+                                );
+                              }
+
+                              return (
+                                <select
+                                  value={ord.status}
+                                  onClick={(e) => e.stopPropagation()}
+                                  onChange={(e) => {
+                                    e.stopPropagation();
+                                    const newStatus = e.target.value as OrderStatus;
+                                    if (newStatus === 'cancelled') {
+                                      setCancellingOrderId(ord.id);
+                                      setCancellationReason(ord.cancellation_reason || '');
+                                    } else {
+                                      onUpdateOrderStatus(ord.id, newStatus);
+                                    }
+                                  }}
+                                  className={`border rounded-lg px-2 py-1 text-xs font-medium focus:outline-none cursor-pointer w-full transition-colors ${getStatusSelectClass(ord.status)}`}
+                                >
+                                  {/* Si la commande a un statut preparing existant en base, affiche Confirmée */}
+                                  {ord.status === 'preparing' && (
+                                    <option value="preparing" className="bg-blue-100 text-blue-900">
+                                      {getOrderStatusLabel('preparing', ord.order_type)}
+                                    </option>
+                                  )}
+
+                                  {/* confirmed (« Confirmée ») */}
+                                  <option value="confirmed" className="bg-blue-100 text-blue-900">
+                                    {getOrderStatusLabel('confirmed', ord.order_type)}
+                                  </option>
+
+                                  {/* Transition proposée : → ready (« Prête ») */}
+                                  <option value="ready" className="bg-amber-100 text-amber-900">
+                                    {getOrderStatusLabel('ready', ord.order_type)}
+                                  </option>
+
+                                  {/* Retrait sur place (order_type = pickup) : ready → delivered, affiché « Retirée » */}
+                                  {isPickup ? (
+                                    <option value="delivered" className="bg-emerald-100 text-emerald-900">
+                                      {getOrderStatusLabel('delivered', 'pickup')}
+                                    </option>
+                                  ) : (
+                                    /* Livraison : PAS de passage à delivered (« À marquer depuis la page Livraisons ») */
+                                    <option
+                                      value="delivered"
+                                      disabled
+                                      title="À marquer depuis la page Livraisons"
+                                      className="text-slate-400 bg-slate-50 italic"
+                                    >
+                                      Livrée (depuis Livraisons)
+                                    </option>
+                                  )}
+
+                                  {/* Annulation avec motif obligatoire (inchangée) depuis tout statut non livré */}
+                                  <option value="cancelled" className="bg-rose-100 text-rose-900">
+                                    {getOrderStatusLabel('cancelled', ord.order_type)}
+                                  </option>
+                                </select>
+                              );
+                            })()}
 
                             {ord.status === 'cancelled' && ord.cancellation_reason && (
                               <div className="p-1 bg-rose-50 rounded border border-rose-200 text-[10px] text-rose-800">

@@ -21,7 +21,7 @@ import {
   ArrowDown,
   ArrowUpDown,
   Layers,
-  ChevronUp,
+  ChevronLeft,
   Users,
   CheckCircle2,
   Clock,
@@ -29,6 +29,8 @@ import {
   FileText,
   Receipt,
   MoreVertical,
+  AlertTriangle,
+  ArrowLeft,
 } from 'lucide-react';
 import { Order, OrderStatus, Business, Staff, Driver } from '@/lib/types';
 import {
@@ -40,8 +42,15 @@ import {
   uploadDriverPhoto,
   updateOrderStatus,
   fetchOrderItemsForOrders,
+  cancelOrder,
 } from '@/lib/supabase';
-import { generateRoutePdf, generateTicketsPdf } from '@/lib/print-docs';
+import {
+  generateRoutePdf,
+  generateTicketsPdf,
+  getOrderShortRef,
+} from '@/lib/print-docs';
+import PrintPreviewModal from '@/components/PrintPreviewModal';
+import { getOrderStatusLabel } from '@/lib/order-status';
 import { getStore } from '@/lib/store';
 import {
   buildCustomerDriverHistory,
@@ -97,9 +106,17 @@ export default function DeliveriesSection({
       bottom?: number;
       right: number;
     };
+    view: 'main' | 'reassign';
   } | null>(null);
+  const [driverSearchQuery, setDriverSearchQuery] = useState('');
   const orderMenuButtonRef = useRef<HTMLButtonElement | null>(null);
   const orderMenuDropdownRef = useRef<HTMLDivElement | null>(null);
+
+  // Modale d'annulation de commande
+  const [cancelModalOrder, setCancelModalOrder] = useState<Order | null>(null);
+  const [cancellationReason, setCancellationReason] = useState('');
+  const [isCancellingOrder, setIsCancellingOrder] = useState(false);
+  const [cancelModalError, setCancelModalError] = useState<string | null>(null);
 
   // Commande en cours de traitement asynchrone (réassigner / retirer / marquer livrée)
   const [processingOrderId, setProcessingOrderId] = useState<string | null>(null);
@@ -108,6 +125,17 @@ export default function DeliveriesSection({
   const [openPrintMenuDriverId, setOpenPrintMenuDriverId] = useState<string | null>(null);
   const [printingDriverId, setPrintingDriverId] = useState<string | null>(null);
   const [printError, setPrintError] = useState<{ driverId: string; message: string } | null>(null);
+
+  // Modale d'aperçu d'impression des tickets thermiques 80 mm
+  const [ticketPreviewModal, setTicketPreviewModal] = useState<{
+    isOpen: boolean;
+    driver: Driver | null;
+    orders: Order[];
+  }>({
+    isOpen: false,
+    driver: null,
+    orders: [],
+  });
 
   // État des livreurs chargés depuis Supabase
   const [drivers, setDrivers] = useState<Driver[]>([]);
@@ -163,7 +191,7 @@ export default function DeliveriesSection({
   // Compteurs en-tête
   const totalToDeliver = deliveryOrders.length;
   const totalUnassigned = useMemo(() => {
-    return deliveryOrders.filter((o) => !o.driver_id && (!o.assigned_to || !o.assigned_to.trim())).length;
+    return deliveryOrders.filter((o) => o.status === 'ready' && !o.driver_id && (!o.assigned_to || !o.assigned_to.trim())).length;
   }, [deliveryOrders]);
 
   // Commandes assignées « en cours » par livreur (statuts confirmed, preparing ou ready, quelle que soit leur date de création, rattachées par driver_id, sinon par le nom assigned_to)
@@ -196,6 +224,25 @@ export default function DeliveriesSection({
   const driversWithRoutes = useMemo(() => {
     return drivers.filter((d) => (driverActiveOrdersMap.get(d.id)?.length || 0) > 0);
   }, [drivers, driverActiveOrdersMap]);
+
+  // Nombre de clients distincts ayant au moins une commande en cours dans les tournées actives
+  // Règle identique à l'en-tête de chaque carte de livreur :
+  // customer_id distinct ; sans customer_id, chaque commande compte pour un client
+  const routesClientsCount = useMemo(() => {
+    const clientIds = new Set<string>();
+    let anonymousClientsCount = 0;
+    for (const driver of driversWithRoutes) {
+      const driverOrders = driverActiveOrdersMap.get(driver.id) || [];
+      for (const ord of driverOrders) {
+        if (ord.customer_id && ord.customer_id.trim()) {
+          clientIds.add(ord.customer_id.trim());
+        } else {
+          anonymousClientsCount++;
+        }
+      }
+    }
+    return clientIds.size + anonymousClientsCount;
+  }, [driversWithRoutes, driverActiveOrdersMap]);
 
   // Commandes livrées (traçabilité)
   const deliveredOrders = useMemo(() => {
@@ -647,14 +694,16 @@ export default function DeliveriesSection({
   // Filtrage combiné des commandes
   const filteredOrders = useMemo(() => {
     return deliveryOrders.filter((ord) => {
-      // Filtre « sans livreur » par défaut (driver_id vide ET assigned_to vide)
-      if (!includeAssignedOrders) {
-        const hasDriver =
-          Boolean(ord.driver_id && ord.driver_id.trim()) ||
-          Boolean(ord.assigned_to && ord.assigned_to.trim());
-        if (hasDriver) {
-          return false;
-        }
+      // « À assigner » ne liste que les commandes de livraison au statut ready sans livreur
+      if (ord.status !== 'ready') {
+        return false;
+      }
+
+      const hasDriver =
+        Boolean(ord.driver_id && ord.driver_id.trim()) ||
+        Boolean(ord.assigned_to && ord.assigned_to.trim());
+      if (hasDriver) {
+        return false;
       }
 
       // Filtre statut
@@ -937,7 +986,7 @@ export default function DeliveriesSection({
     if (res.success) {
       setBannerMessage({
         type: 'success',
-        text: 'Commande retirée des livraisons en cours.',
+        text: 'Commande retirée des livraisons.',
       });
     } else {
       setBannerMessage({
@@ -955,7 +1004,7 @@ export default function DeliveriesSection({
     getStore().updateOrderStatus(orderId, 'delivered');
     setProcessingOrderId(null);
     if (res.success) {
-      const refShort = orderId.replace('order_', '').slice(0, 6);
+      const refShort = getOrderShortRef(orderId);
       setBannerMessage({
         type: 'success',
         text: `Commande #${refShort} marquée comme livrée.`,
@@ -997,10 +1046,11 @@ export default function DeliveriesSection({
     orderMenuButtonRef.current = btn;
     const rect = btn.getBoundingClientRect();
     const right = Math.max(8, window.innerWidth - rect.right);
-    const estimatedMenuHeight = 280; // Hauteur max estimée du menu
+    const estimatedMenuHeight = 220; // Hauteur compacte
     const spaceBelow = window.innerHeight - rect.bottom;
     const openUpwards = spaceBelow < estimatedMenuHeight && rect.top > estimatedMenuHeight;
 
+    setDriverSearchQuery('');
     if (openUpwards) {
       setOrderMenu({
         order: ord,
@@ -1009,6 +1059,7 @@ export default function DeliveriesSection({
           bottom: window.innerHeight - rect.top + 4,
           right,
         },
+        view: 'main',
       });
     } else {
       setOrderMenu({
@@ -1018,7 +1069,40 @@ export default function DeliveriesSection({
           top: rect.bottom + 4,
           right,
         },
+        view: 'main',
       });
+    }
+  };
+
+  // Annulation de commande via la modale React (même fonction cancelOrder que la page Commandes)
+  const handleConfirmCancelOrder = async () => {
+    if (!cancelModalOrder) return;
+    const trimmed = cancellationReason.trim();
+    if (trimmed.length < 3) {
+      setCancelModalError('Le motif doit comporter au moins 3 caractères.');
+      return;
+    }
+
+    setIsCancellingOrder(true);
+    setCancelModalError(null);
+    setBannerMessage(null);
+    try {
+      const res = await cancelOrder(cancelModalOrder.id, trimmed);
+      if (res.success) {
+        const refShort = getOrderShortRef(cancelModalOrder);
+        setBannerMessage({
+          type: 'success',
+          text: `Commande #${refShort} annulée avec succès.`,
+        });
+        setCancelModalOrder(null);
+        setCancellationReason('');
+      } else {
+        setCancelModalError(res.error || "Erreur lors de l'annulation de la commande.");
+      }
+    } catch (err: any) {
+      setCancelModalError(err?.message || "Erreur inattendue lors de l'annulation.");
+    } finally {
+      setIsCancellingOrder(false);
     }
   };
 
@@ -1076,23 +1160,29 @@ export default function DeliveriesSection({
     return () => document.removeEventListener('mousedown', handleOutsidePrintClick);
   }, [openPrintMenuDriverId]);
 
-  // Action d'impression : Bon de tournée (A4) ou Tickets (80 mm)
+  // Action d'impression : Feuille de route (A4) ou Tickets (80 mm)
   const handlePrint = async (
     driver: Driver,
     driverOrders: Order[],
     type: 'route' | 'tickets'
   ) => {
     if (!driverOrders || driverOrders.length === 0) return;
+
+    if (type === 'tickets') {
+      setTicketPreviewModal({
+        isOpen: true,
+        driver,
+        orders: driverOrders,
+      });
+      return;
+    }
+
     setPrintingDriverId(driver.id);
     setPrintError(null);
     try {
       const orderIds = driverOrders.map((o) => o.id);
       const itemsByOrder = await fetchOrderItemsForOrders(orderIds);
-      if (type === 'route') {
-        await generateRoutePdf(driver, driverOrders, itemsByOrder, business);
-      } else {
-        await generateTicketsPdf(driverOrders, itemsByOrder, driver, business);
-      }
+      await generateRoutePdf(driver, driverOrders, itemsByOrder, business);
     } catch (err: any) {
       console.warn('Erreur génération impression:', err?.message || err);
       setPrintError({
@@ -1244,31 +1334,31 @@ export default function DeliveriesSection({
       case 'confirmed':
         return (
           <span className="px-2 py-0.5 rounded text-[11px] font-semibold bg-slate-100 text-slate-800 border border-slate-200">
-            Confirmée
+            {getOrderStatusLabel('confirmed', 'delivery')}
           </span>
         );
       case 'preparing':
         return (
           <span className="px-2 py-0.5 rounded text-[11px] font-semibold bg-amber-50 text-amber-900 border border-amber-200">
-            En préparation
+            {getOrderStatusLabel('preparing', 'delivery')}
           </span>
         );
       case 'ready':
         return (
           <span className="px-2 py-0.5 rounded text-[11px] font-semibold bg-emerald-50 text-emerald-900 border border-emerald-200">
-            Prête
+            {getOrderStatusLabel('ready', 'delivery')}
           </span>
         );
       default:
         return (
           <span className="px-2 py-0.5 rounded text-[11px] font-semibold bg-slate-100 text-slate-700">
-            {status}
+            {getOrderStatusLabel(status, 'delivery')}
           </span>
         );
     }
   };
 
-  // Pastille de statut pour l'onglet « En cours » : masquer « Confirmée » (cas normal),
+  // Pastille de statut pour l'onglet « En livraison » : masquer « Confirmée » (cas normal),
   // afficher « En préparation » et « Prête » en petit (point de couleur et texte).
   const getRouteStatusBadge = (status: OrderStatus) => {
     switch (status) {
@@ -1278,14 +1368,14 @@ export default function DeliveriesSection({
         return (
           <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-50 text-amber-800 border border-amber-200/60">
             <span className="w-1.5 h-1.5 rounded-full bg-amber-500 shrink-0" />
-            <span>En préparation</span>
+            <span>{getOrderStatusLabel('preparing', 'delivery')}</span>
           </span>
         );
       case 'ready':
         return (
           <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-emerald-50 text-emerald-800 border border-emerald-200/60">
             <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0" />
-            <span>Prête</span>
+            <span>{getOrderStatusLabel('ready', 'delivery')}</span>
           </span>
         );
       default:
@@ -1322,7 +1412,7 @@ export default function DeliveriesSection({
                     : 'text-slate-700 hover:text-slate-900'
                 }`}
               >
-                En cours ({driversWithRoutes.length})
+                En livraison ({routesClientsCount})
               </button>
               <button
                 type="button"
@@ -1338,11 +1428,11 @@ export default function DeliveriesSection({
             </div>
           </div>
 
-          {/* Éléments de la barre d'outils dans l'onglet « En cours » */}
+          {/* Éléments de la barre d'outils dans l'onglet « En livraison » */}
           {activeSubTab === 'routes' && (
             <div className="flex items-center gap-2 shrink-0">
               <div className="text-xs text-slate-600 font-medium whitespace-nowrap">
-                <span className="font-semibold text-slate-900 tabular-nums">{driversWithRoutes.length}</span> livreur{driversWithRoutes.length > 1 ? 's' : ''} en cours
+                <span className="font-semibold text-slate-900 tabular-nums">{driversWithRoutes.length}</span> livreur{driversWithRoutes.length > 1 ? 's' : ''} en livraison · <span className="font-semibold text-slate-900 tabular-nums">{routesClientsCount}</span> client{routesClientsCount > 1 ? 's' : ''}
               </div>
               <button
                 type="button"
@@ -1399,12 +1489,7 @@ export default function DeliveriesSection({
                       <div className="space-y-1">
                         {(['confirmed', 'preparing', 'ready'] as OrderStatus[]).map((st) => {
                           const isChecked = selectedStatuses.includes(st);
-                          const label =
-                            st === 'confirmed'
-                              ? 'Confirmée'
-                              : st === 'preparing'
-                              ? 'En préparation'
-                              : 'Prête';
+                          const label = getOrderStatusLabel(st, 'delivery');
                           return (
                             <label
                               key={st}
@@ -1632,7 +1717,7 @@ export default function DeliveriesSection({
                 className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] bg-slate-100 text-slate-800 border border-slate-200"
               >
                 <span>
-                  {st === 'confirmed' ? 'Confirmée' : st === 'preparing' ? 'En préparation' : 'Prête'}
+                  {getOrderStatusLabel(st, 'delivery')}
                 </span>
                 <button
                   type="button"
@@ -1817,7 +1902,7 @@ export default function DeliveriesSection({
                     {sortedOrders.map((ord) => {
                       const isChecked = selectedOrderIds.includes(ord.id);
                       const suggestion = orderSuggestions.get(ord.id);
-                      const refShort = ord.id.replace('order_', '').slice(0, 6);
+                      const refShort = getOrderShortRef(ord);
                       const clientInitial = ((ord.customer_name || 'C').trim().charAt(0) || 'C').toUpperCase();
 
                       return (
@@ -2095,7 +2180,7 @@ export default function DeliveriesSection({
                             {group.orders.map((ord) => {
                               const isChecked = selectedOrderIds.includes(ord.id);
                               const suggestion = orderSuggestions.get(ord.id);
-                              const refShort = ord.id.replace('order_', '').slice(0, 6);
+                              const refShort = getOrderShortRef(ord);
                               const clientInitial = ((ord.customer_name || 'C').trim().charAt(0) || 'C').toUpperCase();
 
                               return (
@@ -2336,7 +2421,7 @@ export default function DeliveriesSection({
                               </div>
                             </div>
                             <span className="text-[10px] text-slate-500 shrink-0 font-medium font-mono">
-                              {inProgressCount} en cours
+                              {inProgressCount} en livraison
                             </span>
                           </button>
                         );
@@ -2395,7 +2480,7 @@ export default function DeliveriesSection({
       )}
 
       {/* ========================================================================= */}
-      {/* 2. ONGLET : EN COURS */}
+      {/* 2. ONGLET : EN LIVRAISON */}
       {/* ========================================================================= */}
       {activeSubTab === 'routes' && (
         <div className="space-y-4">
@@ -2540,10 +2625,11 @@ export default function DeliveriesSection({
                                 }}
                                 disabled={printingDriverId === driver.id}
                                 className="w-full text-left px-3.5 py-2 text-xs text-slate-700 hover:bg-[#FAF7F2] hover:text-[#1B4B4A] flex items-center gap-2 cursor-pointer transition-colors"
+                                title="Feuille de route (A4)"
                               >
                                 <FileText className="w-3.5 h-3.5 text-[#1B4B4A]" />
                                 <div>
-                                  <div className="font-semibold">Bon de tournée (A4)</div>
+                                  <div className="font-semibold">Feuille de route (A4)</div>
                                   <div className="text-[10px] text-slate-400">Arrêts groupés & signature</div>
                                 </div>
                               </button>
@@ -2604,7 +2690,7 @@ export default function DeliveriesSection({
 
                           <div className="divide-y divide-slate-100">
                             {group.orders.map((ord) => {
-                              const refShort = ord.id.replace('order_', '').slice(0, 6);
+                              const refShort = getOrderShortRef(ord);
                               const isProcessing = processingOrderId === ord.id;
                               const clientInitial = ((ord.customer_name || 'C').trim().charAt(0) || 'C').toUpperCase();
 
@@ -2700,79 +2786,141 @@ export default function DeliveriesSection({
                 bottom:
                   orderMenu.coords.bottom !== undefined ? `${orderMenu.coords.bottom}px` : undefined,
                 right: `${orderMenu.coords.right}px`,
+                width: '200px',
               }}
-              className="w-64 bg-white border border-[#E5DCD0] rounded-xl shadow-2xl z-[9999] p-1.5 space-y-1 animate-in fade-in zoom-in-95 duration-100 select-none"
+              className="w-[200px] bg-white border border-[#E5DCD0] rounded-xl shadow-2xl z-[9999] p-1 overflow-hidden select-none animate-in fade-in zoom-in-95 duration-100"
               onClick={(e) => e.stopPropagation()}
             >
-              {/* 1. Marquer livrée (icône de coche) */}
-              <button
-                type="button"
-                onClick={async () => {
-                  const ordId = orderMenu.order.id;
-                  setOrderMenu(null);
-                  await handleMarkOrderDelivered(ordId);
-                }}
-                className="w-full px-2.5 py-2 text-left text-xs font-semibold text-slate-800 hover:text-[#1B4B4A] hover:bg-[#FAF7F2] rounded-lg flex items-center gap-2 transition-colors cursor-pointer"
-              >
-                <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
-                <span>Marquer livrée</span>
-              </button>
+              {orderMenu.view === 'main' ? (
+                <div className="flex flex-col space-y-0.5">
+                  {/* 1. Marquer livrée (icône de coche) */}
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      const ordId = orderMenu.order.id;
+                      setOrderMenu(null);
+                      await handleMarkOrderDelivered(ordId);
+                    }}
+                    className="w-full h-8 px-2 text-left text-[12px] font-medium text-slate-800 hover:text-[#1B4B4A] hover:bg-[#FAF7F2] rounded-lg flex items-center gap-2 transition-colors cursor-pointer"
+                  >
+                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                    <span className="truncate">Marquer livrée</span>
+                  </button>
 
-              <div className="h-px bg-slate-100 my-1" />
+                  {/* 2. Réassigner… (chevron à droite) */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setDriverSearchQuery('');
+                      setOrderMenu({ ...orderMenu, view: 'reassign' });
+                    }}
+                    className="w-full h-8 px-2 text-left text-[12px] font-medium text-slate-800 hover:text-[#1B4B4A] hover:bg-[#FAF7F2] rounded-lg flex items-center justify-between transition-colors cursor-pointer"
+                  >
+                    <div className="flex items-center gap-2 truncate">
+                      <Users className="w-3.5 h-3.5 text-slate-500 shrink-0" />
+                      <span className="truncate">Réassigner…</span>
+                    </div>
+                    <ChevronRight className="w-3.5 h-3.5 text-slate-400 shrink-0 ml-1" />
+                  </button>
 
-              {/* 2. Réassigner à… (liste des livreurs actifs, actuel désactivé) */}
-              <div>
-                <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider px-2 py-1">
-                  Réassigner à…
+                  {/* 3. Retirer de la tournée */}
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      const ordId = orderMenu.order.id;
+                      setOrderMenu(null);
+                      await handleRemoveFromRoute(ordId);
+                    }}
+                    className="w-full h-8 px-2 text-left text-[12px] font-medium text-rose-700 hover:text-rose-800 hover:bg-rose-50 rounded-lg flex items-center gap-2 transition-colors cursor-pointer"
+                  >
+                    <X className="w-3.5 h-3.5 text-rose-600 shrink-0" />
+                    <span className="truncate">Retirer de la tournée</span>
+                  </button>
                 </div>
-                <div className="max-h-44 overflow-y-auto space-y-0.5">
-                  {activeDriversList.map((targetDriver) => {
-                    const targetOrdersCount =
-                      driverActiveOrdersMap.get(targetDriver.id)?.length || 0;
-                    const isCurrentDriver = targetDriver.id === orderMenu.driver.id;
-                    return (
-                      <button
-                        key={targetDriver.id}
-                        type="button"
-                        disabled={isCurrentDriver}
-                        onClick={async () => {
-                          const ordId = orderMenu.order.id;
-                          setOrderMenu(null);
-                          await handleReassignOrder(ordId, targetDriver);
-                        }}
-                        className={`w-full text-left px-2.5 py-1.5 rounded-lg text-xs flex items-center justify-between transition-colors ${
-                          isCurrentDriver
-                            ? 'opacity-40 cursor-not-allowed bg-slate-50 text-slate-400'
-                            : 'hover:bg-[#FAF7F2] text-slate-800 cursor-pointer'
-                        }`}
-                      >
-                        <span className="font-medium truncate">
-                          {targetDriver.name} {isCurrentDriver ? '(actuel)' : ''}
-                        </span>
-                        <span className="text-[10px] text-slate-500 font-mono ml-2 shrink-0">
-                          {targetOrdersCount} en cours
-                        </span>
-                      </button>
+              ) : (
+                /* Second écran : Réassigner à… */
+                <div className="flex flex-col">
+                  {/* « ← Retour » en haut */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setOrderMenu({ ...orderMenu, view: 'main' });
+                    }}
+                    className="w-full h-8 px-2 text-left text-[12px] font-medium text-slate-600 hover:text-slate-900 hover:bg-[#FAF7F2] rounded-lg flex items-center gap-1.5 transition-colors cursor-pointer border-b border-slate-100 mb-0.5"
+                  >
+                    <ArrowLeft className="w-3.5 h-3.5 shrink-0" />
+                    <span>Retour</span>
+                  </button>
+
+                  {/* Liste des livreurs actifs (le livreur actuel est masqué, recherche si > 6) */}
+                  {(() => {
+                    const candidateDrivers = activeDriversList.filter(
+                      (d) => d.id !== orderMenu.driver.id
                     );
-                  })}
+                    const showSearch = candidateDrivers.length > 6;
+                    const filteredCandidates =
+                      showSearch && driverSearchQuery.trim()
+                        ? candidateDrivers.filter((d) =>
+                            d.name
+                              .toLowerCase()
+                              .includes(driverSearchQuery.toLowerCase().trim())
+                          )
+                        : candidateDrivers;
+
+                    return (
+                      <>
+                        {showSearch && (
+                          <div className="p-1 border-b border-slate-100">
+                            <input
+                              type="text"
+                              value={driverSearchQuery}
+                              onChange={(e) => setDriverSearchQuery(e.target.value)}
+                              placeholder="Filtrer..."
+                              autoFocus
+                              className="w-full h-7 px-2 text-[12px] bg-[#FAF7F2] border border-[#E5DCD0] rounded-md outline-none focus:border-[#1B4B4A]"
+                            />
+                          </div>
+                        )}
+                        <div className="max-h-48 overflow-y-auto space-y-0.5 pt-0.5">
+                          {candidateDrivers.length === 0 ? (
+                            <div className="h-8 px-2 flex items-center text-[12px] text-slate-400 italic truncate">
+                              Aucun autre livreur actif
+                            </div>
+                          ) : filteredCandidates.length === 0 ? (
+                            <div className="h-8 px-2 flex items-center text-[12px] text-slate-400 italic truncate">
+                              Aucun résultat
+                            </div>
+                          ) : (
+                            filteredCandidates.map((targetDriver) => {
+                              const targetOrdersCount =
+                                driverActiveOrdersMap.get(targetDriver.id)?.length || 0;
+                              return (
+                                <button
+                                  key={targetDriver.id}
+                                  type="button"
+                                  onClick={async () => {
+                                    const ordId = orderMenu.order.id;
+                                    setOrderMenu(null);
+                                    await handleReassignOrder(ordId, targetDriver);
+                                  }}
+                                  className="w-full h-8 px-2 text-left text-[12px] hover:bg-[#FAF7F2] rounded-lg flex items-center justify-between gap-1.5 transition-colors cursor-pointer text-slate-800"
+                                >
+                                  <span className="font-medium truncate flex-1">
+                                    {targetDriver.name}
+                                  </span>
+                                  <span className="text-[11px] text-slate-500 font-mono shrink-0">
+                                    {targetOrdersCount} en livraison
+                                  </span>
+                                </button>
+                              );
+                            })
+                          )}
+                        </div>
+                      </>
+                    );
+                  })()}
                 </div>
-              </div>
-
-              <div className="h-px bg-slate-100 my-1" />
-
-              {/* 3. Retirer de la tournée */}
-              <button
-                type="button"
-                onClick={async () => {
-                  const ordId = orderMenu.order.id;
-                  setOrderMenu(null);
-                  await handleRemoveFromRoute(ordId);
-                }}
-                className="w-full px-2.5 py-2 text-left text-xs font-medium text-rose-700 hover:text-rose-800 hover:bg-rose-50 rounded-lg flex items-center gap-2 transition-colors cursor-pointer"
-              >
-                <X className="w-4 h-4 text-rose-600 shrink-0" />
-                <span>Retirer de la tournée</span>
-              </button>
+              )}
             </div>,
             document.body
           )}
@@ -2960,7 +3108,7 @@ export default function DeliveriesSection({
 
                         {/* Lignes du groupe */}
                         {grp.orders.map((ord) => {
-                          const refShort = ord.id.replace('order_', '').slice(0, 6);
+                          const refShort = getOrderShortRef(ord);
                           const { timeText, isApproximate } = formatDeliveryTime(ord);
                           const clientInitial = ((ord.customer_name || 'C').trim().charAt(0) || 'C').toUpperCase();
                           const matchedDriver = ord.driver_id ? drivers.find((d) => d.id === ord.driver_id) : null;
@@ -3190,9 +3338,9 @@ export default function DeliveriesSection({
                               </div>
 
                               <div className="bg-[#FAF7F2] border border-[#E5DCD0] rounded-lg px-2.5 py-1.5 text-[11px] text-slate-700 flex items-center justify-between">
-                                <span>En cours</span>
+                                <span>En livraison</span>
                                 <span className="font-bold tabular-nums text-slate-900 font-mono">
-                                  {inProgressCount} en cours
+                                  {inProgressCount} en livraison
                                 </span>
                               </div>
                             </div>
@@ -3399,6 +3547,19 @@ export default function DeliveriesSection({
             </form>
           </div>
         </div>
+      )}
+
+      {/* Modale d'aperçu d'impression des tickets thermiques 80 mm */}
+      {ticketPreviewModal.isOpen && ticketPreviewModal.driver && (
+        <PrintPreviewModal
+          isOpen={ticketPreviewModal.isOpen}
+          onClose={() =>
+            setTicketPreviewModal({ isOpen: false, driver: null, orders: [] })
+          }
+          driver={ticketPreviewModal.driver}
+          orders={ticketPreviewModal.orders}
+          business={business}
+        />
       )}
     </div>
   );

@@ -106,6 +106,7 @@ import {
   Customer,
   CustomerMessage,
 } from '@/lib/types';
+import { getOrderStatusLabel } from '@/lib/order-status';
 import { getStore } from '@/lib/store';
 import PeriodFilter from '@/components/ui/period-filter';
 import ConversionDetailSection from '@/components/ui/conversion-detail-section';
@@ -174,29 +175,16 @@ export default function MerchantDashboard({
   const [customerFilter, setCustomerFilter] = useState<'all' | 'unread' | 'favorites' | 'recurrent' | 'inactive'>('all');
 
   // Status helper mapping functions for consistent French labels & colors across the page
-  const getStatusLabel = (status: OrderStatus | string) => {
-    switch (status) {
-      case 'pending':
-      case 'confirmed':
-        return 'Confirmée';
-      case 'preparing':
-      case 'ready':
-        return 'En cours';
-      case 'delivered':
-        return 'Livrée';
-      case 'cancelled':
-        return 'Annulée';
-      default:
-        return status;
-    }
+  const getStatusLabel = (status: OrderStatus | string, orderType?: string) => {
+    return getOrderStatusLabel(status, orderType);
   };
 
   const getStatusBadgeClass = (status: OrderStatus | string) => {
     switch (status) {
       case 'pending':
       case 'confirmed':
-        return 'bg-[#EBF3F3] text-[#1B4B4A] border-[#1B4B4A]/30';
       case 'preparing':
+        return 'bg-[#EBF3F3] text-[#1B4B4A] border-[#1B4B4A]/30';
       case 'ready':
         return 'bg-[#FBF4E8] text-[#C88A2E] border-[#C88A2E]/30';
       case 'delivered':
@@ -231,12 +219,12 @@ export default function MerchantDashboard({
       };
     }
 
-    if ((ord.status === 'preparing' || ord.status === 'ready') && nowMs - startTime >= 45 * 60 * 1000) {
+    if (ord.status === 'ready' && nowMs - startTime >= 45 * 60 * 1000) {
       const minutes = Math.floor((nowMs - startTime) / 60000);
       return {
         type: 'preparing_45m',
-        title: '⏳ En cours depuis plus de 45 min',
-        description: `En cours depuis ${minutes} minute${minutes > 1 ? 's' : ''}. Risque d'insatisfaction client.`,
+        title: '⏳ Prête depuis +45 min, non livrée',
+        description: `Prête depuis ${minutes} minute${minutes > 1 ? 's' : ''}, non livrée. Risque d'insatisfaction client.`,
         badgeClass: 'bg-orange-50 text-orange-900 border-orange-300',
         iconClass: 'text-orange-600',
       };
@@ -692,10 +680,10 @@ export default function MerchantDashboard({
     return (o.priority_level || '').toLowerCase() === 'urgent';
   });
 
-  // 2. Commandes en cours depuis plus de 45 minutes (status = preparing ou ready, hors urgentes)
+  // 2. Commandes prêtes depuis plus de 45 minutes non livrées (status = ready, hors urgentes, mesuré depuis la date de mise à jour)
   const preparingOver45Min = businessOrders.filter((o) => {
     if ((o.priority_level || '').toLowerCase() === 'urgent') return false;
-    if (o.status !== 'preparing' && o.status !== 'ready') return false;
+    if (o.status !== 'ready') return false;
     const startTime = new Date(o.updated_at || o.created_at).getTime();
     return nowMs - startTime >= 45 * 60 * 1000;
   });
@@ -1246,7 +1234,7 @@ export default function MerchantDashboard({
                     Alerte : {
                       alertCategoryFilter === 'urgent_undelivered'
                         ? 'Urgent non livrée'
-                        : 'En cours (+45m)'
+                        : 'Prête (+45m)'
                     }
                   </span>
                 )}

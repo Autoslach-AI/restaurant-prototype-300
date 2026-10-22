@@ -22,6 +22,7 @@ import {
   Cell,
 } from 'recharts';
 import { Business, Order, Customer, AgentEvent } from '@/lib/types';
+import { getOrderStatusLabel } from '@/lib/order-status';
 
 export interface OverviewSectionProps {
   business: Business;
@@ -100,7 +101,7 @@ export default function OverviewSection({
     },
     {
       id: 'preparing_45m' as const,
-      title: 'En cours depuis +45 min',
+      title: 'Prête depuis +45 min, non livrée',
       count: preparingOver45Min.length,
       rank: 3,
       activeColorClass: 'bg-[#FBF4E8] hover:bg-[#FBF4E8]/80 border-[#C88A2E]/30 text-[#C88A2E] font-black',
@@ -877,23 +878,23 @@ export default function OverviewSection({
                           <td className="py-3.5 px-2 whitespace-nowrap">
                             {ord.status === 'delivered' ? (
                               <span className="inline-flex items-center px-2.5 py-1 rounded-full text-[11px] font-extrabold bg-emerald-100/70 text-emerald-800">
-                                Livrée
+                                {getOrderStatusLabel('delivered', ord.order_type)}
                               </span>
                             ) : ord.status === 'preparing' || ord.status === 'ready' ? (
                               <span className="inline-flex items-center px-2.5 py-1 rounded-full text-[11px] font-extrabold bg-blue-100/70 text-blue-800">
-                                En cours
+                                {getOrderStatusLabel(ord.status, ord.order_type)}
                               </span>
                             ) : ord.status === 'confirmed' || ord.status === 'pending' ? (
                               <span className="inline-flex items-center px-2.5 py-1 rounded-full text-[11px] font-extrabold bg-indigo-100/70 text-indigo-800">
-                                Confirmée
+                                {getOrderStatusLabel(ord.status, ord.order_type)}
                               </span>
                             ) : ord.status === 'cancelled' ? (
                               <span className="inline-flex items-center px-2.5 py-1 rounded-full text-[11px] font-extrabold bg-rose-100/70 text-rose-800">
-                                Annulée
+                                {getOrderStatusLabel('cancelled', ord.order_type)}
                               </span>
                             ) : (
                               <span className="inline-flex items-center px-2.5 py-1 rounded-full text-[11px] font-extrabold bg-slate-100 text-slate-700">
-                                {ord.status}
+                                {getOrderStatusLabel(ord.status, ord.order_type)}
                               </span>
                             )}
                           </td>
