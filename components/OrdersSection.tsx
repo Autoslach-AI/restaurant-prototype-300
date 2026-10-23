@@ -6,9 +6,13 @@ import {
   Star,
   AlertTriangle,
   X,
+  FileText,
+  Loader2,
 } from 'lucide-react';
 import { Order, OrderStatus, Customer, Business } from '@/lib/types';
 import { getOrderStatusLabel } from '@/lib/order-status';
+import { fetchOrderItemsForOrders } from '@/lib/supabase';
+import PrintPreviewModal from '@/components/PrintPreviewModal';
 
 export interface OrdersSectionProps {
   business: Business;
@@ -67,6 +71,42 @@ export default function OrdersSection({
   const [cancellingOrderId, setCancellingOrderId] = useState<string | null>(null);
   const [cancellationReason, setCancellationReason] = useState<string>('');
   const [isCancellingOrder, setIsCancellingOrder] = useState<false | boolean>(false);
+  const [cancelError, setCancelError] = useState<string | null>(null);
+
+  // Modal Facture (PrintPreviewModal en mode invoice)
+  const [invoiceModalOrder, setInvoiceModalOrder] = useState<Order | null>(null);
+  const [itemsByOrder, setItemsByOrder] = useState<Record<string, any[]>>({});
+  const [loadingInvoiceOrderId, setLoadingInvoiceOrderId] = useState<string | null>(null);
+
+  const handleOpenInvoice = async (order: Order) => {
+    // Si la commande contient déjà des articles
+    if (order.items && order.items.length > 0) {
+      setItemsByOrder((prev) => ({ ...prev, [order.id]: order.items || [] }));
+      setInvoiceModalOrder(order);
+      return;
+    }
+
+    if (itemsByOrder[order.id] && itemsByOrder[order.id].length > 0) {
+      setInvoiceModalOrder(order);
+      return;
+    }
+
+    setLoadingInvoiceOrderId(order.id);
+    try {
+      const fetched = await fetchOrderItemsForOrders([order.id]);
+      setItemsByOrder((prev) => ({ ...prev, ...fetched }));
+      const orderWithItems: Order = {
+        ...order,
+        items: fetched[order.id] || order.items || [],
+      };
+      setInvoiceModalOrder(orderWithItems);
+    } catch (err) {
+      console.warn('Erreur lors du chargement des articles pour la facture:', err);
+      setInvoiceModalOrder(order);
+    } finally {
+      setLoadingInvoiceOrderId(null);
+    }
+  };
 
   // Double-clic pour agrandir un commentaire
   const [enlargedComment, setEnlargedComment] = useState<{
@@ -389,6 +429,7 @@ export default function OrdersSection({
                       <th className="py-3 px-3.5">Statut</th>
                       <th className="py-3 px-3.5 text-right">Date / Heure</th>
                       <th className="py-3 px-3.5 text-center">Commentaire</th>
+                      <th className="py-3 px-3.5 text-center">Actions</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
@@ -664,12 +705,40 @@ export default function OrdersSection({
                               <span className="text-slate-300 italic text-[10px]">-</span>
                             )}
                           </td>
+
+                          {/* 12. Actions */}
+                          <td
+                            className="py-3.5 px-3.5 text-center whitespace-nowrap"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            {ord.status !== 'cancelled' ? (
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleOpenInvoice(ord);
+                                }}
+                                disabled={loadingInvoiceOrderId === ord.id}
+                                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-[#1B4B4A]/30 bg-[#EBF3F3]/60 hover:bg-[#EBF3F3] text-[#1B4B4A] text-xs font-semibold shadow-2xs hover:border-[#1B4B4A] transition-all cursor-pointer disabled:opacity-50"
+                                title="Générer la facture"
+                              >
+                                {loadingInvoiceOrderId === ord.id ? (
+                                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                ) : (
+                                  <FileText className="w-3.5 h-3.5 text-[#1B4B4A]" />
+                                )}
+                                <span>Facture</span>
+                              </button>
+                            ) : (
+                              <span className="text-slate-300 italic text-[10px]">-</span>
+                            )}
+                          </td>
                         </tr>
                       );
                     })}
                     {filteredOrders.length === 0 && (
                       <tr>
-                        <td colSpan={11} className="py-12 text-center text-slate-400 text-xs">
+                        <td colSpan={12} className="py-12 text-center text-slate-400 text-xs">
                           Aucune commande ne correspond aux critères.
                         </td>
                       </tr>
@@ -732,12 +801,18 @@ export default function OrdersSection({
               rows={3}
               className="w-full text-xs p-3 border border-slate-200 rounded-xl focus:outline-hidden focus:ring-2 focus:ring-rose-500 text-slate-800"
             />
+            {cancelError && (
+              <p className="text-xs text-rose-600 font-semibold bg-rose-50 p-2.5 rounded-xl border border-rose-200">
+                {cancelError}
+              </p>
+            )}
             <div className="flex items-center justify-end space-x-3 pt-2">
               <button
                 type="button"
                 onClick={() => {
                   setCancellingOrderId(null);
                   setCancellationReason('');
+                  setCancelError(null);
                 }}
                 disabled={isCancellingOrder}
                 className="px-4 py-2 border border-slate-200 text-slate-700 font-bold text-xs rounded-xl hover:bg-slate-50 cursor-pointer"
@@ -750,12 +825,13 @@ export default function OrdersSection({
                 onClick={async () => {
                   if (!cancellingOrderId) return;
                   setIsCancellingOrder(true);
+                  setCancelError(null);
                   try {
                     await onCancelOrder(cancellingOrderId, cancellationReason.trim());
                     setCancellingOrderId(null);
                     setCancellationReason('');
                   } catch (err: any) {
-                    alert(err?.message || "Erreur lors de l'annulation.");
+                    setCancelError(err?.message || "Erreur lors de l'annulation.");
                   } finally {
                     setIsCancellingOrder(false);
                   }
@@ -842,6 +918,18 @@ export default function OrdersSection({
             </div>
           </div>
         </div>
+      )}
+
+      {/* Modal d'aperçu d'impression / Facture */}
+      {invoiceModalOrder && (
+        <PrintPreviewModal
+          isOpen={Boolean(invoiceModalOrder)}
+          onClose={() => setInvoiceModalOrder(null)}
+          orders={[invoiceModalOrder]}
+          business={business}
+          initialTab="invoice"
+          initialItemsByOrder={itemsByOrder}
+        />
       )}
     </div>
   );

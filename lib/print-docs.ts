@@ -423,107 +423,120 @@ export async function buildRouteDoc(
 
   const finalY = (doc as any).lastAutoTable?.finalY || currentY + 40;
 
-  // Vérifier si l'espace restant sur la page est suffisant pour le bloc Remarques (18 mm) + Pied et signatures (38 mm) = 56 mm
-  let bottomY = finalY + 4;
-  if (bottomY + 56 > 280) {
+  // Calcul du bloc du bas ancré à 14 mm du bord inférieur (A4 : 297 mm de haut)
+  const pageHeight = 297;
+  const bottomMargin = 14;
+  const blockBottomY = pageHeight - bottomMargin; // 283 mm (bas des cadres de signature)
+
+  // 1. Cadres de signature : 30 mm de haut
+  const sigBoxH = 30;
+  const sigBoxW = (contentWidth - 6) / 2; // 88 mm chacun
+  const sigBoxY = blockBottomY - sigBoxH; // 253 mm
+
+  // 2. Totaux : 11 mm de haut
+  const summaryH = 11;
+  const summaryGap = 4;
+  const summaryY = sigBoxY - summaryGap - summaryH; // 238 mm
+
+  // 3. Cadre Remarques : 35 mm de haut
+  const remarksHeight = 35;
+  const remarksGap = 4;
+  const remarksBoxY = summaryY - remarksGap - remarksHeight; // 199 mm
+  const remarksTitleY = remarksBoxY - 2.5; // 196.5 mm
+  const blockTopY = remarksBoxY - 6; // 193 mm (espace suffisant pour le titre)
+
+  // Si le tableau se termine trop bas pour contenir le bloc, ajouter une page
+  if (finalY + 4 > blockTopY) {
     doc.addPage();
-    bottomY = margin;
   }
 
-  // 4. Bloc Remarques : cadre de 3 lignes à remplir à la main
+  // 4. Bloc Remarques : cadre de 35 mm avec 5 lignes pointillées
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(7.5);
   doc.setTextColor(27, 75, 74);
-  doc.text('REMARQUES & INCIDENTS (à remplir à la main) :', margin, bottomY + 2.5);
+  doc.text('REMARQUES & INCIDENTS (à remplir à la main) :', margin, remarksTitleY);
 
-  const remarksBoxY = bottomY + 4;
-  const remarksHeight = 15;
   doc.setFillColor(255, 255, 255);
   doc.setDrawColor(203, 213, 225);
   doc.setLineWidth(0.2);
   doc.rect(margin, remarksBoxY, contentWidth, remarksHeight);
 
-  // 3 lignes d'écriture guidée légères
+  // 5 lignes pointillées d'écriture guidée
   doc.setDrawColor(226, 232, 240);
   doc.setLineDashPattern([1, 1], 0);
-  doc.line(margin + 2, remarksBoxY + 5, margin + contentWidth - 2, remarksBoxY + 5);
-  doc.line(margin + 2, remarksBoxY + 10, margin + contentWidth - 2, remarksBoxY + 10);
+  const lineSpacing = remarksHeight / 6; // ~5.83 mm d'intervalle pour 5 lignes
+  for (let l = 1; l <= 5; l++) {
+    const lineY = remarksBoxY + l * lineSpacing;
+    doc.line(margin + 2, lineY, margin + contentWidth - 2, lineY);
+  }
   doc.setLineDashPattern([], 0);
 
-  bottomY = remarksBoxY + remarksHeight + 4;
-
   // 5. Pied : arrêts, total des commandes, À encaisser
-  const summaryH = 11;
   doc.setFillColor(248, 250, 252);
   doc.setDrawColor(226, 232, 240);
   doc.setLineWidth(0.3);
-  doc.roundedRect(margin, bottomY, contentWidth, summaryH, 2, 2, 'FD');
+  doc.roundedRect(margin, summaryY, contentWidth, summaryH, 2, 2, 'FD');
 
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(8);
   doc.setTextColor(100, 116, 139);
-  doc.text('Arrêts :', margin + 4, bottomY + 7);
+  doc.text('Arrêts :', margin + 4, summaryY + 7);
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(8.5);
   doc.setTextColor(15, 23, 42);
-  doc.text(`${orders.length}`, margin + 18, bottomY + 7);
+  doc.text(`${orders.length}`, margin + 18, summaryY + 7);
 
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(8);
   doc.setTextColor(100, 116, 139);
-  doc.text('Total des commandes :', margin + 38, bottomY + 7);
+  doc.text('Total des commandes :', margin + 38, summaryY + 7);
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(8.5);
   doc.setTextColor(27, 75, 74);
-  doc.text(formatAmount(totalOrdersAmount, business.currency), margin + 74, bottomY + 7);
+  doc.text(formatAmount(totalOrdersAmount, business.currency), margin + 74, summaryY + 7);
 
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(8);
   doc.setTextColor(100, 116, 139);
-  doc.text('À encaisser :', margin + 118, bottomY + 7);
+  doc.text('À encaisser :', margin + 118, summaryY + 7);
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(8.5);
   doc.setTextColor(180, 83, 9); // Ambre
-  doc.text(formatAmount(toCollectAmount, business.currency), margin + 138, bottomY + 7);
+  doc.text(formatAmount(toCollectAmount, business.currency), margin + 138, summaryY + 7);
 
-  bottomY += summaryH + 4;
-
-  // Deux cadres de signature identiques « Livreur » et « Responsable » (fond blanc, bordure grise fine, titre en gris foncé, une ligne « Date et heure »)
-  const sigBoxW = (contentWidth - 6) / 2; // 88 mm chacun
-  const sigBoxH = 18;
-
-  // Cadre Signature Livreur : réinitialisation explicite de la couleur de fond, de bordure et du mode de dessin
+  // Deux cadres de signature de 30 mm de haut avec la ligne « Date et heure » en bas
+  // Cadre Signature Livreur
   doc.setFillColor(255, 255, 255);
   doc.setDrawColor(203, 213, 225);
   doc.setLineWidth(0.2);
   doc.setLineDashPattern([], 0);
-  doc.roundedRect(margin, bottomY, sigBoxW, sigBoxH, 1.5, 1.5, 'FD');
+  doc.roundedRect(margin, sigBoxY, sigBoxW, sigBoxH, 1.5, 1.5, 'FD');
 
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(7.5);
   doc.setTextColor(51, 65, 85); // Titre gris foncé
-  doc.text('SIGNATURE DU LIVREUR', margin + 3, bottomY + 4.5);
+  doc.text('SIGNATURE DU LIVREUR', margin + 3, sigBoxY + 5);
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(7);
   doc.setTextColor(100, 116, 139);
-  doc.text('Date et heure : _____/_____/_________ à ____:____', margin + 3, bottomY + sigBoxH - 2.5);
+  doc.text('Date et heure : _____/_____/_________ à ____:____', margin + 3, sigBoxY + sigBoxH - 3);
 
-  // Cadre Signature Responsable : réinitialisation explicite de la couleur de fond, de bordure et du mode de dessin
+  // Cadre Signature Responsable
   const sigRightX = margin + sigBoxW + 6;
   doc.setFillColor(255, 255, 255);
   doc.setDrawColor(203, 213, 225);
   doc.setLineWidth(0.2);
   doc.setLineDashPattern([], 0);
-  doc.roundedRect(sigRightX, bottomY, sigBoxW, sigBoxH, 1.5, 1.5, 'FD');
+  doc.roundedRect(sigRightX, sigBoxY, sigBoxW, sigBoxH, 1.5, 1.5, 'FD');
 
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(7.5);
   doc.setTextColor(51, 65, 85); // Titre gris foncé
-  doc.text('SIGNATURE DU RESPONSABLE', sigRightX + 3, bottomY + 4.5);
+  doc.text('SIGNATURE DU RESPONSABLE', sigRightX + 3, sigBoxY + 5);
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(7);
   doc.setTextColor(100, 116, 139);
-  doc.text('Date et heure : _____/_____/_________ à ____:____', sigRightX + 3, bottomY + sigBoxH - 2.5);
+  doc.text('Date et heure : _____/_____/_________ à ____:____', sigRightX + 3, sigBoxY + sigBoxH - 3);
 
   // Pagination « Page n / n » et pied discret sur toutes les pages
   const totalPages = doc.getNumberOfPages();
@@ -557,6 +570,449 @@ export async function generateRoutePdf(
   const dd = String(now.getDate()).padStart(2, '0');
   const filename = `feuille_de_route_${cleanDriver}_${yyyy}-${mm}-${dd}.pdf`;
   openOrDownloadPdf(doc, filename);
+}
+
+export interface InvoicePrintOptions {
+  showLogo?: boolean;
+  showTaxId?: boolean;
+  showFooter?: boolean;
+  // Modifications temporaires avant impression (ne changent pas la commande en base)
+  customerName?: string;
+  customerPhone?: string;
+  customerAddress?: string;
+  subjectNote?: string;
+  paymentMention?: string;
+  dueDate?: string;
+  footerText?: string;
+}
+
+/**
+ * Construction du document jsPDF de la Facture A4 portrait.
+ * Thème sobre (vert #1B4B4A, gris clair), marges 14 mm :
+ * - En-tête : logo (config.invoice.logo_url), nom légal (sinon business.name),
+ *   adresse, téléphone, identifiant fiscal (config.invoice.tax_id) ; une ligne vide est omise.
+ *   À droite : « FACTURE », « N° <référence courte> », date de la commande, et date de livraison si elle existe.
+ * - Bloc Client : nom (« Client anonyme » si inconnu), téléphone, adresse de livraison ou « Retrait sur place ».
+ * - Tableau : Désignation | Qté | Prix unitaire | Total ligne.
+ * - Totaux : Sous-total (somme des articles), Frais de livraison et Supplément urgent seulement si > 0,
+ *   une ligne « Ajustement » si la somme ne correspond pas au total stocké, TOTAL en gras ;
+ *   mention « Payée » ou « À régler » et moyen de paiement.
+ * - Pied de page : config.invoice.footer_text. Pas de ligne de TVA.
+ *   Commentaire dans le code : « Numérotation séquentielle et TVA à définir avec un comptable ».
+ * - Options : showLogo, showTaxId, showFooter (activées par défaut).
+ */
+export async function buildInvoiceDoc(
+  order: Order,
+  items: OrderItem[],
+  business: Business,
+  options?: InvoicePrintOptions
+): Promise<jsPDF> {
+  const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+  const pageWidth = 210;
+  const margin = 14;
+  const contentWidth = pageWidth - margin * 2; // 182 mm
+  let currentY = 14;
+
+  const showLogo = options?.showLogo ?? true;
+  const showTaxId = options?.showTaxId ?? true;
+  const showFooter = options?.showFooter ?? true;
+
+  const currency = business.currency || 'XOF';
+  const shortRef = getOrderShortRef(order);
+
+  // 1. En-tête gauche : logo, nom légal, adresse, téléphone, identifiant fiscal
+  const logoUrl = business.config?.invoice?.logo_url || business.logo_url;
+  let logoDataUrl: string | null = null;
+  if (showLogo) {
+    logoDataUrl = await loadImageAsDataUrl(logoUrl);
+  }
+
+  let leftY = currentY;
+  if (showLogo && logoDataUrl) {
+    try {
+      doc.addImage(logoDataUrl, 'PNG', margin, leftY, 24, 15);
+      leftY += 18;
+    } catch {
+      // Ignoré sans erreur si format incompatible
+    }
+  }
+
+  const legalName = business.config?.invoice?.legal_name || business.name || 'Commerce';
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(11);
+  doc.setTextColor(27, 75, 74); // #1B4B4A
+  doc.text(legalName, margin, leftY);
+  leftY += 5;
+
+  const address = business.config?.invoice?.address || business.address;
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(8);
+  doc.setTextColor(71, 85, 105);
+  if (address && address.trim()) {
+    doc.text(address.trim(), margin, leftY);
+    leftY += 4;
+  }
+
+  const phone = business.config?.invoice?.phone || business.whatsapp_number;
+  if (phone && phone.trim()) {
+    doc.text(`Tél : ${phone.trim()}`, margin, leftY);
+    leftY += 4;
+  }
+
+  const taxId = business.config?.invoice?.tax_id;
+  if (showTaxId && taxId && taxId.trim()) {
+    doc.text(`NINEA / NIF : ${taxId.trim()}`, margin, leftY);
+    leftY += 4;
+  }
+
+  // 2. En-tête droit : « FACTURE », « N° <réf> », date commande, date livraison si existante
+  const rightX = pageWidth - margin;
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(18);
+  doc.setTextColor(27, 75, 74); // #1B4B4A
+  doc.text('FACTURE', rightX, currentY + 6, { align: 'right' });
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(9.5);
+  doc.setTextColor(30, 41, 59);
+  doc.text(`N° ${shortRef}`, rightX, currentY + 12, { align: 'right' });
+
+  const orderDateStr = order.created_at
+    ? new Date(order.created_at).toLocaleDateString('fr-FR', {
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric',
+      })
+    : new Date().toLocaleDateString('fr-FR');
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(8.5);
+  doc.setTextColor(100, 116, 139);
+  doc.text(`Date : ${orderDateStr}`, rightX, currentY + 17, { align: 'right' });
+
+  let rightY = currentY + 22;
+  if (order.delivered_at) {
+    const delivDateStr = new Date(order.delivered_at).toLocaleDateString('fr-FR', {
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+    });
+    doc.text(`Livrée le : ${delivDateStr}`, rightX, rightY, { align: 'right' });
+    rightY += 5;
+  }
+  if (options?.dueDate && options.dueDate.trim()) {
+    doc.text(`Échéance : ${options.dueDate.trim()}`, rightX, rightY, { align: 'right' });
+    rightY += 5;
+  }
+
+  currentY = Math.max(leftY, rightY) + 5;
+
+  // 3. Bloc Client : nom (« Client anonyme » si inconnu), téléphone, adresse de livraison ou « Retrait sur place »
+  const clientBoxY = currentY;
+  const clientName = (options?.customerName !== undefined ? options.customerName : order.customer_name)?.trim() || 'Client anonyme';
+  const clientPhone = (options?.customerPhone !== undefined ? options.customerPhone : order.customer_phone)?.trim();
+  const rawAddress = options?.customerAddress !== undefined
+    ? options.customerAddress
+    : (order.order_type === 'pickup' ? 'Retrait sur place' : order.delivery_address);
+  const clientAddress = rawAddress?.trim() || 'Retrait sur place';
+
+  doc.setFillColor(248, 250, 252); // #F8FAFC
+  doc.setDrawColor(226, 232, 240); // #E2E8F0
+  doc.setLineWidth(0.2);
+  doc.roundedRect(margin, clientBoxY, contentWidth, 20, 1.5, 1.5, 'FD');
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(7.5);
+  doc.setTextColor(27, 75, 74);
+  doc.text('FACTURÉ À :', margin + 4, clientBoxY + 5);
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(9);
+  doc.setTextColor(15, 23, 42);
+  doc.text(clientName, margin + 4, clientBoxY + 10);
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(8);
+  doc.setTextColor(71, 85, 105);
+  let subInfo = '';
+  if (clientPhone) {
+    subInfo += `Tél : ${clientPhone}`;
+  }
+  if (clientAddress) {
+    if (subInfo) subInfo += '   ·   ';
+    subInfo += `Adresse : ${clientAddress}`;
+  }
+  doc.text(subInfo, margin + 4, clientBoxY + 15);
+
+  currentY = clientBoxY + 23;
+
+  // Objet / note (200 caractères max) si renseigné
+  if (options?.subjectNote && options.subjectNote.trim()) {
+    const trimmedNote = options.subjectNote.trim().slice(0, 200);
+    doc.setFillColor(255, 255, 255);
+    doc.setDrawColor(226, 232, 240);
+    doc.setLineWidth(0.2);
+    doc.roundedRect(margin, currentY, contentWidth, 10, 1, 1, 'FD');
+
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(7.5);
+    doc.setTextColor(27, 75, 74);
+    doc.text('Objet / Note :', margin + 3, currentY + 4.5);
+
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(7.5);
+    doc.setTextColor(51, 65, 85);
+    const noteLines = doc.splitTextToSize(trimmedNote, contentWidth - 26);
+    doc.text(noteLines[0] || trimmedNote, margin + 23, currentY + 4.5);
+    if (noteLines[1]) {
+      doc.text(noteLines[1], margin + 23, currentY + 8);
+    }
+    currentY += 13;
+  } else {
+    currentY += 1;
+  }
+
+  // 4. Tableau : Désignation | Qté | Prix unitaire | Total ligne
+  let subTotal = 0;
+  const tableRows: string[][] = [];
+
+  if (items && items.length > 0) {
+    items.forEach((it) => {
+      const qty = it.quantity || 1;
+      const unitPrice = Number(it.unit_price) || 0;
+      const lineTotal = unitPrice * qty;
+      subTotal += lineTotal;
+      tableRows.push([
+        it.product_name || `Article`,
+        qty.toString(),
+        formatAmount(unitPrice, currency),
+        formatAmount(lineTotal, currency),
+      ]);
+    });
+  } else {
+    // Si la commande n'a pas d'articles détaillés
+    const fallbackTotal = Number(order.total_amount || 0);
+    subTotal = fallbackTotal;
+    tableRows.push([
+      `Commande #${shortRef}`,
+      '1',
+      formatAmount(fallbackTotal, currency),
+      formatAmount(fallbackTotal, currency),
+    ]);
+  }
+
+  autoTable(doc, {
+    startY: currentY,
+    head: [['Désignation', 'Qté', 'Prix unitaire', 'Total ligne']],
+    body: tableRows,
+    theme: 'grid',
+    margin: { left: margin, right: margin, top: 14, bottom: 18 },
+    styles: {
+      fontSize: 8.5,
+      cellPadding: 3,
+      textColor: [30, 41, 59],
+      lineColor: [226, 232, 240],
+      lineWidth: 0.15,
+      valign: 'middle',
+    },
+    headStyles: {
+      fillColor: [27, 75, 74], // #1B4B4A
+      textColor: [255, 255, 255],
+      fontStyle: 'bold',
+      fontSize: 8,
+      cellPadding: 3,
+      halign: 'left',
+    },
+    columnStyles: {
+      0: { cellWidth: 92 },
+      1: { cellWidth: 20, halign: 'center' },
+      2: { cellWidth: 35, halign: 'right' },
+      3: { cellWidth: 35, halign: 'right', fontStyle: 'bold' },
+    },
+  });
+
+  const finalTableY = (doc as any).lastAutoTable?.finalY || currentY + 30;
+
+  // 5. Totaux : Sous-total, Frais livraison, Supplément urgent, Ajustement, TOTAL, mention Payée / À régler
+  const deliveryFee = Number(order.delivery_fee || 0);
+  const urgentFee = Number(order.urgent_surcharge_applied || 0);
+  const totalStored = Number(order.total_amount || 0);
+  const calculatedSum = subTotal + (deliveryFee > 0 ? deliveryFee : 0) + (urgentFee > 0 ? urgentFee : 0);
+  const adjustment = totalStored - calculatedSum;
+
+  let totY = finalTableY + 6;
+  if (totY + 45 > 280) {
+    doc.addPage();
+    totY = margin;
+  }
+
+  const totalsXLabel = 120;
+  const totalsXVal = pageWidth - margin;
+
+  // Sous-total (somme des articles)
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(8.5);
+  doc.setTextColor(100, 116, 139);
+  doc.text('Sous-total :', totalsXLabel, totY);
+  doc.setFont('helvetica', 'bold');
+  doc.setTextColor(30, 41, 59);
+  doc.text(formatAmount(subTotal, currency), totalsXVal, totY, { align: 'right' });
+  totY += 5;
+
+  // Frais de livraison seulement si > 0
+  if (deliveryFee > 0) {
+    doc.setFont('helvetica', 'normal');
+    doc.setTextColor(100, 116, 139);
+    doc.text('Frais de livraison :', totalsXLabel, totY);
+    doc.setFont('helvetica', 'bold');
+    doc.setTextColor(30, 41, 59);
+    doc.text(formatAmount(deliveryFee, currency), totalsXVal, totY, { align: 'right' });
+    totY += 5;
+  }
+
+  // Supplément urgent seulement si > 0
+  if (urgentFee > 0) {
+    doc.setFont('helvetica', 'normal');
+    doc.setTextColor(100, 116, 139);
+    doc.text('Supplément urgent :', totalsXLabel, totY);
+    doc.setFont('helvetica', 'bold');
+    doc.setTextColor(30, 41, 59);
+    doc.text(formatAmount(urgentFee, currency), totalsXVal, totY, { align: 'right' });
+    totY += 5;
+  }
+
+  // Ligne « Ajustement » si la somme ne correspond pas au total stocké
+  if (Math.abs(adjustment) >= 1) {
+    doc.setFont('helvetica', 'normal');
+    doc.setTextColor(100, 116, 139);
+    doc.text('Ajustement :', totalsXLabel, totY);
+    doc.setFont('helvetica', 'bold');
+    doc.setTextColor(30, 41, 59);
+    const adjSign = adjustment > 0 ? '+' : '';
+    doc.text(`${adjSign}${formatAmount(adjustment, currency)}`, totalsXVal, totY, { align: 'right' });
+    totY += 5;
+  }
+
+  // Ligne de séparation avant TOTAL
+  doc.setDrawColor(203, 213, 225);
+  doc.setLineWidth(0.3);
+  doc.line(totalsXLabel, totY, totalsXVal, totY);
+  totY += 4.5;
+
+  // TOTAL en gras
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(11);
+  doc.setTextColor(27, 75, 74); // #1B4B4A
+  doc.text('TOTAL :', totalsXLabel, totY);
+  doc.text(formatAmount(totalStored, currency), totalsXVal, totY, { align: 'right' });
+  totY += 6.5;
+
+  // Mention « Payée » ou « À régler » ou texte personnalisé
+  const isPaid = order.payment_status === 'paid';
+  const defaultPaymentMethod = getPaymentMethodLabel(order.payment_method);
+  const defaultPaymentMention = isPaid ? `Payée · ${defaultPaymentMethod}` : `À régler · ${defaultPaymentMethod}`;
+  const finalPaymentMention = options?.paymentMention && options.paymentMention.trim()
+    ? options.paymentMention.trim()
+    : defaultPaymentMention;
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(8.5);
+  const lowerMention = finalPaymentMention.toLowerCase();
+  if (lowerMention.includes('payé') || lowerMention.includes('payee') || isPaid) {
+    doc.setTextColor(22, 101, 52); // vert
+  } else {
+    doc.setTextColor(180, 83, 9); // ambre
+  }
+  doc.text(finalPaymentMention, totalsXVal, totY, { align: 'right' });
+
+  // Test de cohérence : mention personnalisée indiquant payé/payée alors que non paid, ou à régler alors que paid
+  if (options?.paymentMention && options.paymentMention.trim()) {
+    const customLower = options.paymentMention.trim().toLowerCase();
+    const indicatesPaid =
+      customLower.includes('payé') ||
+      customLower.includes('payée') ||
+      customLower.includes('paye') ||
+      customLower.includes('payee');
+    const indicatesToPay =
+      customLower.includes('à régler') ||
+      customLower.includes('a regler');
+
+    const isConflict =
+      (indicatesPaid && order.payment_status !== 'paid') ||
+      (indicatesToPay && order.payment_status === 'paid');
+
+    if (isConflict) {
+      totY += 4;
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(7);
+      doc.setTextColor(148, 163, 184); // Gris
+      doc.text('Mention modifiée avant impression', totalsXVal, totY, { align: 'right' });
+    }
+  }
+
+  // 6. Pied de page : options.footerText si renseigné, sinon config.invoice.footer_text. Pas de ligne de TVA.
+  // Numérotation séquentielle et TVA à définir avec un comptable
+  const footerText = options?.footerText !== undefined
+    ? options.footerText
+    : business.config?.invoice?.footer_text;
+  const totalPages = doc.getNumberOfPages();
+  for (let p = 1; p <= totalPages; p++) {
+    doc.setPage(p);
+    if (showFooter && footerText && footerText.trim()) {
+      doc.setFont('helvetica', 'italic');
+      doc.setFontSize(7.5);
+      doc.setTextColor(100, 116, 139);
+      const footerLines = doc.splitTextToSize(footerText.trim(), contentWidth);
+      doc.text(footerLines, pageWidth / 2, 285, { align: 'center' });
+    }
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(7.5);
+    doc.setTextColor(148, 163, 184);
+    doc.text(`Page ${p} / ${totalPages}`, pageWidth - margin, 292, { align: 'right' });
+    doc.text(`Facture N° ${shortRef}`, margin, 292);
+  }
+
+  return doc;
+}
+
+/**
+ * Génération et ouverture / téléchargement du PDF de la Facture A4.
+ * Nom de fichier : facture_<référence>_<AAAA-MM-JJ>.pdf
+ */
+export async function generateInvoicePdf(
+  order: Order,
+  items: OrderItem[],
+  business: Business,
+  options?: InvoicePrintOptions
+): Promise<void> {
+  const doc = await buildInvoiceDoc(order, items, business, options);
+  const shortRef = getOrderShortRef(order);
+  const now = new Date();
+  const yyyy = now.getFullYear();
+  const mm = String(now.getMonth() + 1).padStart(2, '0');
+  const dd = String(now.getDate()).padStart(2, '0');
+  const filename = `facture_${shortRef}_${yyyy}-${mm}-${dd}.pdf`;
+  openOrDownloadPdf(doc, filename);
+}
+
+/**
+ * Téléchargement direct du PDF de la Facture A4.
+ * Nom de fichier : facture_<référence>_<AAAA-MM-JJ>.pdf
+ */
+export async function downloadInvoicePdf(
+  order: Order,
+  items: OrderItem[],
+  business: Business,
+  options?: InvoicePrintOptions
+): Promise<void> {
+  const doc = await buildInvoiceDoc(order, items, business, options);
+  const shortRef = getOrderShortRef(order);
+  const now = new Date();
+  const yyyy = now.getFullYear();
+  const mm = String(now.getMonth() + 1).padStart(2, '0');
+  const dd = String(now.getDate()).padStart(2, '0');
+  const filename = `facture_${shortRef}_${yyyy}-${mm}-${dd}.pdf`;
+  doc.save(filename);
 }
 
 export interface TicketPrintOptions {
