@@ -111,20 +111,45 @@ export default function PrintPreviewModal({
     return { showLogo: true, showTaxId: true, showFooter: true };
   });
 
-  // Modifications temporaires avant impression (ne changent pas la commande en base)
-  const [invoiceOverrides, setInvoiceOverrides] = useState<InvoiceOverrides>(() =>
-    getInitialInvoiceOverrides(orders[0], business)
-  );
+  // Commande actuellement sélectionnée / mise en évidence
+  const [activeOrderId, setActiveOrderId] = useState<string | null>(null);
 
-  // Synchronisation des valeurs d'impression si la première commande change
-  useEffect(() => {
-    if (orders[0]) {
-      setInvoiceOverrides(getInitialInvoiceOverrides(orders[0], business));
-    }
-  }, [orders[0]?.id]);
+  // Commande actuellement sélectionnée pour la facture (première commande par défaut)
+  const selectedInvoiceOrder = useMemo(() => {
+    if (orders.length === 0) return null;
+    return (activeOrderId ? orders.find((o) => o.id === activeOrderId) : null) || orders[0];
+  }, [orders, activeOrderId]);
+
+  // Modifications temporaires avant impression conservées par commande pendant que la modale est ouverte
+  const [invoiceOverridesByOrder, setInvoiceOverridesByOrder] = useState<Record<string, InvoiceOverrides>>({});
+
+  // Valeurs effectives de modification pour la commande courante
+  const currentInvoiceOverrides = useMemo(() => {
+    if (!selectedInvoiceOrder) return getInitialInvoiceOverrides(undefined, business);
+    return invoiceOverridesByOrder[selectedInvoiceOrder.id] || getInitialInvoiceOverrides(selectedInvoiceOrder, business);
+  }, [selectedInvoiceOrder, invoiceOverridesByOrder, business]);
+
+  const updateInvoiceOverride = (field: keyof InvoiceOverrides, value: string) => {
+    if (!selectedInvoiceOrder) return;
+    setInvoiceOverridesByOrder((prev) => {
+      const existing = prev[selectedInvoiceOrder.id] || getInitialInvoiceOverrides(selectedInvoiceOrder, business);
+      return {
+        ...prev,
+        [selectedInvoiceOrder.id]: {
+          ...existing,
+          [field]: value,
+        },
+      };
+    });
+  };
 
   const handleResetInvoiceOverrides = () => {
-    setInvoiceOverrides(getInitialInvoiceOverrides(orders[0], business));
+    if (!selectedInvoiceOrder) return;
+    setInvoiceOverridesByOrder((prev) => {
+      const next = { ...prev };
+      delete next[selectedInvoiceOrder.id];
+      return next;
+    });
   };
 
   const toggleInvoiceOption = (key: keyof InvoicePrintOptions) => {
@@ -147,10 +172,7 @@ export default function PrintPreviewModal({
   // Valeur du champ global « Copies pour tous » (1 à 20)
   const [copiesForAll, setCopiesForAll] = useState<number>(1);
 
-  // Commande actuellement sélectionnée / mise en évidence dans l'aperçu
-  const [activeOrderId, setActiveOrderId] = useState<string | null>(null);
-
-  // Articles des commandes (pour affichage fidèle des tickets)
+  // Articles des commandes (pour affichage fidèle des tickets et factures)
   const [itemsByOrder, setItemsByOrder] = useState<Record<string, OrderItem[]>>(
     initialItemsByOrder || {}
   );
@@ -179,7 +201,7 @@ export default function PrintPreviewModal({
     setCheckedOrders(initialChecked);
     setCopiesByOrder(initialCopies);
     setCopiesForAll(1);
-    if (orders.length > 0) {
+    if (orders.length > 0 && !activeOrderId) {
       setActiveOrderId(orders[0].id);
     }
 
@@ -193,12 +215,37 @@ export default function PrintPreviewModal({
         })
         .catch((err) => {
           console.warn('Erreur chargement articles pour aperçu tickets:', err);
+          setErrorFeedback(err?.message || 'Erreur lors du chargement des articles de commande.');
         })
         .finally(() => {
           setIsLoadingItems(false);
         });
     }
   }, [isOpen, orders]);
+
+  // Chargement spécifique des articles de la commande sélectionnée pour la facture si non présents
+  useEffect(() => {
+    if (!isOpen || activeDocTab !== 'invoice' || !selectedInvoiceOrder) return;
+    const orderId = selectedInvoiceOrder.id;
+    if (!itemsByOrder[orderId]) {
+      setIsLoadingItems(true);
+      setErrorFeedback(null);
+      fetchOrderItemsForOrders([orderId])
+        .then((fetched) => {
+          setItemsByOrder((prev) => ({ ...prev, ...fetched }));
+        })
+        .catch((err: any) => {
+          console.error('Erreur chargement articles facture:', err);
+          setErrorFeedback(
+            err?.message ||
+              `Impossible de charger les articles de la commande #${getOrderShortRef(selectedInvoiceOrder)}.`
+          );
+        })
+        .finally(() => {
+          setIsLoadingItems(false);
+        });
+    }
+  }, [isOpen, activeDocTab, selectedInvoiceOrder]);
 
   // Commandes cochées dans l'ordre d'origine
   const activeOrders = useMemo(() => {
@@ -356,18 +403,18 @@ export default function PrintPreviewModal({
 
   const effectiveInvoiceOptions: InvoicePrintOptions = useMemo(() => ({
     ...invoiceOptions,
-    customerName: invoiceOverrides.customerName,
-    customerPhone: invoiceOverrides.customerPhone,
-    customerAddress: invoiceOverrides.customerAddress,
-    subjectNote: invoiceOverrides.subjectNote,
-    paymentMention: invoiceOverrides.paymentMention,
-    dueDate: invoiceOverrides.dueDate,
-    footerText: invoiceOverrides.footerText,
-  }), [invoiceOptions, invoiceOverrides]);
+    customerName: currentInvoiceOverrides.customerName,
+    customerPhone: currentInvoiceOverrides.customerPhone,
+    customerAddress: currentInvoiceOverrides.customerAddress,
+    subjectNote: currentInvoiceOverrides.subjectNote,
+    paymentMention: currentInvoiceOverrides.paymentMention,
+    dueDate: currentInvoiceOverrides.dueDate,
+    footerText: currentInvoiceOverrides.footerText,
+  }), [invoiceOptions, currentInvoiceOverrides]);
 
   // Actions Facture : Téléchargement direct ou Impression
   const handleDownloadInvoice = async () => {
-    const ord = orders[0];
+    const ord = selectedInvoiceOrder;
     if (!ord) return;
     setIsGeneratingPdf(true);
     setErrorFeedback(null);
@@ -383,7 +430,7 @@ export default function PrintPreviewModal({
   };
 
   const handlePrintInvoice = async () => {
-    const ord = orders[0];
+    const ord = selectedInvoiceOrder;
     if (!ord) return;
     setIsGeneratingPdf(true);
     setErrorFeedback(null);
@@ -465,10 +512,11 @@ export default function PrintPreviewModal({
               </h2>
               <p className="text-xs text-slate-500">
                 {activeDocTab === 'invoice' ? (
-                  orders[0] ? (
+                  selectedInvoiceOrder ? (
                     <>
-                      Commande <span className="font-semibold text-slate-700">#{getOrderShortRef(orders[0])}</span> ·{' '}
-                      {orders[0].customer_name || 'Client anonyme'}
+                      Commande <span className="font-semibold text-slate-700">#{getOrderShortRef(selectedInvoiceOrder)}</span> ·{' '}
+                      {selectedInvoiceOrder.customer_name || 'Client anonyme'}
+                      {driver ? ` · Livreur : ${driver.name || 'Assigné'}` : ''}
                     </>
                   ) : (
                     'Facture de commande'
@@ -514,10 +562,23 @@ export default function PrintPreviewModal({
                     <FileText className="w-3.5 h-3.5" />
                     <span>Feuille de route (A4)</span>
                   </button>
+                  <button
+                    type="button"
+                    onClick={() => setActiveDocTab('invoice')}
+                    className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                      activeDocTab === 'invoice'
+                        ? 'bg-white text-[#1B4B4A] shadow-xs border border-[#E5DCD0]/60'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                    title="Facture (A4)"
+                  >
+                    <FileText className="w-3.5 h-3.5" />
+                    <span>Facture (A4)</span>
+                  </button>
                 </>
               )}
 
-              {activeDocTab === 'invoice' && (
+              {!driver && activeDocTab === 'invoice' && (
                 <button
                   type="button"
                   className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer bg-white text-[#1B4B4A] shadow-xs border border-[#E5DCD0]/60"
@@ -548,6 +609,48 @@ export default function PrintPreviewModal({
           {/* ========================================================= */}
           {activeDocTab === 'invoice' ? (
             <div className="w-full md:w-[380px] lg:w-[410px] flex-shrink-0 flex flex-col bg-white border-b md:border-b-0 md:border-r border-[#E5DCD0] h-full overflow-hidden">
+              {/* Sélecteur de commande unique quand ouvert avec tournée livreur */}
+              {driver && orders.length > 1 && (
+                <div className="p-3 border-b border-[#E5DCD0] bg-[#FFFDF9] space-y-2 flex-shrink-0">
+                  <div className="flex items-center justify-between">
+                    <h3 className="text-xs font-bold uppercase tracking-wider text-slate-700">
+                      Choisir une commande
+                    </h3>
+                    <span className="text-[10px] font-medium text-slate-500 bg-white px-2 py-0.5 rounded-full border border-[#E5DCD0]">
+                      {orders.length} commandes
+                    </span>
+                  </div>
+                  <div className="max-h-36 overflow-y-auto space-y-1 pr-0.5">
+                    {orders.map((ord) => {
+                      const isSelected = selectedInvoiceOrder?.id === ord.id;
+                      const shortRef = getOrderShortRef(ord);
+                      return (
+                        <button
+                          key={ord.id}
+                          type="button"
+                          onClick={() => setActiveOrderId(ord.id)}
+                          className={`w-full text-left px-2.5 py-1.5 rounded-lg border text-xs transition-all flex items-center justify-between cursor-pointer ${
+                            isSelected
+                              ? 'bg-[#FAF7F2] border-[#1B4B4A] ring-1 ring-[#1B4B4A] text-[#1B4B4A] font-bold shadow-2xs'
+                              : 'bg-white border-[#E5DCD0] text-slate-700 hover:bg-[#FAF7F2]'
+                          }`}
+                        >
+                          <div className="min-w-0 flex items-center gap-1.5 truncate">
+                            <span className="font-mono text-[11px] shrink-0">#{shortRef}</span>
+                            <span className="truncate text-xs font-medium text-slate-800">
+                              {ord.customer_name || 'Client anonyme'}
+                            </span>
+                          </div>
+                          <span className="text-[11px] tabular-nums font-semibold shrink-0 ml-2">
+                            {formatAmount(ord.total_amount, currency)}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
               {/* En-tête commande & Montants non modifiables */}
               <div className="p-3.5 border-b border-[#E5DCD0] bg-[#FFFDF9] space-y-2 flex-shrink-0">
                 <div className="flex items-center justify-between">
@@ -555,15 +658,15 @@ export default function PrintPreviewModal({
                     <h3 className="text-xs font-bold uppercase tracking-wider text-slate-700">
                       Commande
                     </h3>
-                    {orders[0] && (
+                    {selectedInvoiceOrder && (
                       <span className="font-mono text-xs font-bold text-[#1B4B4A]">
-                        #{getOrderShortRef(orders[0])}
+                        #{getOrderShortRef(selectedInvoiceOrder)}
                       </span>
                     )}
                   </div>
-                  {orders[0] && (
+                  {selectedInvoiceOrder && (
                     <span className="text-xs font-bold text-slate-900 bg-white px-2.5 py-0.5 rounded-lg border border-[#E5DCD0] shadow-2xs">
-                      {formatAmount(orders[0].total_amount, currency)}
+                      {formatAmount(selectedInvoiceOrder.total_amount, currency)}
                     </span>
                   )}
                 </div>
@@ -607,8 +710,8 @@ export default function PrintPreviewModal({
                       </label>
                       <input
                         type="text"
-                        value={invoiceOverrides.customerName}
-                        onChange={(e) => setInvoiceOverrides((prev) => ({ ...prev, customerName: e.target.value }))}
+                        value={currentInvoiceOverrides.customerName}
+                        onChange={(e) => updateInvoiceOverride('customerName', e.target.value)}
                         placeholder="Nom du client"
                         className="w-full px-2.5 py-1.5 rounded-lg border border-[#E5DCD0] bg-white text-xs text-slate-800 placeholder-slate-400 focus:outline-hidden focus:ring-1 focus:ring-[#1B4B4A]"
                       />
@@ -621,8 +724,8 @@ export default function PrintPreviewModal({
                       </label>
                       <input
                         type="text"
-                        value={invoiceOverrides.customerPhone}
-                        onChange={(e) => setInvoiceOverrides((prev) => ({ ...prev, customerPhone: e.target.value }))}
+                        value={currentInvoiceOverrides.customerPhone}
+                        onChange={(e) => updateInvoiceOverride('customerPhone', e.target.value)}
                         placeholder="Numéro de téléphone"
                         className="w-full px-2.5 py-1.5 rounded-lg border border-[#E5DCD0] bg-white text-xs text-slate-800 placeholder-slate-400 focus:outline-hidden focus:ring-1 focus:ring-[#1B4B4A]"
                       />
@@ -635,8 +738,8 @@ export default function PrintPreviewModal({
                       </label>
                       <textarea
                         rows={2}
-                        value={invoiceOverrides.customerAddress}
-                        onChange={(e) => setInvoiceOverrides((prev) => ({ ...prev, customerAddress: e.target.value }))}
+                        value={currentInvoiceOverrides.customerAddress}
+                        onChange={(e) => updateInvoiceOverride('customerAddress', e.target.value)}
                         placeholder="Adresse ou Retrait sur place"
                         className="w-full px-2.5 py-1.5 rounded-lg border border-[#E5DCD0] bg-white text-xs text-slate-800 placeholder-slate-400 focus:outline-hidden focus:ring-1 focus:ring-[#1B4B4A] resize-none"
                       />
@@ -648,15 +751,15 @@ export default function PrintPreviewModal({
                         <label className="text-[11px] font-bold text-slate-700 block">
                           Objet / note
                         </label>
-                        <span className={`text-[10px] ${invoiceOverrides.subjectNote.length >= 200 ? 'text-amber-600 font-bold' : 'text-slate-400'}`}>
-                          {invoiceOverrides.subjectNote.length} / 200
+                        <span className={`text-[10px] ${currentInvoiceOverrides.subjectNote.length >= 200 ? 'text-amber-600 font-bold' : 'text-slate-400'}`}>
+                          {currentInvoiceOverrides.subjectNote.length} / 200
                         </span>
                       </div>
                       <textarea
                         rows={2}
                         maxLength={200}
-                        value={invoiceOverrides.subjectNote}
-                        onChange={(e) => setInvoiceOverrides((prev) => ({ ...prev, subjectNote: e.target.value.slice(0, 200) }))}
+                        value={currentInvoiceOverrides.subjectNote}
+                        onChange={(e) => updateInvoiceOverride('subjectNote', e.target.value.slice(0, 200))}
                         placeholder="Précision ou note (ex: Commande entreprise, événement...)"
                         className="w-full px-2.5 py-1.5 rounded-lg border border-[#E5DCD0] bg-white text-xs text-slate-800 placeholder-slate-400 focus:outline-hidden focus:ring-1 focus:ring-[#1B4B4A] resize-none"
                       />
@@ -670,37 +773,37 @@ export default function PrintPreviewModal({
                       <div className="flex flex-wrap gap-1 mb-1">
                         <button
                           type="button"
-                          onClick={() => setInvoiceOverrides((prev) => ({ ...prev, paymentMention: 'Payée' }))}
+                          onClick={() => updateInvoiceOverride('paymentMention', 'Payée')}
                           className="px-2 py-0.5 rounded-md text-[10px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100 transition-colors cursor-pointer"
                         >
                           Payée
                         </button>
                         <button
                           type="button"
-                          onClick={() => setInvoiceOverrides((prev) => ({ ...prev, paymentMention: 'À régler' }))}
+                          onClick={() => updateInvoiceOverride('paymentMention', 'À régler')}
                           className="px-2 py-0.5 rounded-md text-[10px] font-semibold bg-amber-50 text-amber-700 border border-amber-200 hover:bg-amber-100 transition-colors cursor-pointer"
                         >
                           À régler
                         </button>
-                        {orders[0]?.payment_method && (
+                        {selectedInvoiceOrder?.payment_method && (
                           <button
                             type="button"
                             onClick={() =>
-                              setInvoiceOverrides((prev) => ({
-                                ...prev,
-                                paymentMention: `${orders[0]?.payment_status === 'paid' ? 'Payée' : 'À régler'} · ${getPaymentMethodLabel(orders[0]?.payment_method)}`,
-                              }))
+                              updateInvoiceOverride(
+                                'paymentMention',
+                                `${selectedInvoiceOrder?.payment_status === 'paid' ? 'Payée' : 'À régler'} · ${getPaymentMethodLabel(selectedInvoiceOrder?.payment_method)}`
+                              )
                             }
                             className="px-2 py-0.5 rounded-md text-[10px] font-medium bg-white text-slate-700 border border-[#E5DCD0] hover:bg-[#FAF7F2] transition-colors cursor-pointer"
                           >
-                            {getPaymentMethodLabel(orders[0]?.payment_method)}
+                            {getPaymentMethodLabel(selectedInvoiceOrder?.payment_method)}
                           </button>
                         )}
                       </div>
                       <input
                         type="text"
-                        value={invoiceOverrides.paymentMention}
-                        onChange={(e) => setInvoiceOverrides((prev) => ({ ...prev, paymentMention: e.target.value }))}
+                        value={currentInvoiceOverrides.paymentMention}
+                        onChange={(e) => updateInvoiceOverride('paymentMention', e.target.value)}
                         placeholder="Ex: Payée · Wave, À régler à réception..."
                         className="w-full px-2.5 py-1.5 rounded-lg border border-[#E5DCD0] bg-white text-xs text-slate-800 placeholder-slate-400 focus:outline-hidden focus:ring-1 focus:ring-[#1B4B4A]"
                       />
@@ -713,8 +816,8 @@ export default function PrintPreviewModal({
                       </label>
                       <input
                         type="text"
-                        value={invoiceOverrides.dueDate}
-                        onChange={(e) => setInvoiceOverrides((prev) => ({ ...prev, dueDate: e.target.value }))}
+                        value={currentInvoiceOverrides.dueDate}
+                        onChange={(e) => updateInvoiceOverride('dueDate', e.target.value)}
                         placeholder="Ex: 30/11/2026, Immédiate..."
                         className="w-full px-2.5 py-1.5 rounded-lg border border-[#E5DCD0] bg-white text-xs text-slate-800 placeholder-slate-400 focus:outline-hidden focus:ring-1 focus:ring-[#1B4B4A]"
                       />
@@ -727,8 +830,8 @@ export default function PrintPreviewModal({
                       </label>
                       <textarea
                         rows={2}
-                        value={invoiceOverrides.footerText}
-                        onChange={(e) => setInvoiceOverrides((prev) => ({ ...prev, footerText: e.target.value }))}
+                        value={currentInvoiceOverrides.footerText}
+                        onChange={(e) => updateInvoiceOverride('footerText', e.target.value)}
                         placeholder="Mentions légales, remerciements..."
                         className="w-full px-2.5 py-1.5 rounded-lg border border-[#E5DCD0] bg-white text-xs text-slate-800 placeholder-slate-400 focus:outline-hidden focus:ring-1 focus:ring-[#1B4B4A] resize-none"
                       />
@@ -791,7 +894,11 @@ export default function PrintPreviewModal({
               <div className="p-3 border-t border-[#E5DCD0] bg-[#FFFDF9] flex-shrink-0 flex items-center justify-between">
                 <div className="text-xs font-bold text-[#1B4B4A] flex items-center gap-1.5">
                   <FileText className="w-4 h-4 text-[#1B4B4A]" />
-                  <span>1 document · Format A4</span>
+                  <span>
+                    {selectedInvoiceOrder
+                      ? `Facture #${getOrderShortRef(selectedInvoiceOrder)} · Format A4`
+                      : 'Facture · Format A4'}
+                  </span>
                 </div>
                 <div className="text-[10px] text-slate-400">PDF Portrait</div>
               </div>
@@ -1069,8 +1176,8 @@ export default function PrintPreviewModal({
 
             {/* Conteneur scrollable avec feuille A4 blanche */}
             <div className="flex-1 overflow-y-auto p-4 sm:p-6 bg-[#FAF7F2] flex flex-col items-center">
-              {orders[0] ? (() => {
-                const ord = orders[0];
+              {selectedInvoiceOrder ? (() => {
+                const ord = selectedInvoiceOrder;
                 const shortRef = getOrderShortRef(ord);
                 const items = itemsByOrder[ord.id] || [];
                 const logoUrl = business.config?.invoice?.logo_url || business.logo_url;
@@ -1078,14 +1185,14 @@ export default function PrintPreviewModal({
                 const bizAddress = business.config?.invoice?.address || business.address;
                 const bizPhone = business.config?.invoice?.phone || business.whatsapp_number;
                 const taxId = business.config?.invoice?.tax_id;
-                const footerText = invoiceOverrides.footerText !== undefined
-                  ? invoiceOverrides.footerText
+                const footerText = currentInvoiceOverrides.footerText !== undefined
+                  ? currentInvoiceOverrides.footerText
                   : (business.config?.invoice?.footer_text || '');
                 const paymentMethod = getPaymentMethodLabel(ord.payment_method);
                 const isPaid = ord.payment_status === 'paid';
                 const defaultPaymentMention = isPaid ? `Payée · ${paymentMethod}` : `À régler · ${paymentMethod}`;
-                const finalPaymentMention = invoiceOverrides.paymentMention && invoiceOverrides.paymentMention.trim()
-                  ? invoiceOverrides.paymentMention.trim()
+                const finalPaymentMention = currentInvoiceOverrides.paymentMention && currentInvoiceOverrides.paymentMention.trim()
+                  ? currentInvoiceOverrides.paymentMention.trim()
                   : defaultPaymentMention;
 
                 const orderDateStr = ord.created_at
@@ -1104,11 +1211,11 @@ export default function PrintPreviewModal({
                     })
                   : null;
 
-                const clientName = invoiceOverrides.customerName.trim() || 'Client anonyme';
-                const clientPhone = invoiceOverrides.customerPhone.trim();
-                const clientAddress = invoiceOverrides.customerAddress.trim() || 'Retrait sur place';
-                const dueDate = invoiceOverrides.dueDate.trim();
-                const subjectNote = invoiceOverrides.subjectNote.trim();
+                const clientName = currentInvoiceOverrides.customerName.trim() || 'Client anonyme';
+                const clientPhone = currentInvoiceOverrides.customerPhone.trim();
+                const clientAddress = currentInvoiceOverrides.customerAddress.trim() || 'Retrait sur place';
+                const dueDate = currentInvoiceOverrides.dueDate.trim();
+                const subjectNote = currentInvoiceOverrides.subjectNote.trim();
 
                 const deliveryFee = Number(ord.delivery_fee || 0);
                 const urgentFee = Number(ord.urgent_surcharge_applied || 0);

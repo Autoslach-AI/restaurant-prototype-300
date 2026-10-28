@@ -711,7 +711,7 @@ export default function OrdersSection({
                             className="py-3.5 px-3.5 text-center whitespace-nowrap"
                             onClick={(e) => e.stopPropagation()}
                           >
-                            {ord.status !== 'cancelled' ? (
+                            {ord.status !== 'cancelled' && ord.order_type === 'pickup' ? (
                               <button
                                 type="button"
                                 onClick={(e) => {

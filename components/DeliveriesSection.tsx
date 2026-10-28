@@ -131,7 +131,7 @@ export default function DeliveriesSection({
     isOpen: boolean;
     driver: Driver | null;
     orders: Order[];
-    initialTab?: 'tickets' | 'route';
+    initialTab?: 'tickets' | 'route' | 'invoice';
   }>({
     isOpen: false,
     driver: null,
@@ -1166,11 +1166,11 @@ export default function DeliveriesSection({
     return () => document.removeEventListener('mousedown', handleOutsidePrintClick);
   }, [openPrintMenuDriverId]);
 
-  // Action d'impression : Feuille de route (A4) ou Tickets (80 mm)
+  // Action d'impression : Feuille de route (A4), Tickets (80 mm) ou Facture (A4)
   const handlePrint = async (
     driver: Driver,
     driverOrders: Order[],
-    type: 'route' | 'tickets'
+    type: 'route' | 'tickets' | 'invoice'
   ) => {
     if (!driverOrders || driverOrders.length === 0) return;
 
@@ -2667,6 +2667,23 @@ export default function DeliveriesSection({
                                 <div>
                                   <div className="font-semibold">Tickets (80 mm)</div>
                                   <div className="text-[10px] text-slate-400">1 ticket thermique par commande</div>
+                                </div>
+                              </button>
+                              <div className="h-px bg-slate-100 my-0.5" />
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setOpenPrintMenuDriverId(null);
+                                  handlePrint(driver, driverOrders, 'invoice');
+                                }}
+                                disabled={printingDriverId === driver.id}
+                                className="w-full text-left px-3.5 py-2 text-xs text-slate-700 hover:bg-[#FAF7F2] hover:text-[#1B4B4A] flex items-center gap-2 cursor-pointer transition-colors"
+                              >
+                                <FileText className="w-3.5 h-3.5 text-[#1B4B4A]" />
+                                <div>
+                                  <div className="font-semibold">Facture (A4)</div>
+                                  <div className="text-[10px] text-slate-400">Factures individuelles des commandes</div>
                                 </div>
                               </button>
                             </div>
