@@ -126,15 +126,17 @@ export default function DeliveriesSection({
   const [printingDriverId, setPrintingDriverId] = useState<string | null>(null);
   const [printError, setPrintError] = useState<{ driverId: string; message: string } | null>(null);
 
-  // Modale d'aperçu d'impression des tickets thermiques 80 mm
+  // Modale d'aperçu d'impression (tickets 80 mm ou feuille de route A4)
   const [ticketPreviewModal, setTicketPreviewModal] = useState<{
     isOpen: boolean;
     driver: Driver | null;
     orders: Order[];
+    initialTab?: 'tickets' | 'route';
   }>({
     isOpen: false,
     driver: null,
     orders: [],
+    initialTab: 'tickets',
   });
 
   // État des livreurs chargés depuis Supabase
@@ -1168,30 +1170,12 @@ export default function DeliveriesSection({
   ) => {
     if (!driverOrders || driverOrders.length === 0) return;
 
-    if (type === 'tickets') {
-      setTicketPreviewModal({
-        isOpen: true,
-        driver,
-        orders: driverOrders,
-      });
-      return;
-    }
-
-    setPrintingDriverId(driver.id);
-    setPrintError(null);
-    try {
-      const orderIds = driverOrders.map((o) => o.id);
-      const itemsByOrder = await fetchOrderItemsForOrders(orderIds);
-      await generateRoutePdf(driver, driverOrders, itemsByOrder, business);
-    } catch (err: any) {
-      console.warn('Erreur génération impression:', err?.message || err);
-      setPrintError({
-        driverId: driver.id,
-        message: err?.message || 'Erreur lors de la génération du document.',
-      });
-    } finally {
-      setPrintingDriverId(null);
-    }
+    setTicketPreviewModal({
+      isOpen: true,
+      driver,
+      orders: driverOrders,
+      initialTab: type,
+    });
   };
 
   // Gestion formulaire livreur (Création / Modification)
@@ -3549,16 +3533,17 @@ export default function DeliveriesSection({
         </div>
       )}
 
-      {/* Modale d'aperçu d'impression des tickets thermiques 80 mm */}
+      {/* Modale d'aperçu d'impression (tickets 80 mm ou feuille de route A4) */}
       {ticketPreviewModal.isOpen && ticketPreviewModal.driver && (
         <PrintPreviewModal
           isOpen={ticketPreviewModal.isOpen}
           onClose={() =>
-            setTicketPreviewModal({ isOpen: false, driver: null, orders: [] })
+            setTicketPreviewModal({ isOpen: false, driver: null, orders: [], initialTab: 'tickets' })
           }
           driver={ticketPreviewModal.driver}
           orders={ticketPreviewModal.orders}
           business={business}
+          initialTab={ticketPreviewModal.initialTab || 'tickets'}
         />
       )}
     </div>

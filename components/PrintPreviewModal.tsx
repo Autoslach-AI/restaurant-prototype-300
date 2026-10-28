@@ -22,6 +22,7 @@ import { Business, Driver, Order, OrderItem } from '@/lib/types';
 import {
   generateTicketsPdf,
   generateRoutePdf,
+  buildRouteDoc,
   generateInvoicePdf,
   downloadInvoicePdf,
   InvoicePrintOptions,
@@ -210,6 +211,61 @@ export default function PrintPreviewModal({
     return activeOrders.reduce((sum, ord) => sum + (copiesByOrder[ord.id] || 1), 0);
   }, [activeOrders, copiesByOrder]);
 
+  // État du PDF de la feuille de route A4 pour l'aperçu en direct
+  const [routePdfUrl, setRoutePdfUrl] = useState<string | null>(null);
+  const [isGeneratingRoute, setIsGeneratingRoute] = useState<boolean>(false);
+
+  // Génération automatique et réactive de l'aperçu de la feuille de route A4
+  useEffect(() => {
+    if (!isOpen || activeDocTab !== 'route') return;
+    if (!driver || orders.length === 0) return;
+
+    if (activeOrders.length === 0) {
+      setRoutePdfUrl(null);
+      return;
+    }
+
+    let isCancelled = false;
+    setIsGeneratingRoute(true);
+    setErrorFeedback(null);
+
+    const timer = setTimeout(async () => {
+      try {
+        const doc = await buildRouteDoc(driver, activeOrders, itemsByOrder, business);
+        if (isCancelled) return;
+        const blob = doc.output('blob');
+        const url = URL.createObjectURL(blob);
+        setRoutePdfUrl((prev) => {
+          if (prev) URL.revokeObjectURL(prev);
+          return url;
+        });
+      } catch (err: any) {
+        if (!isCancelled) {
+          console.warn('Erreur génération aperçu feuille de route:', err);
+          setErrorFeedback(err?.message || 'Erreur lors de la génération de la feuille de route.');
+        }
+      } finally {
+        if (!isCancelled) {
+          setIsGeneratingRoute(false);
+        }
+      }
+    }, 100);
+
+    return () => {
+      isCancelled = true;
+      clearTimeout(timer);
+    };
+  }, [isOpen, activeDocTab, driver, activeOrders, itemsByOrder, business]);
+
+  // Libération de la mémoire de l'URL blob
+  useEffect(() => {
+    return () => {
+      if (routePdfUrl) {
+        URL.revokeObjectURL(routePdfUrl);
+      }
+    };
+  }, [routePdfUrl]);
+
   if (!isOpen) return null;
 
   // Toggle commande cochée / décochée (ses copies restent conservées dans copiesByOrder)
@@ -342,6 +398,42 @@ export default function PrintPreviewModal({
     }
   };
 
+  // Actions Feuille de route : Téléchargement direct ou Impression
+  const handleDownloadRoute = async () => {
+    if (!driver || activeOrders.length === 0) return;
+    setIsGeneratingPdf(true);
+    setErrorFeedback(null);
+    try {
+      const doc = await buildRouteDoc(driver, activeOrders, itemsByOrder, business);
+      const cleanDriver = (driver.name || 'livreur').toLowerCase().trim().replace(/[^a-z0-9]+/g, '_');
+      const now = new Date();
+      const yyyy = now.getFullYear();
+      const mm = String(now.getMonth() + 1).padStart(2, '0');
+      const dd = String(now.getDate()).padStart(2, '0');
+      const filename = `feuille_de_route_${cleanDriver}_${yyyy}-${mm}-${dd}.pdf`;
+      doc.save(filename);
+    } catch (err: any) {
+      console.error('Erreur téléchargement feuille de route:', err);
+      setErrorFeedback(err?.message || 'Erreur lors du téléchargement de la feuille de route.');
+    } finally {
+      setIsGeneratingPdf(false);
+    }
+  };
+
+  const handlePrintRoute = async () => {
+    if (!driver || activeOrders.length === 0) return;
+    setIsGeneratingPdf(true);
+    setErrorFeedback(null);
+    try {
+      await generateRoutePdf(driver, activeOrders, itemsByOrder, business);
+    } catch (err: any) {
+      console.error('Erreur impression feuille de route:', err);
+      setErrorFeedback(err?.message || 'Erreur lors de la génération de la feuille de route.');
+    } finally {
+      setIsGeneratingPdf(false);
+    }
+  };
+
   // Nom et téléphone de l'en-tête du ticket
   const legalName = business.config?.invoice?.legal_name || business.name;
   const businessPhone = business.config?.invoice?.phone || business.whatsapp_number;
@@ -411,22 +503,7 @@ export default function PrintPreviewModal({
                   </button>
                   <button
                     type="button"
-                    onClick={async () => {
-                      setActiveDocTab('route');
-                      setIsGeneratingPdf(true);
-                      try {
-                        await generateRoutePdf(
-                          driver,
-                          activeOrders.length > 0 ? activeOrders : orders,
-                          itemsByOrder,
-                          business
-                        );
-                      } catch (err: any) {
-                        setErrorFeedback(err?.message || 'Erreur lors de la génération de la feuille de route.');
-                      } finally {
-                        setIsGeneratingPdf(false);
-                      }
-                    }}
+                    onClick={() => setActiveDocTab('route')}
                     className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
                       activeDocTab === 'route'
                         ? 'bg-white text-[#1B4B4A] shadow-xs border border-[#E5DCD0]/60'
@@ -749,54 +826,56 @@ export default function PrintPreviewModal({
                 </span>
               </div>
 
-              {/* Champ « Copies pour tous » */}
-              <div className="p-2.5 rounded-xl bg-[#FAF7F2] border border-[#E5DCD0]/70 flex items-center justify-between gap-2 shadow-2xs">
-                <div className="min-w-0">
-                  <div className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
-                    <Copy className="w-3.5 h-3.5 text-[#1B4B4A]" />
-                    <span>Copies pour tous</span>
+              {/* Champ « Copies pour tous » (tickets thermiques uniquement) */}
+              {activeDocTab === 'tickets' && (
+                <div className="p-2.5 rounded-xl bg-[#FAF7F2] border border-[#E5DCD0]/70 flex items-center justify-between gap-2 shadow-2xs">
+                  <div className="min-w-0">
+                    <div className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
+                      <Copy className="w-3.5 h-3.5 text-[#1B4B4A]" />
+                      <span>Copies pour tous</span>
+                    </div>
+                    <div className="text-[10px] text-slate-500 truncate">
+                      Applique aux commandes cochées
+                    </div>
                   </div>
-                  <div className="text-[10px] text-slate-500 truncate">
-                    Applique aux commandes cochées
-                  </div>
-                </div>
 
-                {/* Stepper avec −, saisie directe (1-20), et + */}
-                <div className="flex items-center gap-1 bg-white px-1.5 py-0.5 rounded-lg border border-[#E5DCD0] shadow-2xs flex-shrink-0">
-                  <button
-                    type="button"
-                    onClick={() => handleApplyCopiesForAll(copiesForAll - 1)}
-                    disabled={copiesForAll <= 1}
-                    aria-label="Diminuer les copies pour tous"
-                    className="w-6 h-6 rounded flex items-center justify-center text-slate-600 hover:bg-[#FAF7F2] hover:text-slate-900 transition-colors disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
-                  >
-                    <Minus className="w-3 h-3" />
-                  </button>
-                  <input
-                    type="number"
-                    min={1}
-                    max={20}
-                    value={copiesForAll}
-                    onChange={(e) => {
-                      const val = parseInt(e.target.value, 10);
-                      if (!isNaN(val)) {
-                        handleApplyCopiesForAll(val);
-                      }
-                    }}
-                    aria-label="Nombre de copies pour toutes les commandes"
-                    className="w-8 text-center text-xs font-bold text-slate-800 focus:outline-hidden focus:ring-1 focus:ring-[#1B4B4A] py-0.5 border-0 bg-transparent [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => handleApplyCopiesForAll(copiesForAll + 1)}
-                    disabled={copiesForAll >= 20}
-                    aria-label="Augmenter les copies pour tous"
-                    className="w-6 h-6 rounded flex items-center justify-center text-slate-600 hover:bg-[#FAF7F2] hover:text-slate-900 transition-colors disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
-                  >
-                    <Plus className="w-3 h-3" />
-                  </button>
+                  {/* Stepper avec −, saisie directe (1-20), et + */}
+                  <div className="flex items-center gap-1 bg-white px-1.5 py-0.5 rounded-lg border border-[#E5DCD0] shadow-2xs flex-shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => handleApplyCopiesForAll(copiesForAll - 1)}
+                      disabled={copiesForAll <= 1}
+                      aria-label="Diminuer les copies pour tous"
+                      className="w-6 h-6 rounded flex items-center justify-center text-slate-600 hover:bg-[#FAF7F2] hover:text-slate-900 transition-colors disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
+                    >
+                      <Minus className="w-3 h-3" />
+                    </button>
+                    <input
+                      type="number"
+                      min={1}
+                      max={20}
+                      value={copiesForAll}
+                      onChange={(e) => {
+                        const val = parseInt(e.target.value, 10);
+                        if (!isNaN(val)) {
+                          handleApplyCopiesForAll(val);
+                        }
+                      }}
+                      aria-label="Nombre de copies pour toutes les commandes"
+                      className="w-8 text-center text-xs font-bold text-slate-800 focus:outline-hidden focus:ring-1 focus:ring-[#1B4B4A] py-0.5 border-0 bg-transparent [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => handleApplyCopiesForAll(copiesForAll + 1)}
+                      disabled={copiesForAll >= 20}
+                      aria-label="Augmenter les copies pour tous"
+                      className="w-6 h-6 rounded flex items-center justify-center text-slate-600 hover:bg-[#FAF7F2] hover:text-slate-900 transition-colors disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
+                    >
+                      <Plus className="w-3 h-3" />
+                    </button>
+                  </div>
                 </div>
-              </div>
+              )}
             </div>
 
             {/* Liste scrollable des commandes */}
@@ -878,56 +957,58 @@ export default function PrintPreviewModal({
                         </div>
                       </div>
 
-                      {/* Ligne inférieure : Contrôle Copies de la commande */}
-                      <div
-                        className="mt-2 pt-2 border-t border-[#E5DCD0]/40 flex items-center justify-between"
-                        onClick={(e) => e.stopPropagation()}
-                      >
-                        <div className="flex items-center gap-1 text-[11px] text-slate-500 font-medium">
-                          <span>Copies :</span>
-                          <span className="font-semibold text-slate-700">{copies}</span>
-                        </div>
+                      {/* Ligne inférieure : Contrôle Copies de la commande (tickets thermiques uniquement) */}
+                      {activeDocTab === 'tickets' && (
+                        <div
+                          className="mt-2 pt-2 border-t border-[#E5DCD0]/40 flex items-center justify-between"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <div className="flex items-center gap-1 text-[11px] text-slate-500 font-medium">
+                            <span>Copies :</span>
+                            <span className="font-semibold text-slate-700">{copies}</span>
+                          </div>
 
-                        {/* Champ Copies avec boutons − et + et saisie directe (1 à 20) */}
-                        <div className="flex items-center gap-1 bg-[#FAF7F2] px-1 py-0.5 rounded-lg border border-[#E5DCD0] shadow-2xs">
-                          <button
-                            type="button"
-                            onClick={() => updateOrderCopies(ord.id, copies - 1)}
-                            disabled={copies <= 1}
-                            aria-label={`Diminuer copies pour commande #${shortRef}`}
-                            className="w-5 h-5 rounded flex items-center justify-center text-slate-600 hover:bg-white hover:text-slate-900 transition-colors disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
-                          >
-                            <Minus className="w-2.5 h-2.5" />
-                          </button>
-                          <input
-                            type="number"
-                            min={1}
-                            max={20}
-                            value={copies}
-                            onChange={(e) => {
-                              const val = parseInt(e.target.value, 10);
-                              if (!isNaN(val)) {
-                                updateOrderCopies(ord.id, val);
-                              }
-                            }}
-                            onBlur={(e) => {
-                              const val = parseInt(e.target.value, 10);
-                              updateOrderCopies(ord.id, isNaN(val) ? 1 : val);
-                            }}
-                            aria-label={`Nombre de copies pour commande #${shortRef}`}
-                            className="w-7 text-center text-xs font-bold text-slate-800 focus:outline-hidden focus:ring-1 focus:ring-[#1B4B4A] py-0 border-0 bg-transparent [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
-                          />
-                          <button
-                            type="button"
-                            onClick={() => updateOrderCopies(ord.id, copies + 1)}
-                            disabled={copies >= 20}
-                            aria-label={`Augmenter copies pour commande #${shortRef}`}
-                            className="w-5 h-5 rounded flex items-center justify-center text-slate-600 hover:bg-white hover:text-slate-900 transition-colors disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
-                          >
-                            <Plus className="w-2.5 h-2.5" />
-                          </button>
+                          {/* Champ Copies avec boutons − et + et saisie directe (1 à 20) */}
+                          <div className="flex items-center gap-1 bg-[#FAF7F2] px-1 py-0.5 rounded-lg border border-[#E5DCD0] shadow-2xs">
+                            <button
+                              type="button"
+                              onClick={() => updateOrderCopies(ord.id, copies - 1)}
+                              disabled={copies <= 1}
+                              aria-label={`Diminuer copies pour commande #${shortRef}`}
+                              className="w-5 h-5 rounded flex items-center justify-center text-slate-600 hover:bg-white hover:text-slate-900 transition-colors disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
+                            >
+                              <Minus className="w-2.5 h-2.5" />
+                            </button>
+                            <input
+                              type="number"
+                              min={1}
+                              max={20}
+                              value={copies}
+                              onChange={(e) => {
+                                const val = parseInt(e.target.value, 10);
+                                if (!isNaN(val)) {
+                                  updateOrderCopies(ord.id, val);
+                                }
+                              }}
+                              onBlur={(e) => {
+                                const val = parseInt(e.target.value, 10);
+                                updateOrderCopies(ord.id, isNaN(val) ? 1 : val);
+                              }}
+                              aria-label={`Nombre de copies pour commande #${shortRef}`}
+                              className="w-7 text-center text-xs font-bold text-slate-800 focus:outline-hidden focus:ring-1 focus:ring-[#1B4B4A] py-0 border-0 bg-transparent [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => updateOrderCopies(ord.id, copies + 1)}
+                              disabled={copies >= 20}
+                              aria-label={`Augmenter copies pour commande #${shortRef}`}
+                              className="w-5 h-5 rounded flex items-center justify-center text-slate-600 hover:bg-white hover:text-slate-900 transition-colors disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
+                            >
+                              <Plus className="w-2.5 h-2.5" />
+                            </button>
+                          </div>
                         </div>
-                      </div>
+                      )}
                     </div>
                   );
                 })
@@ -936,17 +1017,29 @@ export default function PrintPreviewModal({
 
             {/* ========================================================= */}
             {/* RÉSUMÉ EN PIED DE COLONNE GAUCHE                           */}
-            {/* Format exact demandé : « n tickets · n copies au total »  */}
             {/* ========================================================= */}
             <div className="p-3 border-t border-[#E5DCD0] bg-[#FFFDF9] flex-shrink-0 flex items-center justify-between">
               <div className="text-xs font-bold text-[#1B4B4A] flex items-center gap-1.5">
-                <Receipt className="w-4 h-4 text-[#1B4B4A]" />
-                <span>
-                  {checkedCount} ticket{checkedCount > 1 ? 's' : ''} · {totalCopies} copie
-                  {totalCopies > 1 ? 's' : ''} au total
-                </span>
+                {activeDocTab === 'route' ? (
+                  <>
+                    <FileText className="w-4 h-4 text-[#1B4B4A]" />
+                    <span>
+                      {checkedCount} commande{checkedCount > 1 ? 's' : ''} sur la feuille
+                    </span>
+                  </>
+                ) : (
+                  <>
+                    <Receipt className="w-4 h-4 text-[#1B4B4A]" />
+                    <span>
+                      {checkedCount} ticket{checkedCount > 1 ? 's' : ''} · {totalCopies} copie
+                      {totalCopies > 1 ? 's' : ''} au total
+                    </span>
+                  </>
+                )}
               </div>
-              <div className="text-[10px] text-slate-400">80 mm thermique</div>
+              <div className="text-[10px] text-slate-400">
+                {activeDocTab === 'route' ? 'A4 portrait' : '80 mm thermique'}
+              </div>
             </div>
           </div>
         )}
@@ -1203,6 +1296,52 @@ export default function PrintPreviewModal({
               )}
             </div>
           </div>
+        ) : activeDocTab === 'route' ? (
+          <div className="flex-1 flex flex-col h-full overflow-hidden min-w-0">
+            {/* Barre d'état de l'aperçu */}
+            <div className="px-5 py-2.5 bg-white border-b border-[#E5DCD0] flex items-center justify-between text-xs text-slate-600 flex-shrink-0">
+              <div className="flex items-center gap-2">
+                <span className="font-semibold text-slate-800">Aperçu en direct</span>
+                <span className="text-slate-400">•</span>
+                <span>
+                  Feuille de route ({activeOrders.length} arrêt{activeOrders.length > 1 ? 's' : ''})
+                </span>
+                {(isGeneratingRoute || isLoadingItems) && (
+                  <span className="inline-flex items-center gap-1 text-[11px] text-slate-400 ml-2">
+                    <Loader2 className="w-3 h-3 animate-spin" />
+                    Génération de l&apos;aperçu…
+                  </span>
+                )}
+              </div>
+              <div className="text-[11px] text-slate-400 hidden sm:block">
+                Format standard A4 (210 × 297 mm) · Marges 14 mm
+              </div>
+            </div>
+
+            {/* Conteneur de l'aperçu PDF */}
+            <div className="flex-1 overflow-hidden p-3 sm:p-5 bg-[#FAF7F2] flex flex-col items-center justify-center">
+              {activeOrders.length === 0 ? (
+                <div className="my-auto text-center p-8 max-w-sm rounded-2xl bg-white border border-[#E5DCD0] shadow-xs">
+                  <FileText className="w-10 h-10 text-slate-300 mx-auto mb-3" />
+                  <div className="text-sm font-bold text-slate-700">Aucune commande sélectionnée</div>
+                  <p className="text-xs text-slate-500 mt-1">
+                    Cochez au moins une commande dans la colonne de gauche pour inclure ses arrêts dans la feuille de route.
+                  </p>
+                </div>
+              ) : routePdfUrl ? (
+                <iframe
+                  src={`${routePdfUrl}#toolbar=0&navpanes=0`}
+                  className="w-full h-full rounded-xl border border-[#E5DCD0] shadow-md bg-white"
+                  title="Aperçu de la feuille de route A4"
+                />
+              ) : (
+                <div className="my-auto text-center p-8 max-w-sm rounded-2xl bg-white border border-[#E5DCD0] shadow-xs">
+                  <Loader2 className="w-8 h-8 animate-spin text-[#1B4B4A] mx-auto mb-3" />
+                  <div className="text-sm font-bold text-slate-700">Génération de la feuille de route…</div>
+                </div>
+              )}
+            </div>
+          </div>
         ) : (
           <div className="flex-1 flex flex-col h-full overflow-hidden min-w-0">
             
@@ -1454,6 +1593,58 @@ export default function PrintPreviewModal({
                 disabled={isGeneratingPdf || orders.length === 0}
                 className="inline-flex items-center gap-2 px-5 py-2 rounded-xl bg-[#1B4B4A] hover:bg-[#153B3A] text-white text-xs font-bold transition-all shadow-sm cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                 title="Imprimer ou ouvrir la facture"
+              >
+                {isGeneratingPdf ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    <span>Génération…</span>
+                  </>
+                ) : (
+                  <>
+                    <Printer className="w-4 h-4" />
+                    <span>Imprimer</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        ) : activeDocTab === 'route' ? (
+          <div className="px-5 py-3 border-t border-[#E5DCD0] bg-white flex flex-col sm:flex-row items-center justify-between gap-3 flex-shrink-0">
+            <div className="flex items-center gap-2 text-xs text-slate-600">
+              {errorFeedback ? (
+                <span className="text-red-600 font-medium">{errorFeedback}</span>
+              ) : (
+                <span className="text-slate-500">
+                  Feuille de route prête pour {activeOrders.length} arrêt{activeOrders.length > 1 ? 's' : ''} (format A4).
+                </span>
+              )}
+            </div>
+
+            <div className="flex items-center gap-2.5 w-full sm:w-auto justify-end">
+              <button
+                type="button"
+                onClick={onClose}
+                disabled={isGeneratingPdf}
+                className="px-4 py-2 rounded-xl border border-[#E5DCD0] bg-white text-xs font-semibold text-slate-700 hover:bg-[#FAF7F2] transition-colors cursor-pointer disabled:opacity-50"
+              >
+                Retour
+              </button>
+              <button
+                type="button"
+                onClick={handleDownloadRoute}
+                disabled={isGeneratingPdf || activeOrders.length === 0}
+                className="inline-flex items-center gap-2 px-4 py-2 rounded-xl border border-[#1B4B4A] bg-white text-[#1B4B4A] hover:bg-[#1B4B4A]/5 text-xs font-bold transition-all shadow-xs cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                title="Télécharger la feuille de route PDF"
+              >
+                <Download className="w-4 h-4" />
+                <span>Télécharger</span>
+              </button>
+              <button
+                type="button"
+                onClick={handlePrintRoute}
+                disabled={isGeneratingPdf || activeOrders.length === 0}
+                className="inline-flex items-center gap-2 px-5 py-2 rounded-xl bg-[#1B4B4A] hover:bg-[#153B3A] text-white text-xs font-bold transition-all shadow-sm cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                title="Imprimer ou ouvrir la feuille de route"
               >
                 {isGeneratingPdf ? (
                   <>
