@@ -32,7 +32,7 @@ import {
   AlertTriangle,
   ArrowLeft,
 } from 'lucide-react';
-import { Order, OrderStatus, Business, Staff, Driver } from '@/lib/types';
+import { Order, OrderStatus, Business, Staff, Driver, OrderItem } from '@/lib/types';
 import {
   fetchDrivers,
   insertDriver,
@@ -138,6 +138,10 @@ export default function DeliveriesSection({
     orders: [],
     initialTab: 'tickets',
   });
+
+  // Modale d'aperçu d'impression de Facture (A4) pour une commande individuelle
+  const [invoiceModalOrder, setInvoiceModalOrder] = useState<Order | null>(null);
+  const [invoiceItemsByOrder, setInvoiceItemsByOrder] = useState<Record<string, OrderItem[]>>({});
 
   // État des livreurs chargés depuis Supabase
   const [drivers, setDrivers] = useState<Driver[]>([]);
@@ -1176,6 +1180,37 @@ export default function DeliveriesSection({
       orders: driverOrders,
       initialTab: type,
     });
+  };
+
+  // Ouverture du modal de Facture (A4) pour une commande individuelle
+  const handleOpenOrderInvoice = async (order: Order) => {
+    // Si la commande contient déjà ses articles
+    if (order.items && order.items.length > 0) {
+      setInvoiceItemsByOrder((prev) => ({ ...prev, [order.id]: order.items || [] }));
+      setInvoiceModalOrder(order);
+      return;
+    }
+
+    if (invoiceItemsByOrder[order.id] && invoiceItemsByOrder[order.id].length > 0) {
+      setInvoiceModalOrder(order);
+      return;
+    }
+
+    try {
+      const fetched = await fetchOrderItemsForOrders([order.id]);
+      setInvoiceItemsByOrder((prev) => ({ ...prev, ...fetched }));
+      const orderWithItems: Order = {
+        ...order,
+        items: fetched[order.id] || order.items || [],
+      };
+      setInvoiceModalOrder(orderWithItems);
+    } catch (err: any) {
+      console.warn('Erreur chargement articles pour facture:', err);
+      setBannerMessage({
+        type: 'error',
+        text: `Impossible de charger les articles de la commande #${getOrderShortRef(order)} : ${err?.message || 'Erreur réseau'}`,
+      });
+    }
   };
 
   // Gestion formulaire livreur (Création / Modification)
@@ -2791,6 +2826,20 @@ export default function DeliveriesSection({
                     <span className="truncate">Marquer livrée</span>
                   </button>
 
+                  {/* Facture */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const targetOrder = orderMenu.order;
+                      setOrderMenu(null);
+                      handleOpenOrderInvoice(targetOrder);
+                    }}
+                    className="w-full h-8 px-2 text-left text-[12px] font-medium text-slate-800 hover:text-[#1B4B4A] hover:bg-[#FAF7F2] rounded-lg flex items-center gap-2 transition-colors cursor-pointer"
+                  >
+                    <FileText className="w-3.5 h-3.5 text-[#1B4B4A] shrink-0" />
+                    <span className="truncate">Facture</span>
+                  </button>
+
                   {/* 2. Réassigner… (chevron à droite) */}
                   <button
                     type="button"
@@ -3544,6 +3593,18 @@ export default function DeliveriesSection({
           orders={ticketPreviewModal.orders}
           business={business}
           initialTab={ticketPreviewModal.initialTab || 'tickets'}
+        />
+      )}
+
+      {/* Modal d'aperçu d'impression / Facture */}
+      {invoiceModalOrder && (
+        <PrintPreviewModal
+          isOpen={Boolean(invoiceModalOrder)}
+          onClose={() => setInvoiceModalOrder(null)}
+          orders={[invoiceModalOrder]}
+          business={business}
+          initialTab="invoice"
+          initialItemsByOrder={invoiceItemsByOrder}
         />
       )}
     </div>
