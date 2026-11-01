@@ -2191,6 +2191,18 @@ export async function updateOrderStatus(
   const isDelivered = newStatus === 'delivered';
   const deliveredAtValue = isDelivered ? now : null;
 
+  const updatePayload: Record<string, any> = {
+    status: newStatus,
+    delivered_at: deliveredAtValue,
+    updated_at: now,
+  };
+
+  if (newStatus === 'ready') {
+    updatePayload.ready_at = now;
+  } else if (newStatus === 'pending' || newStatus === 'confirmed') {
+    updatePayload.ready_at = null;
+  }
+
   const hasCredentials =
     Boolean(process.env.NEXT_PUBLIC_SUPABASE_URL?.trim()) &&
     Boolean(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY?.trim());
@@ -2201,6 +2213,11 @@ export async function updateOrderStatus(
       order.status = newStatus as OrderStatus;
       order.delivered_at = deliveredAtValue;
       order.updated_at = now;
+      if (newStatus === 'ready') {
+        order.ready_at = now;
+      } else if (newStatus === 'pending' || newStatus === 'confirmed') {
+        order.ready_at = null;
+      }
       store.notify();
     }
     return { success: true };
@@ -2210,11 +2227,7 @@ export async function updateOrderStatus(
     const client = getSupabase();
     const { data: updatedRows, error } = await (client as any)
       .from('platform_orders')
-      .update({
-        status: newStatus,
-        delivered_at: deliveredAtValue,
-        updated_at: now,
-      })
+      .update(updatePayload)
       .eq('id', orderId)
       .select();
 
@@ -2233,6 +2246,11 @@ export async function updateOrderStatus(
       order.status = newStatus as OrderStatus;
       order.delivered_at = deliveredAtValue;
       order.updated_at = now;
+      if (newStatus === 'ready') {
+        order.ready_at = now;
+      } else if (newStatus === 'pending' || newStatus === 'confirmed') {
+        order.ready_at = null;
+      }
       store.notify();
     }
 

@@ -1254,7 +1254,7 @@ export default function MerchantDashboard({
                   <span className="ml-2 px-2.5 py-0.5 rounded-full bg-[#FCECEB] text-[#A63A2F] text-[10px] font-black uppercase border border-[#A63A2F]/30">
                     Alerte : {
                       alertCategoryFilter === 'urgent_undelivered'
-                        ? 'Urgent non livrée'
+                        ? 'Commande urgente en attente'
                         : 'Prête (+45m)'
                     }
                   </span>

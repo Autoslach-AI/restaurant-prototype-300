@@ -8,6 +8,7 @@ import {
   X,
   FileText,
   Loader2,
+  Clock,
 } from 'lucide-react';
 import { Order, OrderStatus, Customer, Business, Driver } from '@/lib/types';
 import { getOrderStatusLabel } from '@/lib/order-status';
@@ -672,6 +673,46 @@ export default function OrdersSection({
                                 {ord.cancellation_reason}
                               </div>
                             )}
+
+                            {/* Pastille de temps d'attente pour le statut Prête */}
+                            {(() => {
+                              if (ord.status !== 'ready') return null;
+                              const departureStr = ord.ready_at || ord.updated_at || ord.created_at;
+                              if (!departureStr) return null;
+                              const departureTimeMs = new Date(departureStr).getTime();
+                              const elapsedMs = Math.max(0, nowMs - departureTimeMs);
+                              const elapsedMinutes = Math.floor(elapsedMs / (60 * 1000));
+                              const thresholdMinutes = business.config?.wait_alert_minutes ?? 15;
+                              if (elapsedMinutes < thresholdMinutes) return null;
+
+                              let timeLabel = '';
+                              if (elapsedMinutes < 60) {
+                                timeLabel = `${elapsedMinutes} min`;
+                              } else if (elapsedMinutes < 1440) {
+                                const hours = Math.floor(elapsedMinutes / 60);
+                                const mins = elapsedMinutes % 60;
+                                timeLabel = `${hours} h ${String(mins).padStart(2, '0')}`;
+                              } else {
+                                const days = Math.floor(elapsedMinutes / 1440);
+                                const remHours = Math.floor((elapsedMinutes % 1440) / 60);
+                                timeLabel = `${days} j ${remHours} h`;
+                              }
+
+                              const isOverTwoHours = elapsedMinutes >= 120;
+                              const badgeStyle = isOverTwoHours
+                                ? 'bg-rose-50 text-rose-700 border-rose-300'
+                                : 'bg-amber-50 text-amber-800 border-amber-300';
+
+                              return (
+                                <div
+                                  className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold border ${badgeStyle}`}
+                                  title={`En attente depuis ${timeLabel}`}
+                                >
+                                  <Clock className="w-3 h-3 shrink-0" />
+                                  <span>{timeLabel}</span>
+                                </div>
+                              );
+                            })()}
                           </td>
 
                           {/* Livreur */}

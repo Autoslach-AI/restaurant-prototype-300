@@ -32,6 +32,7 @@ export interface BusinessConfig {
     logo_url?: string;
     footer_text?: string;
   };
+  wait_alert_minutes?: number;
 }
 
 export interface Business {
@@ -225,6 +226,7 @@ export interface Order {
   urgent_surcharge_applied?: number | null;
   requested_delivery_time?: string | null; // Heure ou créneau souhaité par le client
   delivered_at?: string | null; // Timestamp de livraison effective
+  ready_at?: string | null; // Timestamp de passage au statut Prête
 
   // Included fields for convenience in UI
   customer_name?: string;

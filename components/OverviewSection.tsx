@@ -93,7 +93,7 @@ export default function OverviewSection({
     },
     {
       id: 'urgent_undelivered' as const,
-      title: 'Commande urgente non livrée',
+      title: 'Commande urgente en attente',
       count: urgentUndelivered.length,
       rank: 2,
       activeColorClass: 'bg-[#FCECEB] hover:bg-[#FCECEB]/80 border-[#A63A2F]/30 text-[#A63A2F] font-black',

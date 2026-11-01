@@ -405,6 +405,11 @@ export class AppStore {
     order.status = status;
     order.delivered_at = status === 'delivered' ? now : null;
     order.updated_at = now;
+    if (status === 'ready') {
+      order.ready_at = now;
+    } else if (status === 'pending' || status === 'confirmed') {
+      order.ready_at = null;
+    }
 
     const activeBiz = this.businesses.find((b) => b.id === order.business_id) || this.getActiveBusiness();
 
