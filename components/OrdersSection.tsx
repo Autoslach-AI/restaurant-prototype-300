@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import { Order, OrderStatus, Customer, Business, Driver } from '@/lib/types';
 import { getOrderStatusLabel } from '@/lib/order-status';
+import { getWaitThresholdMinutes, getReadySinceMs, formatWaitDuration } from '@/lib/wait-alert';
 import { fetchOrderItemsForOrders } from '@/lib/supabase';
 import PrintPreviewModal from '@/components/PrintPreviewModal';
 
@@ -167,8 +168,9 @@ export default function OrdersSection({
     } else if (alertCategoryFilter === 'preparing_45m') {
       if ((o.priority_level || '').toLowerCase() === 'urgent') return false;
       if (o.status !== 'ready') return false;
-      const startTime = new Date(o.updated_at || o.created_at).getTime();
-      if (nowMs - startTime < 45 * 60 * 1000) return false;
+      const startTime = getReadySinceMs(o);
+      const waitThresholdMs = getWaitThresholdMinutes(business) * 60 * 1000;
+      if (nowMs - startTime < waitThresholdMs) return false;
     } else if (alertCategoryFilter === 'new_orders') {
       if ((o.priority_level || '').toLowerCase() === 'urgent') return false;
       if (o.status !== 'pending' && o.status !== 'confirmed') return false;
@@ -677,27 +679,14 @@ export default function OrdersSection({
                             {/* Pastille de temps d'attente pour le statut Prête */}
                             {(() => {
                               if (ord.status !== 'ready') return null;
-                              const departureStr = ord.ready_at || ord.updated_at || ord.created_at;
-                              if (!departureStr) return null;
-                              const departureTimeMs = new Date(departureStr).getTime();
+                              const departureTimeMs = getReadySinceMs(ord);
+                              if (!departureTimeMs) return null;
                               const elapsedMs = Math.max(0, nowMs - departureTimeMs);
                               const elapsedMinutes = Math.floor(elapsedMs / (60 * 1000));
-                              const thresholdMinutes = business.config?.wait_alert_minutes ?? 15;
+                              const thresholdMinutes = getWaitThresholdMinutes(business);
                               if (elapsedMinutes < thresholdMinutes) return null;
 
-                              let timeLabel = '';
-                              if (elapsedMinutes < 60) {
-                                timeLabel = `${elapsedMinutes} min`;
-                              } else if (elapsedMinutes < 1440) {
-                                const hours = Math.floor(elapsedMinutes / 60);
-                                const mins = elapsedMinutes % 60;
-                                timeLabel = `${hours} h ${String(mins).padStart(2, '0')}`;
-                              } else {
-                                const days = Math.floor(elapsedMinutes / 1440);
-                                const remHours = Math.floor((elapsedMinutes % 1440) / 60);
-                                timeLabel = `${days} j ${remHours} h`;
-                              }
-
+                              const timeLabel = formatWaitDuration(elapsedMinutes);
                               const isOverTwoHours = elapsedMinutes >= 120;
                               const badgeStyle = isOverTwoHours
                                 ? 'bg-rose-50 text-rose-700 border-rose-300'

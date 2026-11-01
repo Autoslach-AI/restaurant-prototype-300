@@ -109,6 +109,7 @@ import {
   Driver,
 } from '@/lib/types';
 import { getOrderStatusLabel } from '@/lib/order-status';
+import { getWaitThresholdMinutes, getReadySinceMs, formatWaitDuration } from '@/lib/wait-alert';
 import { getStore } from '@/lib/store';
 import PeriodFilter from '@/components/ui/period-filter';
 import ConversionDetailSection from '@/components/ui/conversion-detail-section';
@@ -221,12 +222,15 @@ export default function MerchantDashboard({
       };
     }
 
-    if (ord.status === 'ready' && nowMs - startTime >= 45 * 60 * 1000) {
-      const minutes = Math.floor((nowMs - startTime) / 60000);
+    const waitThresholdMs = getWaitThresholdMinutes(business) * 60 * 1000;
+    const readySince = getReadySinceMs(ord);
+    if (ord.status === 'ready' && nowMs - readySince >= waitThresholdMs) {
+      const elapsedMinutes = Math.floor(Math.max(0, nowMs - readySince) / 60000);
+      const waitStr = formatWaitDuration(elapsedMinutes);
       return {
         type: 'preparing_45m',
-        title: '⏳ Prête depuis +45 min, non livrée',
-        description: `Prête depuis ${minutes} minute${minutes > 1 ? 's' : ''}, non livrée. Risque d'insatisfaction client.`,
+        title: '⏳ Prête, en attente',
+        description: `Prête depuis ${waitStr}. Risque d'attente prolongée.`,
         badgeClass: 'bg-orange-50 text-orange-900 border-orange-300',
         iconClass: 'text-orange-600',
       };
@@ -701,12 +705,13 @@ export default function MerchantDashboard({
     return (o.priority_level || '').toLowerCase() === 'urgent';
   });
 
-  // 2. Commandes prêtes depuis plus de 45 minutes non livrées (status = ready, hors urgentes, mesuré depuis la date de mise à jour)
+  // 2. Commandes prêtes en attente (status = ready, hors urgentes, mesuré selon le seuil configuré)
+  const waitThresholdMs = getWaitThresholdMinutes(business) * 60 * 1000;
   const preparingOver45Min = businessOrders.filter((o) => {
     if ((o.priority_level || '').toLowerCase() === 'urgent') return false;
     if (o.status !== 'ready') return false;
-    const startTime = new Date(o.updated_at || o.created_at).getTime();
-    return nowMs - startTime >= 45 * 60 * 1000;
+    const startTime = getReadySinceMs(o);
+    return nowMs - startTime >= waitThresholdMs;
   });
 
   // 3. Nouvelles commandes récemment créées (<= 30 min, statut pending ou confirmed, hors urgentes)
@@ -1255,7 +1260,7 @@ export default function MerchantDashboard({
                     Alerte : {
                       alertCategoryFilter === 'urgent_undelivered'
                         ? 'Commande urgente en attente'
-                        : 'Prête (+45m)'
+                        : 'Prête, en attente'
                     }
                   </span>
                 )}

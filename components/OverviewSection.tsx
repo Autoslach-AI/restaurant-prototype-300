@@ -23,6 +23,7 @@ import {
 } from 'recharts';
 import { Business, Order, Customer, AgentEvent } from '@/lib/types';
 import { getOrderStatusLabel } from '@/lib/order-status';
+import { getReadySinceMs, formatWaitDuration } from '@/lib/wait-alert';
 
 export interface OverviewSectionProps {
   business: Business;
@@ -101,13 +102,28 @@ export default function OverviewSection({
     },
     {
       id: 'preparing_45m' as const,
-      title: 'Prête depuis +45 min, non livrée',
+      title: 'Prête, en attente',
       count: preparingOver45Min.length,
       rank: 3,
       activeColorClass: 'bg-[#FBF4E8] hover:bg-[#FBF4E8]/80 border-[#C88A2E]/30 text-[#C88A2E] font-black',
       activeBadgeClass: 'bg-[#C88A2E] text-white font-extrabold',
     },
   ];
+
+  // Durée d'attente de la plus ancienne commande prête
+  const oldestReadyWaitText = useMemo(() => {
+    if (!preparingOver45Min || preparingOver45Min.length === 0) return null;
+    let maxElapsedMs = 0;
+    for (const ord of preparingOver45Min) {
+      const startMs = getReadySinceMs(ord);
+      const elapsed = Math.max(0, nowMs - startMs);
+      if (elapsed > maxElapsedMs) {
+        maxElapsedMs = elapsed;
+      }
+    }
+    const elapsedMinutes = Math.floor(maxElapsedMs / 60000);
+    return formatWaitDuration(elapsedMinutes);
+  }, [preparingOver45Min, nowMs]);
 
   // Today and Yesterday Timestamps
   const currentDateObj = new Date(nowMs);
@@ -394,8 +410,13 @@ export default function OverviewSection({
                       }`}
                       title={`Cliquer pour filtrer les commandes : ${cat.title}`}
                     >
-                      <div className="flex items-center min-w-0 pr-1">
+                      <div className="flex flex-col min-w-0 pr-1">
                         <span className="text-xs font-bold leading-tight">{cat.title}</span>
+                        {cat.id === 'preparing_45m' && cat.count > 0 && oldestReadyWaitText && (
+                          <span className="text-[10px] font-medium opacity-80 mt-0.5">
+                            la plus ancienne : {oldestReadyWaitText}
+                          </span>
+                        )}
                       </div>
                       <span
                         className={`px-2 py-0.5 rounded-full text-[10px] min-w-[20px] text-center ml-1.5 shrink-0 ${
