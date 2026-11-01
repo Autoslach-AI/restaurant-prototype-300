@@ -67,6 +67,7 @@ export interface Product {
   image_url: string;
   available: boolean;
   stock_qty: number | null; // null = stock illimité / non suivi
+  daily_limit?: number | null; // null ou absent = illimité.
 }
 
 export interface Customer {

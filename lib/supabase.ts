@@ -988,6 +988,7 @@ export async function insertProduct(data: {
   image_url?: string;
   available?: boolean;
   stock_qty?: number | null;
+  daily_limit?: number | null;
 }): Promise<{ success: boolean; product?: Product; error?: string }> {
   const store = getStore();
   const newId = `prod_${typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : Date.now()}`;
@@ -1004,6 +1005,7 @@ export async function insertProduct(data: {
       'https://images.unsplash.com/photo-1546069901-ba9599a7e63c?auto=format&fit=crop&w=600&q=80',
     available: data.available !== undefined ? data.available : true,
     stock_qty: data.stock_qty !== undefined ? data.stock_qty : null,
+    daily_limit: data.daily_limit !== undefined ? data.daily_limit : null,
   };
 
   const hasCredentials =

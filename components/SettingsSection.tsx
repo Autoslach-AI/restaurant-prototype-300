@@ -1,20 +1,33 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
+  AlertCircle,
+  Archive,
+  ArrowLeft,
   Check,
+  ChevronLeft,
+  ChevronRight,
   CreditCard,
   Edit2,
   Eye,
   EyeOff,
+  FileText,
+  Gauge,
   Info,
   Loader2,
+  MapPin,
+  Phone,
   Plus,
+  RefreshCw,
+  RotateCcw,
   ShieldCheck,
+  Sliders,
   Trash2,
   Truck,
   Upload,
   UserPlus,
+  Users,
   X,
 } from 'lucide-react';
 import {
@@ -25,14 +38,22 @@ import {
   deleteDeliveryZone,
   uploadInvoiceLogo,
   updateBusinessConfig,
+  fetchDrivers,
+  setDriverActive,
+  fetchOrderItemsForOrders,
+  updateProduct,
 } from '@/lib/supabase';
 import { getStore } from '@/lib/store';
-import { Business, Staff, StaffPermissions, Order, DeliveryZone } from '@/lib/types';
+import { Business, Staff, StaffPermissions, Order, DeliveryZone, Driver, Product, Category } from '@/lib/types';
+import DriverFormModal from './DriverFormModal';
 
 export interface SettingsSectionProps {
+  onBack?: () => void;
   business: Business;
   activeStaff: Staff;
   businessOrders: Order[];
+  products?: Product[];
+  categories?: Category[];
   onProcessPayment: (orderId: string, paymentRef: string) => void;
   businessStaff: Staff[];
   staffTab: 'active' | 'revoked';
@@ -75,9 +96,12 @@ export interface SettingsSectionProps {
 }
 
 export default function SettingsSection({
+  onBack,
   business,
   activeStaff,
   businessOrders,
+  products = [],
+  categories = [],
   onProcessPayment,
   businessStaff,
   staffTab,
@@ -121,6 +145,156 @@ export default function SettingsSection({
   const store = getStore();
 
   // Category A States: local to Settings only
+  const [activeSettingsSection, setActiveSettingsSection] = useState<'general' | 'invoice' | 'delivery' | 'payment' | 'team' | 'capacity'>('general');
+  const [isSettingsRibbonCollapsed, setIsSettingsRibbonCollapsed] = useState<boolean>(false);
+
+  // États pour la section Capacité
+  const [capacityProducts, setCapacityProducts] = useState<Product[]>(products);
+  const [limitInputs, setLimitInputs] = useState<Record<string, string>>({});
+  const [rowErrors, setRowErrors] = useState<Record<string, string | null>>({});
+  const [rowSuccess, setRowSuccess] = useState<Record<string, string | null>>({});
+  const [rowSaving, setRowSaving] = useState<Record<string, boolean>>({});
+
+  // Suivi des ventes du jour (ord.items)
+  const [soldTodayMap, setSoldTodayMap] = useState<Record<string, number>>({});
+  const [isSoldLoading, setIsSoldLoading] = useState<boolean>(false);
+  const [soldError, setSoldError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setCapacityProducts(products);
+  }, [products]);
+
+  const loadTodaySales = async () => {
+    setIsSoldLoading(true);
+    setSoldError(null);
+    try {
+      const now = new Date();
+      const startOfTodayMs = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+
+      const todayActiveOrderIds = businessOrders
+        .filter((o) => {
+          if (o.status === 'cancelled') return false;
+          const t = new Date(o.created_at).getTime();
+          return !isNaN(t) && t >= startOfTodayMs;
+        })
+        .map((o) => o.id);
+
+      if (todayActiveOrderIds.length === 0) {
+        setSoldTodayMap({});
+        setIsSoldLoading(false);
+        return;
+      }
+
+      const itemsByOrder = await fetchOrderItemsForOrders(todayActiveOrderIds);
+      const counts: Record<string, number> = {};
+      for (const items of Object.values(itemsByOrder)) {
+        for (const item of items) {
+          if (item.product_id) {
+            counts[item.product_id] = (counts[item.product_id] || 0) + Number(item.quantity || 0);
+          }
+        }
+      }
+      setSoldTodayMap(counts);
+    } catch (err: any) {
+      console.warn('Erreur chargement articles du jour pour capacité:', err);
+      setSoldError(err?.message || 'Erreur lors du calcul des ventes du jour.');
+    } finally {
+      setIsSoldLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (activeSettingsSection === 'capacity') {
+      loadTodaySales();
+    }
+  }, [activeSettingsSection]);
+
+  const categoryMap = useMemo(() => {
+    return new Map((categories || []).map((c) => [c.id, c.name]));
+  }, [categories]);
+
+  const handleSaveProductDailyLimit = async (product: Product) => {
+    const rawVal = (limitInputs[product.id] !== undefined
+      ? limitInputs[product.id]
+      : (product.daily_limit !== null && product.daily_limit !== undefined ? String(product.daily_limit) : '')
+    ).trim();
+
+    let newLimit: number | null = null;
+    if (rawVal !== '') {
+      if (!/^\d+$/.test(rawVal)) {
+        setRowErrors((prev) => ({
+          ...prev,
+          [product.id]: 'La limite doit être un entier strict (pas de décimales, virgules ou symboles).',
+        }));
+        setRowSuccess((prev) => ({ ...prev, [product.id]: null }));
+        return;
+      }
+      const parsed = Number(rawVal);
+      if (!Number.isInteger(parsed) || parsed < 1) {
+        setRowErrors((prev) => ({
+          ...prev,
+          [product.id]: 'La limite doit être un entier supérieur ou égal à 1 (ou vide pour illimité).',
+        }));
+        setRowSuccess((prev) => ({ ...prev, [product.id]: null }));
+        return;
+      }
+      newLimit = parsed;
+    }
+
+    setRowSaving((prev) => ({ ...prev, [product.id]: true }));
+    setRowErrors((prev) => ({ ...prev, [product.id]: null }));
+    setRowSuccess((prev) => ({ ...prev, [product.id]: null }));
+
+    try {
+      const res = await updateProduct(product.id, { daily_limit: newLimit });
+      if (res.success && res.product) {
+        setCapacityProducts((prev) =>
+          prev.map((p) => (p.id === product.id ? { ...p, daily_limit: newLimit } : p))
+        );
+        setRowSuccess((prev) => ({
+          ...prev,
+          [product.id]: newLimit === null ? 'Limite retirée (illimité).' : `Limite fixée à ${newLimit} / jour.`,
+        }));
+        setLimitInputs((prev) => ({ ...prev, [product.id]: newLimit === null ? '' : String(newLimit) }));
+      } else {
+        setRowErrors((prev) => ({
+          ...prev,
+          [product.id]: res.error || "Échec de l'enregistrement de la limite.",
+        }));
+      }
+    } catch (err: any) {
+      setRowErrors((prev) => ({
+        ...prev,
+        [product.id]: err?.message || 'Erreur inattendue de connexion.',
+      }));
+    } finally {
+      setRowSaving((prev) => ({ ...prev, [product.id]: false }));
+    }
+  };
+
+  useEffect(() => {
+    try {
+      const stored = localStorage.getItem('platform_settings_ribbon_collapsed');
+      if (stored === 'true') {
+        setIsSettingsRibbonCollapsed(true);
+      }
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  const toggleSettingsRibbonCollapsed = () => {
+    setIsSettingsRibbonCollapsed((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem('platform_settings_ribbon_collapsed', String(next));
+      } catch {
+        // ignore
+      }
+      return next;
+    });
+  };
+
   const [showSecretKey, setShowSecretKey] = useState(false);
 
   // Delivery Zones state & modals
@@ -272,6 +446,128 @@ export default function SettingsSection({
     };
   }, [business?.id]);
 
+  // Gestion des Livreurs (platform_drivers)
+  const [drivers, setDrivers] = useState<Driver[]>([]);
+  const [isDriversLoading, setIsDriversLoading] = useState(false);
+  const [driversFilter, setDriversFilter] = useState<'all' | 'active' | 'archived'>('all');
+  const [isDriverModalOpen, setIsDriverModalOpen] = useState(false);
+  const [editingDriver, setEditingDriver] = useState<Driver | null>(null);
+  const [driverActionFeedback, setDriverActionFeedback] = useState<{
+    type: 'error' | 'success';
+    message: string;
+    driverId?: string;
+  } | null>(null);
+
+  useEffect(() => {
+    let isMounted = true;
+    if (!business?.id) return;
+    setIsDriversLoading(true);
+    fetchDrivers(business.id)
+      .then((list) => {
+        if (isMounted) {
+          setDrivers(list || []);
+        }
+      })
+      .catch((err) => {
+        console.error('Erreur chargement livreurs dans SettingsSection:', err);
+      })
+      .finally(() => {
+        if (isMounted) {
+          setIsDriversLoading(false);
+        }
+      });
+    return () => {
+      isMounted = false;
+    };
+  }, [business?.id]);
+
+  const handleOpenNewDriver = () => {
+    setEditingDriver(null);
+    setDriverActionFeedback(null);
+    setIsDriverModalOpen(true);
+  };
+
+  const handleOpenEditDriver = (driver: Driver) => {
+    setEditingDriver(driver);
+    setDriverActionFeedback(null);
+    setIsDriverModalOpen(true);
+  };
+
+  const handleDriverSaved = (savedDriver: Driver) => {
+    setDrivers((prev) => {
+      const idx = prev.findIndex((d) => d.id === savedDriver.id);
+      if (idx >= 0) {
+        const updated = [...prev];
+        updated[idx] = savedDriver;
+        return updated;
+      }
+      return [...prev, savedDriver];
+    });
+    setDriverActionFeedback({
+      type: 'success',
+      message: `Livreur ${savedDriver.name} enregistré avec succès.`,
+    });
+  };
+
+  const handleToggleDriverStatus = async (driver: Driver) => {
+    setDriverActionFeedback(null);
+
+    // Blocage si archivage d'un livreur avec commandes en cours
+    if (driver.is_active) {
+      // en livraison = statut ni 'delivered' ni 'cancelled'
+      const inDeliveryOrders = (businessOrders || []).filter(
+        (o) =>
+          o.order_type === 'delivery' &&
+          o.driver_id === driver.id &&
+          o.status !== 'delivered' &&
+          o.status !== 'cancelled'
+      );
+
+      if (inDeliveryOrders.length > 0) {
+        const count = inDeliveryOrders.length;
+        setDriverActionFeedback({
+          type: 'error',
+          message: `${count} commande${count > 1 ? 's' : ''} en cours, réassigne-les ou termine-les d'abord`,
+          driverId: driver.id,
+        });
+        return;
+      }
+    }
+
+    const nextActive = !driver.is_active;
+    try {
+      const res = await setDriverActive(driver.id, business.id, nextActive);
+      if (res.success && res.driver) {
+        setDrivers((prev) => prev.map((d) => (d.id === driver.id ? res.driver! : d)));
+        setDriverActionFeedback({
+          type: 'success',
+          message: nextActive ? `Livreur ${driver.name} réactivé.` : `Livreur ${driver.name} archivé.`,
+        });
+      } else {
+        setDriverActionFeedback({
+          type: 'error',
+          message: res.error || 'Erreur lors du changement de statut.',
+          driverId: driver.id,
+        });
+      }
+    } catch (err: any) {
+      setDriverActionFeedback({
+        type: 'error',
+        message: err?.message || 'Erreur inattendue.',
+        driverId: driver.id,
+      });
+    }
+  };
+
+  const getDriverInitials = (name?: string) => {
+    if (!name) return 'L';
+    const parts = name.trim().split(' ').filter(Boolean);
+    if (parts.length >= 2) {
+      return (parts[0][0] + parts[1][0]).toUpperCase();
+    }
+    return name.slice(0, 2).toUpperCase();
+  };
+
   // Webhook Tester Action
   const runWebhookTest = async () => {
     if (!testOrderId) {
@@ -357,8 +653,172 @@ export default function SettingsSection({
 
   return (
     <div className="space-y-6">
-      {/* 1. Réglages Généraux */}
-      <div className="bg-white p-6 rounded-3xl border border-slate-200/80 shadow-2xs">
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+        {/* CARTE DE GAUCHE : Ruban de navigation paramètres */}
+        <div className={`${isSettingsRibbonCollapsed ? 'lg:col-span-1 p-3' : 'lg:col-span-3 p-5'} bg-white rounded-3xl border border-slate-200/80 shadow-2xs space-y-4`}>
+          {!isSettingsRibbonCollapsed ? (
+            <>
+              <div className="flex items-center justify-between gap-2">
+                {onBack && (
+                  <button
+                    type="button"
+                    onClick={onBack}
+                    className="inline-flex items-center space-x-2 text-xs font-extrabold text-slate-700 hover:text-emerald-700 bg-slate-100/90 hover:bg-emerald-50 px-3.5 py-2 rounded-2xl border border-slate-200 hover:border-emerald-200 transition-all shadow-2xs group cursor-pointer"
+                  >
+                    <ArrowLeft className="w-4 h-4 text-slate-500 group-hover:text-emerald-600 transition-colors" />
+                    <span>Retour</span>
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={toggleSettingsRibbonCollapsed}
+                  className="p-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-600 hover:text-slate-900 transition-colors shrink-0 ml-auto cursor-pointer"
+                  title="Rétracter le ruban"
+                >
+                  <ChevronLeft className="w-4 h-4" />
+                </button>
+              </div>
+
+              <div>
+                <h3 className="font-extrabold text-slate-900 text-sm">Paramètres</h3>
+                <p className="text-[11px] text-slate-500 mt-0.5">Configuration du commerce</p>
+              </div>
+            </>
+          ) : (
+            <div className="space-y-2.5">
+              <div className="flex justify-center">
+                <button
+                  type="button"
+                  onClick={toggleSettingsRibbonCollapsed}
+                  className="p-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-600 hover:text-slate-900 transition-colors cursor-pointer"
+                  title="Déplier le ruban"
+                >
+                  <ChevronRight className="w-4 h-4" />
+                </button>
+              </div>
+
+              {onBack && (
+                <div className="flex justify-center">
+                  <button
+                    type="button"
+                    onClick={onBack}
+                    className="p-2 rounded-2xl bg-slate-100/90 hover:bg-emerald-50 text-slate-700 hover:text-emerald-700 border border-slate-200 hover:border-emerald-200 transition-all shadow-2xs cursor-pointer flex items-center justify-center"
+                    title="Retour au Tableau de bord"
+                  >
+                    <ArrowLeft className="w-4 h-4 text-slate-500 hover:text-emerald-600" />
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+
+          <div className="border-t border-slate-100" />
+
+          {/* Menu de navigation interne vertical */}
+          <nav className="space-y-1.5" aria-label="Navigation paramètres">
+            <button
+              type="button"
+              onClick={() => setActiveSettingsSection('general')}
+              className={`w-full flex items-center ${
+                isSettingsRibbonCollapsed ? 'justify-center p-2.5' : 'space-x-3 px-3.5 py-2.5 text-left'
+              } rounded-2xl text-xs font-extrabold transition-all cursor-pointer ${
+                activeSettingsSection === 'general'
+                  ? 'bg-[#FAF7F2] text-[#1B4B4A] border border-[#1B4B4A]/20 shadow-2xs'
+                  : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
+              }`}
+              title="Général"
+            >
+              <Sliders className={`w-4 h-4 shrink-0 ${activeSettingsSection === 'general' ? 'text-[#1B4B4A]' : 'text-slate-400'}`} />
+              {!isSettingsRibbonCollapsed && <span className="truncate">Général</span>}
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setActiveSettingsSection('invoice')}
+              className={`w-full flex items-center ${
+                isSettingsRibbonCollapsed ? 'justify-center p-2.5' : 'space-x-3 px-3.5 py-2.5 text-left'
+              } rounded-2xl text-xs font-extrabold transition-all cursor-pointer ${
+                activeSettingsSection === 'invoice'
+                  ? 'bg-[#FAF7F2] text-[#1B4B4A] border border-[#1B4B4A]/20 shadow-2xs'
+                  : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
+              }`}
+              title="Facture"
+            >
+              <FileText className={`w-4 h-4 shrink-0 ${activeSettingsSection === 'invoice' ? 'text-[#1B4B4A]' : 'text-slate-400'}`} />
+              {!isSettingsRibbonCollapsed && <span className="truncate">Facture</span>}
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setActiveSettingsSection('delivery')}
+              className={`w-full flex items-center ${
+                isSettingsRibbonCollapsed ? 'justify-center p-2.5' : 'space-x-3 px-3.5 py-2.5 text-left'
+              } rounded-2xl text-xs font-extrabold transition-all cursor-pointer ${
+                activeSettingsSection === 'delivery'
+                  ? 'bg-[#FAF7F2] text-[#1B4B4A] border border-[#1B4B4A]/20 shadow-2xs'
+                  : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
+              }`}
+              title="Livraison"
+            >
+              <Truck className={`w-4 h-4 shrink-0 ${activeSettingsSection === 'delivery' ? 'text-[#1B4B4A]' : 'text-slate-400'}`} />
+              {!isSettingsRibbonCollapsed && <span className="truncate">Livraison</span>}
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setActiveSettingsSection('payment')}
+              className={`w-full flex items-center ${
+                isSettingsRibbonCollapsed ? 'justify-center p-2.5' : 'space-x-3 px-3.5 py-2.5 text-left'
+              } rounded-2xl text-xs font-extrabold transition-all cursor-pointer ${
+                activeSettingsSection === 'payment'
+                  ? 'bg-[#FAF7F2] text-[#1B4B4A] border border-[#1B4B4A]/20 shadow-2xs'
+                  : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
+              }`}
+              title="Paiement"
+            >
+              <CreditCard className={`w-4 h-4 shrink-0 ${activeSettingsSection === 'payment' ? 'text-[#1B4B4A]' : 'text-slate-400'}`} />
+              {!isSettingsRibbonCollapsed && <span className="truncate">Paiement</span>}
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setActiveSettingsSection('team')}
+              className={`w-full flex items-center ${
+                isSettingsRibbonCollapsed ? 'justify-center p-2.5' : 'space-x-3 px-3.5 py-2.5 text-left'
+              } rounded-2xl text-xs font-extrabold transition-all cursor-pointer ${
+                activeSettingsSection === 'team'
+                  ? 'bg-[#FAF7F2] text-[#1B4B4A] border border-[#1B4B4A]/20 shadow-2xs'
+                  : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
+              }`}
+              title="Équipe"
+            >
+              <Users className={`w-4 h-4 shrink-0 ${activeSettingsSection === 'team' ? 'text-[#1B4B4A]' : 'text-slate-400'}`} />
+              {!isSettingsRibbonCollapsed && <span className="truncate">Équipe</span>}
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setActiveSettingsSection('capacity')}
+              className={`w-full flex items-center ${
+                isSettingsRibbonCollapsed ? 'justify-center p-2.5' : 'space-x-3 px-3.5 py-2.5 text-left'
+              } rounded-2xl text-xs font-extrabold transition-all cursor-pointer ${
+                activeSettingsSection === 'capacity'
+                  ? 'bg-[#FAF7F2] text-[#1B4B4A] border border-[#1B4B4A]/20 shadow-2xs'
+                  : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
+              }`}
+              title="Capacité"
+            >
+              <Gauge className={`w-4 h-4 shrink-0 ${activeSettingsSection === 'capacity' ? 'text-[#1B4B4A]' : 'text-slate-400'}`} />
+              {!isSettingsRibbonCollapsed && <span className="truncate">Capacité</span>}
+            </button>
+          </nav>
+        </div>
+
+        {/* ZONE DE DROITE : Contenu de la section active */}
+        <div className={`${isSettingsRibbonCollapsed ? 'lg:col-span-11' : 'lg:col-span-9'} space-y-6`}>
+          {/* 1. Réglages Généraux */}
+          {activeSettingsSection === 'general' && (
+            <div className="bg-white p-6 rounded-3xl border border-slate-200/80 shadow-2xs">
         <div className="flex items-center justify-between pb-4 border-b border-slate-100">
           <span className="text-xs font-black text-slate-800 uppercase tracking-wider">Réglages Généraux</span>
           <span className="px-3 py-1 bg-amber-50 text-amber-800 border border-amber-200 rounded-full text-[10px] font-black uppercase">
@@ -401,10 +861,12 @@ export default function SettingsSection({
             />
           </div>
         </form>
-      </div>
+          </div>
+        )}
 
-      {/* 1.bis Bloc Facture */}
-      <div className="bg-white p-6 rounded-3xl border border-slate-200/80 shadow-2xs">
+        {/* 1.bis Bloc Facture */}
+        {activeSettingsSection === 'invoice' && (
+          <div className="bg-white p-6 rounded-3xl border border-slate-200/80 shadow-2xs">
         <div className="flex items-center justify-between pb-4 border-b border-slate-100">
           <div>
             <span className="text-xs font-black text-slate-800 uppercase tracking-wider block">Facture</span>
@@ -600,108 +1062,395 @@ export default function SettingsSection({
             </button>
           </div>
         </form>
-      </div>
-
-      {/* 2. Zones de Livraison Table (delivery_zones) */}
-      <div className="bg-white p-6 rounded-3xl border border-slate-200/80 shadow-2xs space-y-4">
-        <div className="flex items-center justify-between pb-4 border-b border-slate-100">
-          <div>
-            <h3 className="text-base font-extrabold text-slate-900 flex items-center space-x-2">
-              <Truck className="w-5 h-5 text-emerald-600" />
-              <span>Zones de Livraison (`delivery_zones`)</span>
-            </h3>
-            <p className="text-xs text-slate-500 mt-0.5">
-              Définissez les zones de livraison et leurs frais fixes associés pour le storefront client.
-            </p>
           </div>
-          <button
-            onClick={() => {
-              setEditingZone({ business_id: business.id, name: '', fee: 1000, active: true });
-              setIsZoneModalOpen(true);
-            }}
-            className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs rounded-xl flex items-center space-x-2 transition-all shadow-sm shadow-emerald-500/10 cursor-pointer"
-          >
-            <Plus className="w-4 h-4" />
-            <span>Ajouter une Zone</span>
-          </button>
-        </div>
+        )}
 
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-xs text-slate-700">
-            <thead className="bg-slate-50/90 text-slate-500 uppercase font-black text-[10px] border-b border-slate-200/80">
-              <tr>
-                <th className="py-3 px-4">Zone</th>
-                <th className="py-3 px-4">Frais Fixe</th>
-                <th className="py-3 px-4">Statut</th>
-                <th className="py-3 px-4 text-right">Actions</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100">
-              {deliveryZones.map((zone) => (
-                <tr key={zone.id} className="hover:bg-slate-50/80 transition-colors">
-                  <td className="py-3.5 px-4 font-extrabold text-slate-900">{zone.name}</td>
-                  <td className="py-3.5 px-4 font-black text-emerald-700">
-                    {zone.fee.toLocaleString()} {business.currency}
-                  </td>
-                  <td className="py-3.5 px-4">
+        {/* 2. Zones de Livraison et Livreurs (delivery) */}
+        {activeSettingsSection === 'delivery' && (
+          <div className="space-y-6">
+            {/* Zones de Livraison Table (delivery_zones) */}
+            <div className="bg-white p-6 rounded-3xl border border-slate-200/80 shadow-2xs space-y-4">
+              <div className="flex items-center justify-between pb-4 border-b border-slate-100">
+                <div>
+                  <h3 className="text-base font-extrabold text-slate-900 flex items-center space-x-2">
+                    <Truck className="w-5 h-5 text-emerald-600" />
+                    <span>Zones de Livraison (`delivery_zones`)</span>
+                  </h3>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    Définissez les zones de livraison et leurs frais fixes associés pour le storefront client.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setEditingZone({ business_id: business.id, name: '', fee: 1000, active: true });
+                    setIsZoneModalOpen(true);
+                  }}
+                  className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs rounded-xl flex items-center space-x-2 transition-all shadow-sm shadow-emerald-500/10 cursor-pointer"
+                >
+                  <Plus className="w-4 h-4" />
+                  <span>Ajouter une Zone</span>
+                </button>
+              </div>
+
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs text-slate-700">
+                  <thead className="bg-slate-50/90 text-slate-500 uppercase font-black text-[10px] border-b border-slate-200/80">
+                    <tr>
+                      <th className="py-3 px-4">Zone</th>
+                      <th className="py-3 px-4">Frais Fixe</th>
+                      <th className="py-3 px-4">Statut</th>
+                      <th className="py-3 px-4 text-right">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {deliveryZones.map((zone) => (
+                      <tr key={zone.id} className="hover:bg-slate-50/80 transition-colors">
+                        <td className="py-3.5 px-4 font-extrabold text-slate-900">{zone.name}</td>
+                        <td className="py-3.5 px-4 font-black text-emerald-700">
+                          {zone.fee.toLocaleString()} {business.currency}
+                        </td>
+                        <td className="py-3.5 px-4">
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              const res = await toggleDeliveryZoneActive(zone.id, zone.active);
+                              if (res.success) {
+                                if (res.zone) {
+                                  setDeliveryZones((prev) => prev.map((z) => (z.id === zone.id ? res.zone! : z)));
+                                } else {
+                                  await loadDeliveryZones();
+                                }
+                              } else {
+                                alert(`Erreur lors du changement de statut de la zone : ${res.error || 'Échec'}`);
+                              }
+                            }}
+                            className={`px-2.5 py-1 rounded-full text-[10px] font-black uppercase transition-all cursor-pointer ${
+                              zone.active
+                                ? 'bg-emerald-100 text-emerald-800 border border-emerald-200'
+                                : 'bg-slate-100 text-slate-500 border border-slate-200'
+                            }`}
+                          >
+                            {zone.active ? 'Actif' : 'Inactif'}
+                          </button>
+                        </td>
+                        <td className="py-3.5 px-4 text-right space-x-2">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setEditingZone(zone);
+                              setIsZoneModalOpen(true);
+                            }}
+                            className="px-3 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-lg transition-colors cursor-pointer"
+                          >
+                            Éditer
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setDeletingZone(zone)}
+                            className="px-3 py-1 bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold text-xs rounded-lg border border-rose-200 transition-colors cursor-pointer"
+                          >
+                            Supprimer
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                    {deliveryZones.length === 0 && (
+                      <tr>
+                        <td colSpan={4} className="py-8 text-center text-slate-400 text-xs">
+                          {isDeliveryZonesLoading ? 'Chargement des zones...' : 'Aucune zone de livraison définie.'}
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            {/* Bloc Livreurs (platform_drivers) */}
+            <div className="bg-white p-6 rounded-3xl border border-slate-200/80 shadow-2xs space-y-4">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-4 border-b border-slate-100 gap-3">
+                <div>
+                  <h3 className="text-base font-extrabold text-slate-900 flex items-center space-x-2">
+                    <Users className="w-5 h-5 text-emerald-600" />
+                    <span>Livreurs</span>
+                  </h3>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    Gérez vos livreurs, suivez leurs courses et contrôlez leur disponibilité.
+                  </p>
+                </div>
+
+                <div className="flex items-center flex-wrap gap-2.5">
+                  {/* Filtre Tous / Actifs / Archivés */}
+                  <div className="flex items-center p-1 bg-slate-100 rounded-xl text-xs font-bold text-slate-600 border border-slate-200">
                     <button
                       type="button"
-                      onClick={async () => {
-                        const res = await toggleDeliveryZoneActive(zone.id, zone.active);
-                        if (res.success) {
-                          if (res.zone) {
-                            setDeliveryZones((prev) => prev.map((z) => (z.id === zone.id ? res.zone! : z)));
-                          } else {
-                            await loadDeliveryZones();
-                          }
-                        } else {
-                          alert(`Erreur lors du changement de statut de la zone : ${res.error || 'Échec'}`);
-                        }
-                      }}
-                      className={`px-2.5 py-1 rounded-full text-[10px] font-black uppercase transition-all cursor-pointer ${
-                        zone.active
-                          ? 'bg-emerald-100 text-emerald-800 border border-emerald-200'
-                          : 'bg-slate-100 text-slate-500 border border-slate-200'
+                      onClick={() => setDriversFilter('all')}
+                      className={`px-3 py-1 rounded-lg transition-all cursor-pointer ${
+                        driversFilter === 'all'
+                          ? 'bg-white text-slate-900 shadow-2xs'
+                          : 'hover:text-slate-900'
                       }`}
                     >
-                      {zone.active ? 'Actif' : 'Inactif'}
-                    </button>
-                  </td>
-                  <td className="py-3.5 px-4 text-right space-x-2">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setEditingZone(zone);
-                        setIsZoneModalOpen(true);
-                      }}
-                      className="px-3 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-lg transition-colors cursor-pointer"
-                    >
-                      Éditer
+                      Tous ({drivers.length})
                     </button>
                     <button
                       type="button"
-                      onClick={() => setDeletingZone(zone)}
-                      className="px-3 py-1 bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold text-xs rounded-lg border border-rose-200 transition-colors cursor-pointer"
+                      onClick={() => setDriversFilter('active')}
+                      className={`px-3 py-1 rounded-lg transition-all cursor-pointer ${
+                        driversFilter === 'active'
+                          ? 'bg-white text-emerald-800 shadow-2xs'
+                          : 'hover:text-slate-900'
+                      }`}
                     >
-                      Supprimer
+                      Actifs ({drivers.filter((d) => d.is_active).length})
                     </button>
-                  </td>
-                </tr>
-              ))}
-              {deliveryZones.length === 0 && (
-                <tr>
-                  <td colSpan={4} className="py-8 text-center text-slate-400 text-xs">
-                    {isDeliveryZonesLoading ? 'Chargement des zones...' : 'Aucune zone de livraison définie.'}
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-      </div>
+                    <button
+                      type="button"
+                      onClick={() => setDriversFilter('archived')}
+                      className={`px-3 py-1 rounded-lg transition-all cursor-pointer ${
+                        driversFilter === 'archived'
+                          ? 'bg-white text-slate-900 shadow-2xs'
+                          : 'hover:text-slate-900'
+                      }`}
+                    >
+                      Archivés ({drivers.filter((d) => !d.is_active).length})
+                    </button>
+                  </div>
 
-      {/* 3. Payment Aggregator & Channels Section */}
-      <div className="bg-white p-6 rounded-3xl border border-slate-200/80 shadow-2xs space-y-6">
+                  {/* Bouton Nouveau livreur */}
+                  <button
+                    type="button"
+                    onClick={handleOpenNewDriver}
+                    className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs rounded-xl flex items-center space-x-2 transition-all shadow-sm shadow-emerald-500/10 cursor-pointer"
+                  >
+                    <Plus className="w-4 h-4" />
+                    <span>Nouveau livreur</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Message de notification d'action général */}
+              {driverActionFeedback && !driverActionFeedback.driverId && (
+                <div
+                  className={`p-3 rounded-xl border text-xs font-semibold flex items-center justify-between gap-2 ${
+                    driverActionFeedback.type === 'success'
+                      ? 'bg-emerald-50 border-emerald-200 text-emerald-900'
+                      : 'bg-rose-50 border-rose-200 text-rose-900'
+                  }`}
+                >
+                  <div className="flex items-center gap-2">
+                    {driverActionFeedback.type === 'error' && <AlertCircle className="w-4 h-4 shrink-0 text-rose-600" />}
+                    <span>{driverActionFeedback.message}</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setDriverActionFeedback(null)}
+                    className="text-slate-400 hover:text-slate-700 p-0.5 cursor-pointer"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              )}
+
+              {/* Grille des cartes livreurs */}
+              {(() => {
+                const filtered = drivers.filter((d) => {
+                  if (driversFilter === 'active') return d.is_active;
+                  if (driversFilter === 'archived') return !d.is_active;
+                  return true;
+                });
+
+                const sorted = [...filtered].sort((a, b) => {
+                  if (driversFilter === 'all') {
+                    if (a.is_active !== b.is_active) {
+                      return a.is_active ? -1 : 1;
+                    }
+                  }
+                  return a.name.localeCompare(b.name);
+                });
+
+                if (isDriversLoading) {
+                  return (
+                    <div className="p-8 text-center text-slate-400 text-xs">
+                      <Loader2 className="w-5 h-5 text-emerald-600 animate-spin mx-auto mb-2" />
+                      <span>Chargement des livreurs...</span>
+                    </div>
+                  );
+                }
+
+                if (sorted.length === 0) {
+                  return (
+                    <div className="p-8 text-center text-slate-400 text-xs border border-dashed border-slate-200 rounded-2xl">
+                      {drivers.length === 0
+                        ? 'Aucun livreur enregistré pour le moment.'
+                        : 'Aucun livreur ne correspond à ce filtre.'}
+                    </div>
+                  );
+                }
+
+                return (
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 pt-1">
+                    {sorted.map((driver) => {
+                      const initials = getDriverInitials(driver.name);
+                      const driverOrders = (businessOrders || []).filter(
+                        (o) => o.order_type === 'delivery' && o.driver_id === driver.id
+                      );
+                      const inDeliveryCount = driverOrders.filter(
+                        (o) => o.status !== 'delivered' && o.status !== 'cancelled'
+                      ).length;
+                      const deliveredTotalCount = driverOrders.filter(
+                        (o) => o.status === 'delivered'
+                      ).length;
+
+                      const deliveredWithDates = driverOrders
+                        .filter((o) => o.status === 'delivered' && Boolean(o.delivered_at))
+                        .sort(
+                          (a, b) =>
+                            new Date(b.delivered_at!).getTime() - new Date(a.delivered_at!).getTime()
+                        );
+                      const lastDeliveredAt = deliveredWithDates[0]?.delivered_at || null;
+                      const lastDeliveredFormatted = lastDeliveredAt
+                        ? new Date(lastDeliveredAt).toLocaleDateString('fr-FR', {
+                            day: '2-digit',
+                            month: 'short',
+                            year: 'numeric',
+                          })
+                        : '—';
+
+                      const hasBlockingError =
+                        driverActionFeedback?.driverId === driver.id &&
+                        driverActionFeedback.type === 'error';
+
+                      return (
+                        <div
+                          key={driver.id}
+                          className={`rounded-2xl border p-4 flex flex-col justify-between transition-all bg-white ${
+                            driver.is_active
+                              ? 'border-slate-200/90 shadow-2xs hover:border-emerald-500/40'
+                              : 'border-slate-200 bg-slate-50/70 opacity-85'
+                          }`}
+                        >
+                          <div>
+                            {/* En-tête de carte : Photo / Initiale, Nom, Quartier, Téléphone, Badge */}
+                            <div className="flex items-start justify-between gap-3 mb-3">
+                              <div className="flex items-center gap-3 min-w-0">
+                                {driver.photo_url ? (
+                                  <img
+                                    src={driver.photo_url}
+                                    alt={driver.name}
+                                    className="w-10 h-10 rounded-full object-cover border border-[#E5DCD0] shrink-0"
+                                  />
+                                ) : (
+                                  <div className="w-10 h-10 rounded-full bg-[#FAF7F2] border border-[#E5DCD0] text-[#1B4B4A] flex items-center justify-center font-bold text-xs shrink-0">
+                                    {initials}
+                                  </div>
+                                )}
+                                <div className="min-w-0">
+                                  <h4 className="text-xs font-bold text-slate-900 leading-tight truncate">
+                                    {driver.name}
+                                  </h4>
+                                  <div className="text-[11px] text-slate-500 font-mono flex items-center gap-1.5 mt-0.5 truncate">
+                                    <Phone className="w-3 h-3 text-slate-400 shrink-0" />
+                                    <span className="truncate">{driver.phone || 'Non renseigné'}</span>
+                                  </div>
+                                  <div className="text-[10px] text-slate-400 flex items-center gap-1.5 mt-0.5 truncate">
+                                    <MapPin className="w-3 h-3 text-slate-400 shrink-0" />
+                                    <span className="truncate">
+                                      {driver.neighborhood || 'Quartier non renseigné'}
+                                    </span>
+                                  </div>
+                                </div>
+                              </div>
+
+                              <span
+                                className={`px-2 py-0.5 rounded text-[10px] font-semibold shrink-0 ${
+                                  driver.is_active
+                                    ? 'bg-emerald-50 text-emerald-800 border border-emerald-200'
+                                    : 'bg-slate-100 text-slate-600 border border-slate-200'
+                                }`}
+                              >
+                                {driver.is_active ? 'Actif' : 'Archivé'}
+                              </span>
+                            </div>
+
+                            {/* Statistiques depuis businessOrders */}
+                            <div className="space-y-1.5 pt-2 pb-2 border-t border-slate-100 text-xs">
+                              <div className="flex items-center justify-between text-slate-600 bg-slate-50 px-2.5 py-1.5 rounded-lg">
+                                <span>En livraison</span>
+                                <span className="font-bold font-mono text-slate-900">
+                                  {inDeliveryCount} en livraison
+                                </span>
+                              </div>
+                              <div className="flex items-center justify-between text-slate-600 px-2.5 py-1 rounded-lg">
+                                <span>Livrées au total</span>
+                                <span className="font-bold font-mono text-slate-900">
+                                  {deliveredTotalCount} livrées au total
+                                </span>
+                              </div>
+                              <div className="flex items-center justify-between text-slate-500 text-[11px] px-2.5 py-0.5">
+                                <span>Dernière livraison :</span>
+                                <span className="font-semibold text-slate-700">
+                                  {lastDeliveredFormatted}
+                                </span>
+                              </div>
+                            </div>
+
+                            {/* Message d'erreur spécifique en cas de tentative d'archivage bloquée */}
+                            {hasBlockingError && (
+                              <div className="mt-2.5 p-2 bg-rose-50 border border-rose-200 rounded-lg text-xs text-rose-900 font-medium flex items-start gap-1.5">
+                                <AlertCircle className="w-3.5 h-3.5 text-rose-600 shrink-0 mt-0.5" />
+                                <span>{driverActionFeedback.message}</span>
+                              </div>
+                            )}
+                          </div>
+
+                          {/* Actions de la carte */}
+                          <div className="flex items-center justify-end gap-2 pt-3 mt-2 border-t border-slate-100">
+                            <button
+                              type="button"
+                              onClick={() => handleOpenEditDriver(driver)}
+                              className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-lg transition-colors flex items-center gap-1 cursor-pointer"
+                            >
+                              <Edit2 className="w-3 h-3" />
+                              <span>Modifier</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleToggleDriverStatus(driver)}
+                              className={`px-2.5 py-1 font-bold text-xs rounded-lg border transition-colors flex items-center gap-1 cursor-pointer ${
+                                driver.is_active
+                                  ? 'bg-amber-50 hover:bg-amber-100 text-amber-800 border-amber-200'
+                                  : 'bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border-emerald-200'
+                              }`}
+                            >
+                              {driver.is_active ? (
+                                <>
+                                  <Archive className="w-3 h-3" />
+                                  <span>Archiver</span>
+                                </>
+                              ) : (
+                                <>
+                                  <RotateCcw className="w-3 h-3" />
+                                  <span>Réactiver</span>
+                                </>
+                              )}
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                );
+              })()}
+            </div>
+          </div>
+        )}
+
+        {/* 3. Payment Aggregator & Channels Section */}
+        {activeSettingsSection === 'payment' && (
+          <div className="space-y-6">
+            <div className="bg-white p-6 rounded-3xl border border-slate-200/80 shadow-2xs space-y-6">
         <div className="pb-4 border-b border-slate-100">
           <h3 className="text-base font-extrabold text-slate-900 flex items-center space-x-2">
             <CreditCard className="w-5 h-5 text-emerald-600" />
@@ -847,10 +1596,59 @@ export default function SettingsSection({
             })}
           </div>
         </div>
-      </div>
+          </div>
 
-      {/* 4. Staff Team Management */}
-      <div className="bg-white p-6 rounded-3xl border border-slate-200/80 shadow-2xs">
+            {/* Testeur de Webhook de Paiement (Wave / OM) */}
+            <div className="bg-white p-6 rounded-3xl border border-slate-200/80 shadow-2xs">
+              <h3 className="font-extrabold text-slate-900 text-base">Testeur de Webhook de Paiement (Wave / OM)</h3>
+              <p className="text-xs text-slate-500 mt-1">
+                Simulez l&apos;appel serveur-à-serveur renvoyé par l&apos;agrégateur lors de la validation d&apos;un règlement.
+              </p>
+
+              <div className="mt-4 grid grid-cols-1 sm:grid-cols-3 gap-4">
+                <select
+                  value={testOrderId}
+                  onChange={(e) => setTestOrderId(e.target.value)}
+                  className="bg-slate-50 text-slate-800 border border-slate-200 rounded-xl p-3 text-xs font-bold focus:border-emerald-500 shadow-2xs"
+                >
+                  <option value="">Sélectionner une commande...</option>
+                  {businessOrders.map((o) => (
+                    <option key={o.id} value={o.id}>
+                      #{o.id} - {o.customer_name} ({o.total_amount} {business.currency})
+                    </option>
+                  ))}
+                </select>
+
+                <input
+                  type="text"
+                  value={testPaymentRef}
+                  onChange={(e) => setTestPaymentRef(e.target.value)}
+                  className="bg-slate-50 text-slate-800 border border-slate-200 rounded-xl p-3 text-xs font-mono focus:border-emerald-500 shadow-2xs"
+                  placeholder="Référence de paiement Wave"
+                />
+
+                <button
+                  onClick={runWebhookTest}
+                  className="bg-cyan-600 hover:bg-cyan-700 text-white font-extrabold text-xs rounded-xl p-3 transition-all shadow-2xs cursor-pointer"
+                >
+                  Simuler Webhook POST
+                </button>
+              </div>
+
+              {webhookLogs.length > 0 && (
+                <div className="mt-4 p-3 bg-slate-900 rounded-2xl border border-slate-800 font-mono text-[10px] text-cyan-300 space-y-1">
+                  {webhookLogs.map((log, i) => (
+                    <div key={i}>{log}</div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* 4. Staff Team Management */}
+        {activeSettingsSection === 'team' && (
+          <div className="bg-white p-6 rounded-3xl border border-slate-200/80 shadow-2xs">
         <div className="flex items-center justify-between pb-4 border-b border-slate-100">
           <div>
             <h3 className="text-base font-extrabold text-slate-900">Équipe & Membres du Staff ({businessStaff.length})</h3>
@@ -1090,52 +1888,201 @@ export default function SettingsSection({
             </tbody>
           </table>
         </div>
-      </div>
-
-      {/* 5. Webhook Tester Box */}
-      <div className="bg-white p-6 rounded-3xl border border-slate-200/80 shadow-2xs">
-        <h3 className="font-extrabold text-slate-900 text-base">Testeur de Webhook de Paiement (Wave / OM)</h3>
-        <p className="text-xs text-slate-500 mt-1">
-          Simulez l&apos;appel serveur-à-serveur renvoyé par l&apos;agrégateur lors de la validation d&apos;un règlement.
-        </p>
-
-        <div className="mt-4 grid grid-cols-1 sm:grid-cols-3 gap-4">
-          <select
-            value={testOrderId}
-            onChange={(e) => setTestOrderId(e.target.value)}
-            className="bg-slate-50 text-slate-800 border border-slate-200 rounded-xl p-3 text-xs font-bold focus:border-emerald-500 shadow-2xs"
-          >
-            <option value="">Sélectionner une commande...</option>
-            {businessOrders.map((o) => (
-              <option key={o.id} value={o.id}>
-                #{o.id} - {o.customer_name} ({o.total_amount} {business.currency})
-              </option>
-            ))}
-          </select>
-
-          <input
-            type="text"
-            value={testPaymentRef}
-            onChange={(e) => setTestPaymentRef(e.target.value)}
-            className="bg-slate-50 text-slate-800 border border-slate-200 rounded-xl p-3 text-xs font-mono focus:border-emerald-500 shadow-2xs"
-            placeholder="Référence de paiement Wave"
-          />
-
-          <button
-            onClick={runWebhookTest}
-            className="bg-cyan-600 hover:bg-cyan-700 text-white font-extrabold text-xs rounded-xl p-3 transition-all shadow-2xs cursor-pointer"
-          >
-            Simuler Webhook POST
-          </button>
-        </div>
-
-        {webhookLogs.length > 0 && (
-          <div className="mt-4 p-3 bg-slate-900 rounded-2xl border border-slate-800 font-mono text-[10px] text-cyan-300 space-y-1">
-            {webhookLogs.map((log, i) => (
-              <div key={i}>{log}</div>
-            ))}
           </div>
         )}
+
+        {/* 5. Section Capacité de production journalière */}
+        {activeSettingsSection === 'capacity' && (
+          <div className="bg-white p-6 rounded-3xl border border-slate-200/80 shadow-2xs space-y-6">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-4 border-b border-slate-100 gap-3">
+              <div>
+                <h3 className="text-base font-extrabold text-slate-900 flex items-center space-x-2">
+                  <Gauge className="w-5 h-5 text-emerald-600" />
+                  <span>Capacité de Production Journalière</span>
+                </h3>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Définissez un plafond quotidien de commandes par produit. Si le quota est atteint, les nouvelles commandes du jour seront bloquées.
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={loadTodaySales}
+                disabled={isSoldLoading}
+                className="inline-flex items-center space-x-2 text-xs font-extrabold text-slate-700 hover:text-emerald-700 bg-slate-100 hover:bg-emerald-50 px-3.5 py-2 rounded-2xl border border-slate-200 hover:border-emerald-200 transition-all shadow-2xs cursor-pointer shrink-0 disabled:opacity-50"
+                title="Actualiser les ventes du jour"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${isSoldLoading ? 'animate-spin text-emerald-600' : 'text-slate-500'}`} />
+                <span>{isSoldLoading ? 'Actualisation...' : 'Actualiser'}</span>
+              </button>
+            </div>
+
+            {soldError && (
+              <div className="p-3 bg-rose-50 border border-rose-200 rounded-2xl flex items-center justify-between gap-3 text-xs text-rose-800">
+                <div className="flex items-center space-x-2">
+                  <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+                  <span>{soldError}</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={loadTodaySales}
+                  className="px-3 py-1 bg-white border border-rose-300 rounded-xl font-extrabold text-rose-700 hover:bg-rose-100 transition-colors cursor-pointer shrink-0"
+                >
+                  Réessayer
+                </button>
+              </div>
+            )}
+
+            {capacityProducts.length === 0 ? (
+              <div className="p-8 text-center bg-slate-50 border border-slate-200 rounded-2xl">
+                <p className="text-xs font-bold text-slate-600">Aucun produit configuré dans la boutique.</p>
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs">
+                  <thead>
+                    <tr className="border-b border-slate-200/80 text-[11px] font-extrabold text-slate-400 uppercase tracking-wider">
+                      <th className="pb-3 pr-4">Produit</th>
+                      <th className="pb-3 px-4">Catégorie</th>
+                      <th className="pb-3 px-4">Vendu aujourd&apos;hui</th>
+                      <th className="pb-3 px-4">Limite par jour (unités)</th>
+                      <th className="pb-3 pl-4 text-right">Action</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {capacityProducts.map((prod) => {
+                      const catName = categoryMap.get(prod.category_id) || 'Non catégorisé';
+                      const soldCount = soldTodayMap[prod.id] || 0;
+                      const hasLimit = prod.daily_limit !== null && prod.daily_limit !== undefined;
+                      const isLimitReached = hasLimit && soldCount >= (prod.daily_limit as number);
+                      const currentInputValue = limitInputs[prod.id] !== undefined
+                        ? limitInputs[prod.id]
+                        : (hasLimit ? String(prod.daily_limit) : '');
+                      const rowErr = rowErrors[prod.id];
+                      const rowSucc = rowSuccess[prod.id];
+                      const isSaving = Boolean(rowSaving[prod.id]);
+
+                      return (
+                        <tr key={prod.id} className="hover:bg-slate-50/70 transition-colors">
+                          <td className="py-3.5 pr-4 align-top">
+                            <div className="flex items-center space-x-3">
+                              {prod.image_url ? (
+                                <img
+                                  src={prod.image_url}
+                                  alt={prod.name}
+                                  className="w-10 h-10 rounded-xl object-cover border border-slate-200 shrink-0"
+                                />
+                              ) : (
+                                <div className="w-10 h-10 rounded-xl bg-slate-100 border border-slate-200 flex items-center justify-center font-bold text-slate-500 text-xs shrink-0">
+                                  {(prod.name.trim().charAt(0) || 'P').toUpperCase()}
+                                </div>
+                              )}
+                              <div className="min-w-0">
+                                <span className="font-extrabold text-slate-900 block truncate">{prod.name}</span>
+                                <span className="text-[11px] text-slate-400 font-mono">
+                                  {prod.price.toLocaleString()} {business.currency}
+                                </span>
+                              </div>
+                            </div>
+                          </td>
+
+                          <td className="py-3.5 px-4 align-top">
+                            <span className="px-2.5 py-1 bg-slate-100 text-slate-700 font-bold text-[10px] rounded-lg border border-slate-200 whitespace-nowrap">
+                              {catName}
+                            </span>
+                          </td>
+
+                          <td className="py-3.5 px-4 align-top font-mono">
+                            {isSoldLoading ? (
+                              <span className="text-slate-400 italic">Chargement...</span>
+                            ) : soldError ? (
+                              <div className="flex items-center space-x-1.5 text-rose-600 text-[11px]">
+                                <span>Échec</span>
+                                <button
+                                  type="button"
+                                  onClick={loadTodaySales}
+                                  className="underline font-bold hover:text-rose-800 cursor-pointer"
+                                >
+                                  Réessayer
+                                </button>
+                              </div>
+                            ) : (
+                              <div>
+                                <span className="font-extrabold text-slate-900 text-sm">
+                                  {soldCount}
+                                </span>
+                                <span className="text-[11px] text-slate-500 ml-1">unité{soldCount > 1 ? 's' : ''}</span>
+                                {isLimitReached && (
+                                  <div className="mt-1">
+                                    <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded-md bg-amber-50 text-amber-800 border border-amber-200 text-[10px] font-extrabold">
+                                      <AlertCircle className="w-3 h-3 text-amber-600 shrink-0" />
+                                      <span>Limite atteinte</span>
+                                    </span>
+                                    <span className="block text-[9px] text-slate-400 mt-0.5">
+                                      seules les nouvelles commandes seront bloquées
+                                    </span>
+                                  </div>
+                                )}
+                              </div>
+                            )}
+                          </td>
+
+                          <td className="py-3.5 px-4 align-top">
+                            <div className="space-y-1">
+                              <input
+                                type="text"
+                                inputMode="numeric"
+                                placeholder="Illimité"
+                                value={currentInputValue}
+                                onChange={(e) => {
+                                  const val = e.target.value;
+                                  setLimitInputs((prev) => ({ ...prev, [prod.id]: val }));
+                                  setRowErrors((prev) => ({ ...prev, [prod.id]: null }));
+                                  setRowSuccess((prev) => ({ ...prev, [prod.id]: null }));
+                                }}
+                                className="w-32 bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 text-xs font-bold text-slate-800 focus:outline-none focus:border-emerald-500 shadow-2xs font-mono"
+                              />
+                              {rowErr && (
+                                <p className="text-[10px] font-bold text-rose-600 leading-tight">
+                                  {rowErr}
+                                </p>
+                              )}
+                              {rowSucc && (
+                                <p className="text-[10px] font-bold text-emerald-600 leading-tight">
+                                  {rowSucc}
+                                </p>
+                              )}
+                            </div>
+                          </td>
+
+                          <td className="py-3.5 pl-4 text-right align-top">
+                            <button
+                              type="button"
+                              disabled={isSaving}
+                              onClick={() => handleSaveProductDailyLimit(prod)}
+                              className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-extrabold transition-all shadow-2xs disabled:opacity-50 cursor-pointer inline-flex items-center space-x-1"
+                            >
+                              {isSaving ? (
+                                <>
+                                  <Loader2 className="w-3 h-3 animate-spin" />
+                                  <span>Enregistrement...</span>
+                                </>
+                              ) : (
+                                <span>Enregistrer</span>
+                              )}
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        )}
+
+        </div>
       </div>
 
       {/* 6. Sticky Unified Settings Save Bar */}
@@ -1330,6 +2277,18 @@ export default function SettingsSection({
           </div>
         </div>
       )}
+
+      {/* Driver Create / Edit Modal */}
+      <DriverFormModal
+        isOpen={isDriverModalOpen}
+        driver={editingDriver}
+        businessId={business.id}
+        onClose={() => {
+          setIsDriverModalOpen(false);
+          setEditingDriver(null);
+        }}
+        onSaved={handleDriverSaved}
+      />
     </div>
   );
 }

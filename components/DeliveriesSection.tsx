@@ -10,13 +10,7 @@ import {
   ChevronRight,
   Filter,
   X,
-  Plus,
-  Edit2,
-  Archive,
-  RotateCcw,
   Loader2,
-  Camera,
-  Trash2,
   ArrowUp,
   ArrowDown,
   ArrowUpDown,
@@ -35,11 +29,7 @@ import {
 import { Order, OrderStatus, Business, Staff, Driver, OrderItem } from '@/lib/types';
 import {
   fetchDrivers,
-  insertDriver,
-  updateDriver,
-  setDriverActive,
   assignDriverToOrders,
-  uploadDriverPhoto,
   updateOrderStatus,
   fetchOrderItemsForOrders,
   cancelOrder,
@@ -74,8 +64,7 @@ export default function DeliveriesSection({
   // Navigation segmentée : « À assigner », « En tournée », « Livrées »
   const [activeSubTab, setActiveSubTab] = useState<'pending' | 'routes' | 'delivered'>('pending');
 
-  // Panneau latéral de gestion des livreurs
-  const [isDriversDrawerOpen, setIsDriversDrawerOpen] = useState(false);
+
 
   // Cartes de livreurs repliées dans l'onglet « En tournée »
   const [collapsedDriverIds, setCollapsedDriverIds] = useState<Record<string, boolean>>({});
@@ -146,25 +135,11 @@ export default function DeliveriesSection({
   // État des livreurs chargés depuis Supabase
   const [drivers, setDrivers] = useState<Driver[]>([]);
   const [isDriversLoading, setIsDriversLoading] = useState(false);
-  const [showArchivedDrivers, setShowArchivedDrivers] = useState(false);
-
   // Messages in-app discrets
   const [bannerMessage, setBannerMessage] = useState<{
     type: 'success' | 'error';
     text: string;
   } | null>(null);
-
-  // Modale Nouveau / Modifier Livreur
-  const [isDriverModalOpen, setIsDriverModalOpen] = useState(false);
-  const [editingDriver, setEditingDriver] = useState<Driver | null>(null);
-  const [driverFormName, setDriverFormName] = useState('');
-  const [driverFormPhone, setDriverFormPhone] = useState('');
-  const [driverFormNeighborhood, setDriverFormNeighborhood] = useState('');
-  const [driverFormPhotoUrl, setDriverFormPhotoUrl] = useState<string | null>(null);
-  const [isUploadingPhoto, setIsUploadingPhoto] = useState(false);
-  const [isDriverSaving, setIsDriverSaving] = useState(false);
-  const [driverFormError, setDriverFormError] = useState<string | null>(null);
-  const driverPhotoInputRef = useRef<HTMLInputElement>(null);
 
   // Chargement des livreurs de la boutique
   const loadDrivers = async () => {
@@ -1213,140 +1188,7 @@ export default function DeliveriesSection({
     }
   };
 
-  // Gestion formulaire livreur (Création / Modification)
-  const openNewDriverModal = () => {
-    setEditingDriver(null);
-    setDriverFormName('');
-    setDriverFormPhone('');
-    setDriverFormNeighborhood('');
-    setDriverFormPhotoUrl(null);
-    setDriverFormError(null);
-    setIsDriverModalOpen(true);
-  };
 
-  const openEditDriverModal = (driver: Driver) => {
-    setEditingDriver(driver);
-    setDriverFormName(driver.name);
-    setDriverFormPhone(driver.phone || '');
-    setDriverFormNeighborhood(driver.neighborhood || '');
-    setDriverFormPhotoUrl(driver.photo_url || null);
-    setDriverFormError(null);
-    setIsDriverModalOpen(true);
-  };
-
-  const handlePhotoFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    setIsUploadingPhoto(true);
-    setDriverFormError(null);
-    try {
-      const res = await uploadDriverPhoto(file, business.id);
-      if (res.success && res.url) {
-        setDriverFormPhotoUrl(res.url);
-      } else {
-        setDriverFormError(res.error || "Échec de l'upload de la photo.");
-      }
-    } catch (err: any) {
-      setDriverFormError(err?.message || "Erreur lors de l'upload de la photo.");
-    } finally {
-      setIsUploadingPhoto(false);
-      if (driverPhotoInputRef.current) {
-        driverPhotoInputRef.current.value = '';
-      }
-    }
-  };
-
-  const handleSaveDriverSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setDriverFormError(null);
-    const cleanName = driverFormName.trim();
-    const cleanPhone = driverFormPhone.trim() || null;
-    const cleanNeighborhood = driverFormNeighborhood.trim() || null;
-    const cleanPhotoUrl = driverFormPhotoUrl?.trim() || null;
-
-    if (!cleanName) {
-      setDriverFormError('Le nom du livreur est requis.');
-      return;
-    }
-    if (cleanName.length > 80) {
-      setDriverFormError('Le nom ne doit pas dépasser 80 caractères.');
-      return;
-    }
-    if (cleanPhone && cleanPhone.length > 30) {
-      setDriverFormError('Le téléphone ne doit pas dépasser 30 caractères.');
-      return;
-    }
-    if (cleanNeighborhood && cleanNeighborhood.length > 80) {
-      setDriverFormError('Le quartier ne doit pas dépasser 80 caractères.');
-      return;
-    }
-
-    setIsDriverSaving(true);
-    try {
-      if (editingDriver) {
-        const res = await updateDriver(editingDriver.id, business.id, {
-          name: cleanName,
-          phone: cleanPhone,
-          neighborhood: cleanNeighborhood,
-          photo_url: cleanPhotoUrl,
-        });
-        if (res.success && res.driver) {
-          setDrivers((prev) => prev.map((d) => (d.id === editingDriver.id ? res.driver! : d)));
-          setIsDriverModalOpen(false);
-          setBannerMessage({ type: 'success', text: `Livreur ${cleanName} modifié.` });
-        } else {
-          setDriverFormError(res.error || 'Erreur lors de la modification.');
-        }
-      } else {
-        const res = await insertDriver({
-          business_id: business.id,
-          name: cleanName,
-          phone: cleanPhone,
-          neighborhood: cleanNeighborhood,
-          photo_url: cleanPhotoUrl,
-          is_active: true,
-        });
-        if (res.success && res.driver) {
-          setDrivers((prev) => [...prev, res.driver!]);
-          setIsDriverModalOpen(false);
-          setSelectedDriverIdInBar(res.driver.id);
-          setBannerMessage({ type: 'success', text: `Livreur ${cleanName} ajouté.` });
-        } else {
-          setDriverFormError(res.error || "Erreur lors de l'enregistrement.");
-        }
-      }
-    } catch (err: any) {
-      setDriverFormError(err?.message || 'Erreur inattendue.');
-    } finally {
-      setIsDriverSaving(false);
-    }
-  };
-
-  const handleToggleDriverStatus = async (driver: Driver) => {
-    const nextActive = !driver.is_active;
-    try {
-      const res = await setDriverActive(driver.id, business.id, nextActive);
-      if (res.success) {
-        setDrivers((prev) =>
-          prev.map((d) => (d.id === driver.id ? { ...d, is_active: nextActive } : d))
-        );
-        setBannerMessage({
-          type: 'success',
-          text: nextActive
-            ? `Livreur ${driver.name} réactivé.`
-            : `Livreur ${driver.name} archivé.`,
-        });
-      } else {
-        setBannerMessage({
-          type: 'error',
-          text: res.error || 'Erreur lors du changement de statut.',
-        });
-      }
-    } catch (err: any) {
-      setBannerMessage({ type: 'error', text: err?.message || 'Erreur inattendue.' });
-    }
-  };
 
   const getStatusBadge = (status: OrderStatus) => {
     switch (status) {
@@ -1677,19 +1519,7 @@ export default function DeliveriesSection({
             </>
           )}
 
-          {/* Bouton Livreurs (ouvre le panneau latéral de gestion des livreurs) */}
-          <button
-            type="button"
-            onClick={() => setIsDriversDrawerOpen(true)}
-            className="px-2.5 py-1 rounded-lg border border-[#E5DCD0] bg-white hover:bg-slate-50 text-slate-700 text-xs font-semibold flex items-center gap-1.5 cursor-pointer transition-colors shrink-0 ml-auto"
-            title="Ouvrir la gestion des livreurs"
-          >
-            <Users className="w-3.5 h-3.5 text-[#1B4B4A]" />
-            <span>Livreurs</span>
-            <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-[#FAF7F2] border border-[#E5DCD0] text-slate-700 font-mono">
-              {drivers.filter((d) => d.is_active).length}
-            </span>
-          </button>
+
         </div>
 
         {/* Message d'information discret */}
@@ -2334,7 +2164,7 @@ export default function DeliveriesSection({
 
               <div className="flex flex-wrap items-center gap-2 justify-end">
                 {/* Suggestion commune cliquable si disponible */}
-                {commonSuggestion && (
+                {commonSuggestion && activeDriversList.length > 0 && (
                   <button
                     type="button"
                     onClick={() => {
@@ -2348,130 +2178,124 @@ export default function DeliveriesSection({
                   </button>
                 )}
 
-                {/* Sélecteur de livreur avec photo/initiales et quartier (ACTIFS UNIQUEMENT) */}
-                <div className="relative" ref={assignDriverDropdownRef}>
-                  <button
-                    type="button"
-                    disabled={isAssigning}
-                    onClick={() => setIsAssignDriverDropdownOpen((prev) => !prev)}
-                    className="bg-white border border-[#E5DCD0] rounded-md px-2.5 py-1.5 text-xs text-slate-900 focus:outline-none focus:border-[#1B4B4A] flex items-center gap-2 min-w-[190px] justify-between cursor-pointer disabled:opacity-50"
-                  >
-                    {selectedDriverIdInBar ? (
-                      (() => {
-                        const d = activeDriversList.find((drv) => drv.id === selectedDriverIdInBar);
-                        if (!d) return <span className="text-slate-400">Choisir un livreur...</span>;
-                        const inits = (d.name.trim().charAt(0) || 'L').toUpperCase();
-                        return (
-                          <div className="flex items-center gap-1.5 truncate">
-                            {d.photo_url ? (
-                              <img
-                                src={d.photo_url}
-                                alt={d.name}
-                                className="w-4 h-4 rounded-full object-cover shrink-0 border border-[#E5DCD0]"
-                              />
-                            ) : (
-                              <span className="w-4 h-4 rounded-full bg-[#FAF7F2] border border-[#E5DCD0] text-[#1B4B4A] flex items-center justify-center font-bold text-[9px] shrink-0">
-                                {inits}
-                              </span>
-                            )}
-                            <span className="font-semibold truncate">{d.name}</span>
-                            {d.neighborhood && (
-                              <span className="text-[10px] text-slate-400 truncate">({d.neighborhood})</span>
-                            )}
-                          </div>
-                        );
-                      })()
-                    ) : (
-                      <span className="text-slate-500">Choisir un livreur...</span>
-                    )}
-                    <ChevronDown className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-                  </button>
-
-                  {isAssignDriverDropdownOpen && (
-                    <div className="absolute bottom-full mb-1 left-0 w-64 bg-white border border-[#E5DCD0] rounded-xl shadow-xl z-50 p-1.5 space-y-1 max-h-56 overflow-y-auto">
+                {activeDriversList.length === 0 ? (
+                  <span className="text-xs text-slate-500 italic">
+                    Aucun livreur actif. Un propriétaire peut en créer dans Paramètres → Livraison.
+                  </span>
+                ) : (
+                  <>
+                    {/* Sélecteur de livreur avec photo/initiales et quartier (ACTIFS UNIQUEMENT) */}
+                    <div className="relative" ref={assignDriverDropdownRef}>
                       <button
                         type="button"
-                        onClick={() => {
-                          setSelectedDriverIdInBar('');
-                          setIsAssignDriverDropdownOpen(false);
-                        }}
-                        className={`w-full text-left px-2 py-1.5 rounded-lg text-xs flex items-center gap-2 cursor-pointer hover:bg-slate-50 ${
-                          !selectedDriverIdInBar ? 'bg-[#FAF7F2] font-semibold text-[#1B4B4A]' : 'text-slate-600'
-                        }`}
+                        disabled={isAssigning}
+                        onClick={() => setIsAssignDriverDropdownOpen((prev) => !prev)}
+                        className="bg-white border border-[#E5DCD0] rounded-md px-2.5 py-1.5 text-xs text-slate-900 focus:outline-none focus:border-[#1B4B4A] flex items-center gap-2 min-w-[190px] justify-between cursor-pointer disabled:opacity-50"
                       >
-                        <span className="text-slate-400 italic">Aucun livreur sélectionné</span>
+                        {selectedDriverIdInBar ? (
+                          (() => {
+                            const d = activeDriversList.find((drv) => drv.id === selectedDriverIdInBar);
+                            if (!d) return <span className="text-slate-400">Choisir un livreur...</span>;
+                            const inits = (d.name.trim().charAt(0) || 'L').toUpperCase();
+                            return (
+                              <div className="flex items-center gap-1.5 truncate">
+                                {d.photo_url ? (
+                                  <img
+                                    src={d.photo_url}
+                                    alt={d.name}
+                                    className="w-4 h-4 rounded-full object-cover shrink-0 border border-[#E5DCD0]"
+                                  />
+                                ) : (
+                                  <span className="w-4 h-4 rounded-full bg-[#FAF7F2] border border-[#E5DCD0] text-[#1B4B4A] flex items-center justify-center font-bold text-[9px] shrink-0">
+                                    {inits}
+                                  </span>
+                                )}
+                                <span className="font-semibold truncate">{d.name}</span>
+                                {d.neighborhood && (
+                                  <span className="text-[10px] text-slate-400 truncate">({d.neighborhood})</span>
+                                )}
+                              </div>
+                            );
+                          })()
+                        ) : (
+                          <span className="text-slate-500">Choisir un livreur...</span>
+                        )}
+                        <ChevronDown className="w-3.5 h-3.5 text-slate-400 shrink-0" />
                       </button>
 
-                      {activeDriversList.map((d) => {
-                        const isSelected = selectedDriverIdInBar === d.id;
-                        const inProgressCount = driverActiveOrdersMap.get(d.id)?.length || 0;
-                        const inits = (d.name.trim().charAt(0) || 'L').toUpperCase();
-                        return (
+                      {isAssignDriverDropdownOpen && (
+                        <div className="absolute bottom-full mb-1 left-0 w-64 bg-white border border-[#E5DCD0] rounded-xl shadow-xl z-50 p-1.5 space-y-1 max-h-56 overflow-y-auto">
                           <button
-                            key={d.id}
                             type="button"
                             onClick={() => {
-                              setSelectedDriverIdInBar(d.id);
+                              setSelectedDriverIdInBar('');
                               setIsAssignDriverDropdownOpen(false);
                             }}
-                            className={`w-full text-left px-2 py-1.5 rounded-lg text-xs flex items-center justify-between gap-2 cursor-pointer hover:bg-[#FAF7F2] transition-colors ${
-                              isSelected ? 'bg-[#FAF7F2] font-semibold text-[#1B4B4A]' : 'text-slate-800'
+                            className={`w-full text-left px-2 py-1.5 rounded-lg text-xs flex items-center gap-2 cursor-pointer hover:bg-slate-50 ${
+                              !selectedDriverIdInBar ? 'bg-[#FAF7F2] font-semibold text-[#1B4B4A]' : 'text-slate-600'
                             }`}
                           >
-                            <div className="flex items-center gap-2 truncate">
-                              {d.photo_url ? (
-                                <img
-                                  src={d.photo_url}
-                                  alt={d.name}
-                                  className="w-5 h-5 rounded-full object-cover shrink-0 border border-[#E5DCD0]"
-                                />
-                              ) : (
-                                <span className="w-5 h-5 rounded-full bg-slate-100 border border-[#E5DCD0] text-[#1B4B4A] flex items-center justify-center font-bold text-[10px] shrink-0">
-                                  {inits}
-                                </span>
-                              )}
-                              <div className="truncate">
-                                <div className="leading-tight truncate">{d.name}</div>
-                                <div className="text-[10px] text-slate-400 font-mono flex items-center gap-1 truncate">
-                                  {d.neighborhood && <span>{d.neighborhood}</span>}
-                                  {d.neighborhood && d.phone && <span>·</span>}
-                                  {d.phone && <span>{d.phone}</span>}
-                                </div>
-                              </div>
-                            </div>
-                            <span className="text-[10px] text-slate-500 shrink-0 font-medium font-mono">
-                              {inProgressCount} en livraison
-                            </span>
+                            <span className="text-slate-400 italic">Aucun livreur sélectionné</span>
                           </button>
-                        );
-                      })}
 
-                      <div className="pt-1 border-t border-slate-100">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setIsAssignDriverDropdownOpen(false);
-                            openNewDriverModal();
-                          }}
-                          className="w-full text-left px-2 py-1.5 rounded-lg text-xs font-semibold text-[#1B4B4A] hover:bg-[#1B4B4A]/10 flex items-center gap-1.5 cursor-pointer"
-                        >
-                          <Plus className="w-3.5 h-3.5" />
-                          <span>Nouveau livreur...</span>
-                        </button>
-                      </div>
+                          {activeDriversList.map((d) => {
+                            const isSelected = selectedDriverIdInBar === d.id;
+                            const inProgressCount = driverActiveOrdersMap.get(d.id)?.length || 0;
+                            const inits = (d.name.trim().charAt(0) || 'L').toUpperCase();
+                            return (
+                              <button
+                                key={d.id}
+                                type="button"
+                                onClick={() => {
+                                  setSelectedDriverIdInBar(d.id);
+                                  setIsAssignDriverDropdownOpen(false);
+                                }}
+                                className={`w-full text-left px-2 py-1.5 rounded-lg text-xs flex items-center justify-between gap-2 cursor-pointer hover:bg-[#FAF7F2] transition-colors ${
+                                  isSelected ? 'bg-[#FAF7F2] font-semibold text-[#1B4B4A]' : 'text-slate-800'
+                                }`}
+                              >
+                                <div className="flex items-center gap-2 truncate">
+                                  {d.photo_url ? (
+                                    <img
+                                      src={d.photo_url}
+                                      alt={d.name}
+                                      className="w-5 h-5 rounded-full object-cover shrink-0 border border-[#E5DCD0]"
+                                    />
+                                  ) : (
+                                    <span className="w-5 h-5 rounded-full bg-slate-100 border border-[#E5DCD0] text-[#1B4B4A] flex items-center justify-center font-bold text-[10px] shrink-0">
+                                      {inits}
+                                    </span>
+                                  )}
+                                  <div className="truncate">
+                                    <div className="leading-tight truncate">{d.name}</div>
+                                    <div className="text-[10px] text-slate-400 font-mono flex items-center gap-1 truncate">
+                                      {d.neighborhood && <span>{d.neighborhood}</span>}
+                                      {d.neighborhood && d.phone && <span>·</span>}
+                                      {d.phone && <span>{d.phone}</span>}
+                                    </div>
+                                  </div>
+                                </div>
+                                <span className="text-[10px] text-slate-500 shrink-0 font-medium font-mono">
+                                  {inProgressCount} en livraison
+                                </span>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
                     </div>
-                  )}
-                </div>
 
-                {/* Bouton Assigner */}
-                <button
-                  type="button"
-                  disabled={!selectedDriverIdInBar || isAssigning}
-                  onClick={() => handleAssignAction(selectedDriverIdInBar)}
-                  className="px-3 py-1 bg-[#1B4B4A] hover:bg-[#153a39] text-white rounded-md text-xs font-semibold transition-colors disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
-                >
-                  {isAssigning ? 'En cours...' : 'Assigner'}
-                </button>
+                    {/* Bouton Assigner */}
+                    <button
+                      type="button"
+                      disabled={!selectedDriverIdInBar || isAssigning}
+                      onClick={() => handleAssignAction(selectedDriverIdInBar)}
+                      className="px-3 py-1 bg-[#1B4B4A] hover:bg-[#153a39] text-white rounded-md text-xs font-semibold transition-colors disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+                    >
+                      {isAssigning ? 'En cours...' : 'Assigner'}
+                    </button>
+                  </>
+                )}
 
                 {/* Bouton Retirer */}
                 <button
@@ -3250,354 +3074,7 @@ export default function DeliveriesSection({
         </div>
       )}
 
-      {/* ========================================================================= */}
-      {/* 4. PANNEAU LATÉRAL : GESTION DES LIVREURS (TIROIR FLOTTANT À DROITE) */}
-      {/* ========================================================================= */}
-      {isDriversDrawerOpen && (
-        <div className="fixed inset-0 z-50 overflow-hidden">
-          {/* Fond estompé */}
-          <div
-            className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs transition-opacity"
-            onClick={() => setIsDriversDrawerOpen(false)}
-          />
-          <div className="fixed inset-y-0 right-0 max-w-full flex pl-10">
-            <div className="w-screen max-w-md bg-[#FAF7F2] border-l border-[#E5DCD0] shadow-2xl flex flex-col h-full">
-              {/* En-tête du panneau */}
-              <div className="p-3.5 bg-white border-b border-[#E5DCD0] flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <Users className="w-4 h-4 text-[#1B4B4A]" />
-                  <h2 className="text-xs font-bold text-slate-900 uppercase tracking-wider">
-                    Gestion des livreurs
-                  </h2>
-                  <span className="text-xs text-slate-500 font-mono">
-                    ({drivers.filter((d) => (showArchivedDrivers ? true : d.is_active)).length})
-                  </span>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setIsDriversDrawerOpen(false)}
-                  className="p-1 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 cursor-pointer"
-                  title="Fermer le panneau"
-                >
-                  <X className="w-4 h-4" />
-                </button>
-              </div>
 
-              {/* Barre d'outils du panneau : Nouveau livreur + Afficher archivés */}
-              <div className="p-3 bg-white border-b border-[#E5DCD0] flex flex-wrap items-center justify-between gap-2.5">
-                <button
-                  type="button"
-                  onClick={openNewDriverModal}
-                  className="px-3 py-1.5 bg-[#1B4B4A] hover:bg-[#153a39] text-white rounded-lg text-xs font-semibold flex items-center gap-1.5 cursor-pointer transition-colors"
-                >
-                  <Plus className="w-3.5 h-3.5" />
-                  <span>Nouveau livreur</span>
-                </button>
-
-                <label className="flex items-center gap-2 text-xs text-slate-700 select-none cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={showArchivedDrivers}
-                    onChange={(e) => setShowArchivedDrivers(e.target.checked)}
-                    className="rounded border-[#E5DCD0] text-[#1B4B4A] focus:ring-[#1B4B4A]"
-                  />
-                  <span>Afficher les archivés</span>
-                </label>
-              </div>
-
-              {/* Contenu : liste des livreurs */}
-              <div className="flex-1 overflow-y-auto p-3.5 space-y-3">
-                {isDriversLoading ? (
-                  <div className="p-6 text-center text-xs text-slate-500">
-                    <Loader2 className="w-4 h-4 text-[#1B4B4A] animate-spin mx-auto mb-1.5" />
-                    <span>Chargement des livreurs...</span>
-                  </div>
-                ) : drivers.filter((d) => (showArchivedDrivers ? true : d.is_active)).length === 0 ? (
-                  <div className="bg-white p-6 rounded-xl border border-[#E5DCD0] text-center">
-                    <p className="text-xs text-slate-500">
-                      Aucun livreur enregistré.{' '}
-                      <button
-                        type="button"
-                        onClick={openNewDriverModal}
-                        className="text-[#1B4B4A] font-bold underline ml-1 cursor-pointer"
-                      >
-                        Ajouter un premier livreur
-                      </button>
-                    </p>
-                  </div>
-                ) : (
-                  <div className="space-y-2.5">
-                    {drivers
-                      .filter((d) => (showArchivedDrivers ? true : d.is_active))
-                      .map((driver) => {
-                        const initials = (driver.name.trim().charAt(0) || 'L').toUpperCase();
-                        const inProgressCount = driverActiveOrdersMap.get(driver.id)?.length || 0;
-
-                        return (
-                          <div
-                            key={driver.id}
-                            onClick={() => {
-                              setActiveSubTab('routes');
-                              setFocusedDriverId(driver.id);
-                              setIsDriversDrawerOpen(false);
-                            }}
-                            className={`bg-white rounded-xl border p-3 flex flex-col justify-between transition-all cursor-pointer hover:border-[#1B4B4A] hover:shadow-xs ${
-                              driver.is_active
-                                ? 'border-[#E5DCD0]'
-                                : 'border-slate-200 bg-slate-50/60 opacity-80'
-                            }`}
-                          >
-                            <div>
-                              <div className="flex items-start justify-between gap-2.5 mb-2">
-                                <div className="flex items-center gap-2.5 min-w-0">
-                                  {driver.photo_url ? (
-                                    <img
-                                      src={driver.photo_url}
-                                      alt={driver.name}
-                                      className="w-8 h-8 rounded-full object-cover border border-[#E5DCD0] shrink-0"
-                                    />
-                                  ) : (
-                                    <div className="w-8 h-8 rounded-full bg-[#FAF7F2] border border-[#E5DCD0] text-[#1B4B4A] flex items-center justify-center font-bold text-xs shrink-0">
-                                      {initials}
-                                    </div>
-                                  )}
-                                  <div className="min-w-0">
-                                    <h3 className="text-xs font-bold text-slate-900 leading-tight truncate">
-                                      {driver.name}
-                                    </h3>
-                                    <div className="text-[11px] text-slate-500 font-mono mt-0.5 truncate">
-                                      {driver.phone || 'Aucun numéro'}
-                                    </div>
-                                    {driver.neighborhood && (
-                                      <div className="text-[10px] text-slate-400 mt-0.5 truncate">
-                                        {driver.neighborhood}
-                                      </div>
-                                    )}
-                                  </div>
-                                </div>
-
-                                <span
-                                  className={`px-2 py-0.5 rounded text-[10px] font-semibold ${
-                                    driver.is_active
-                                      ? 'bg-emerald-50 text-emerald-800 border border-emerald-200'
-                                      : 'bg-slate-100 text-slate-600 border border-slate-200'
-                                  }`}
-                                >
-                                  {driver.is_active ? 'Actif' : 'Archivé'}
-                                </span>
-                              </div>
-
-                              <div className="bg-[#FAF7F2] border border-[#E5DCD0] rounded-lg px-2.5 py-1.5 text-[11px] text-slate-700 flex items-center justify-between">
-                                <span>En livraison</span>
-                                <span className="font-bold tabular-nums text-slate-900 font-mono">
-                                  {inProgressCount} en livraison
-                                </span>
-                              </div>
-                            </div>
-
-                            <div
-                              className="flex items-center justify-end gap-2 mt-2.5 pt-2 border-t border-slate-100"
-                              onClick={(e) => e.stopPropagation()}
-                            >
-                              <button
-                                type="button"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  openEditDriverModal(driver);
-                                }}
-                                className="px-2 py-1 text-slate-700 hover:text-slate-900 text-xs font-medium flex items-center gap-1 cursor-pointer"
-                              >
-                                <Edit2 className="w-3 h-3" />
-                                <span>Modifier</span>
-                              </button>
-
-                              <button
-                                type="button"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  handleToggleDriverStatus(driver);
-                                }}
-                                className={`px-2 py-1 rounded text-xs font-medium flex items-center gap-1 cursor-pointer transition-colors ${
-                                  driver.is_active
-                                    ? 'text-slate-600 hover:text-rose-700'
-                                    : 'text-[#1B4B4A] hover:bg-[#1B4B4A]/10'
-                                }`}
-                              >
-                                {driver.is_active ? (
-                                  <>
-                                    <Archive className="w-3 h-3" />
-                                    <span>Archiver</span>
-                                  </>
-                                ) : (
-                                  <>
-                                    <RotateCcw className="w-3 h-3" />
-                                    <span>Réactiver</span>
-                                  </>
-                                )}
-                              </button>
-                            </div>
-                          </div>
-                        );
-                      })}
-                  </div>
-                )}
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ========================================================================= */}
-      {/* 4. MODALE NOUVEAU / MODIFIER LIVREUR */}
-      {/* ========================================================================= */}
-      {isDriverModalOpen && (
-        <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-[#FAF7F2] border border-[#E5DCD0] rounded-xl max-w-sm w-full p-4 shadow-xl space-y-3">
-            <div className="flex items-center justify-between pb-2.5 border-b border-[#E5DCD0]">
-              <h3 className="text-xs font-bold text-slate-900">
-                {editingDriver ? 'Modifier le livreur' : 'Nouveau livreur'}
-              </h3>
-              <button
-                type="button"
-                onClick={() => setIsDriverModalOpen(false)}
-                className="text-slate-400 hover:text-slate-700"
-              >
-                <X className="w-3.5 h-3.5" />
-              </button>
-            </div>
-
-            {driverFormError && (
-              <div className="p-2 bg-rose-50 border border-rose-200 text-rose-800 rounded-lg text-xs">
-                {driverFormError}
-              </div>
-            )}
-
-            <form onSubmit={handleSaveDriverSubmit} className="space-y-3">
-              {/* Photo du livreur (aperçu rond, ajouter, changer, retirer) */}
-              <div className="flex flex-col items-center justify-center pt-1 pb-1">
-                <input
-                  ref={driverPhotoInputRef}
-                  type="file"
-                  accept="image/png,image/jpeg,image/jpg,image/webp"
-                  className="hidden"
-                  onChange={handlePhotoFileChange}
-                />
-                <div className="relative group">
-                  {driverFormPhotoUrl ? (
-                    <img
-                      src={driverFormPhotoUrl}
-                      alt="Aperçu livreur"
-                      className="w-16 h-16 rounded-full object-cover border-2 border-[#1B4B4A] shadow-sm"
-                    />
-                  ) : (
-                    <div className="w-16 h-16 rounded-full bg-white border-2 border-dashed border-[#E5DCD0] text-slate-400 flex flex-col items-center justify-center font-bold text-base shadow-sm">
-                      {driverFormName.trim() ? (
-                        <span className="text-[#1B4B4A] text-lg">
-                          {(driverFormName.trim().charAt(0) || 'L').toUpperCase()}
-                        </span>
-                      ) : (
-                        <Camera className="w-5 h-5 text-slate-400" />
-                      )}
-                    </div>
-                  )}
-
-                  {isUploadingPhoto && (
-                    <div className="absolute inset-0 rounded-full bg-black/40 flex items-center justify-center">
-                      <Loader2 className="w-5 h-5 text-white animate-spin" />
-                    </div>
-                  )}
-                </div>
-
-                <div className="flex items-center gap-2 mt-2">
-                  <button
-                    type="button"
-                    disabled={isUploadingPhoto || isDriverSaving}
-                    onClick={() => driverPhotoInputRef.current?.click()}
-                    className="px-2.5 py-1 bg-white hover:bg-slate-50 border border-[#E5DCD0] rounded-md text-[11px] font-semibold text-slate-700 flex items-center gap-1 cursor-pointer transition-colors disabled:opacity-50"
-                  >
-                    <Camera className="w-3 h-3 text-[#1B4B4A]" />
-                    <span>{driverFormPhotoUrl ? 'Changer la photo' : 'Ajouter une photo'}</span>
-                  </button>
-
-                  {driverFormPhotoUrl && (
-                    <button
-                      type="button"
-                      disabled={isUploadingPhoto || isDriverSaving}
-                      onClick={() => setDriverFormPhotoUrl(null)}
-                      className="p-1 hover:bg-rose-50 text-rose-600 rounded-md border border-rose-200 text-[11px] cursor-pointer transition-colors"
-                      title="Retirer la photo"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </button>
-                  )}
-                </div>
-                <div className="text-[10px] text-slate-400 mt-1">PNG, JPG ou WEBP (max 2 Mo)</div>
-              </div>
-
-              <div>
-                <label className="text-xs font-bold text-slate-700 block mb-1">
-                  Nom complet <span className="text-rose-500">*</span>
-                </label>
-                <input
-                  type="text"
-                  required
-                  autoFocus
-                  maxLength={80}
-                  value={driverFormName}
-                  onChange={(e) => setDriverFormName(e.target.value)}
-                  placeholder="Ex: Ibrahima Sow"
-                  className="w-full bg-white border border-[#E5DCD0] rounded-lg px-2.5 py-1.5 text-xs text-slate-900 focus:outline-none focus:border-[#1B4B4A]"
-                />
-              </div>
-
-              <div>
-                <label className="text-xs font-bold text-slate-700 block mb-1">
-                  Numéro de téléphone (optionnel)
-                </label>
-                <input
-                  type="text"
-                  maxLength={30}
-                  value={driverFormPhone}
-                  onChange={(e) => setDriverFormPhone(e.target.value)}
-                  placeholder="Ex: +221 77 123 45 67"
-                  className="w-full bg-white border border-[#E5DCD0] rounded-lg px-2.5 py-1.5 text-xs text-slate-900 focus:outline-none focus:border-[#1B4B4A] font-mono"
-                />
-              </div>
-
-              <div>
-                <label className="text-xs font-bold text-slate-700 block mb-1">
-                  Quartier de résidence (optionnel)
-                </label>
-                <input
-                  type="text"
-                  maxLength={80}
-                  value={driverFormNeighborhood}
-                  onChange={(e) => setDriverFormNeighborhood(e.target.value)}
-                  placeholder="Ex: Médina, Almadies, Sacré-Cœur..."
-                  className="w-full bg-white border border-[#E5DCD0] rounded-lg px-2.5 py-1.5 text-xs text-slate-900 focus:outline-none focus:border-[#1B4B4A]"
-                />
-              </div>
-
-              <div className="flex items-center justify-end gap-2 pt-1.5">
-                <button
-                  type="button"
-                  onClick={() => setIsDriverModalOpen(false)}
-                  className="px-3 py-1 rounded-lg text-xs font-medium text-slate-600 hover:bg-slate-100 cursor-pointer"
-                >
-                  Annuler
-                </button>
-                <button
-                  type="submit"
-                  disabled={isDriverSaving || isUploadingPhoto}
-                  className="px-3.5 py-1 bg-[#1B4B4A] hover:bg-[#153a39] text-white rounded-lg text-xs font-semibold disabled:opacity-50 cursor-pointer"
-                >
-                  {isDriverSaving ? 'Enregistrement...' : 'Enregistrer'}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
 
       {/* Modale d'aperçu d'impression (tickets 80 mm ou feuille de route A4) */}
       {ticketPreviewModal.isOpen && ticketPreviewModal.driver && (

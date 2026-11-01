@@ -90,6 +90,7 @@ import {
   fetchBusinessById,
   updateBusinessConfig,
   fetchTokenUsageForBusiness,
+  fetchDrivers,
   supabase,
 } from '@/lib/supabase';
 import {
@@ -105,6 +106,7 @@ import {
   AttendanceStatus,
   Customer,
   CustomerMessage,
+  Driver,
 } from '@/lib/types';
 import { getOrderStatusLabel } from '@/lib/order-status';
 import { getStore } from '@/lib/store';
@@ -244,6 +246,25 @@ export default function MerchantDashboard({
   const [paymentMethodFilter, setPaymentMethodFilter] = useState<'all' | 'wave' | 'orange' | 'card'>('all');
   const [orderPeriodFilter, setOrderPeriodFilter] = useState<'day' | 'week' | 'month' | 'year' | 'all'>('all');
   const [hasRatingFilter, setHasRatingFilter] = useState<boolean>(false);
+
+  // Drivers list (chargé pour Commandes et modules partagés)
+  const [drivers, setDrivers] = useState<Driver[]>([]);
+
+  useEffect(() => {
+    let isCancelled = false;
+    fetchDrivers(business.id)
+      .then((data) => {
+        if (!isCancelled) {
+          setDrivers(data || []);
+        }
+      })
+      .catch((err) => {
+        console.warn('Erreur chargement livreurs dans MerchantDashboard:', err);
+      });
+    return () => {
+      isCancelled = true;
+    };
+  }, [business.id]);
 
   // Conversion filter
   const [conversionPeriod, setConversionPeriod] = useState<'week' | 'month' | 'year' | 'all'>('month');
@@ -1000,8 +1021,8 @@ export default function MerchantDashboard({
       {/* 2. SIDEBAR LEFT (RUBAN DE NAVIGATION RÉTRACTABLE) */}
       <aside
         className={`bg-white border-r border-slate-200/80 flex flex-col justify-between transition-all duration-300 z-30 shrink-0 shadow-2xs ${
-          isSidebarCollapsed ? 'w-20' : 'w-64'
-        }`}
+          activeTab === 'settings' ? 'hidden' : ''
+        } ${isSidebarCollapsed ? 'w-20' : 'w-64'}`}
       >
         <div>
           {/* Sidebar Top Profile Avatar Header (Clickable -> Mon Profil) */}
@@ -1390,6 +1411,7 @@ export default function MerchantDashboard({
             setOrderPeriodFilter={setOrderPeriodFilter}
             selectedCustomerId={selectedCustomerId}
             setSelectedCustomerId={setSelectedCustomerId}
+            drivers={drivers}
             getInitials={getInitials}
             onUpdateOrderStatus={onUpdateOrderStatus}
             onCancelOrder={onCancelOrder}
@@ -1477,9 +1499,12 @@ export default function MerchantDashboard({
         {/* TAB 6: PARAMÈTRES (STORE SETTINGS, OWNER ONLY) */}
         {hasPermission('settings') && activeTab === 'settings' && (
           <SettingsSection
+            onBack={() => setActiveTab('overview')}
             business={business}
             activeStaff={activeStaff}
             businessOrders={businessOrders}
+            products={businessProducts}
+            categories={businessCategories}
             onProcessPayment={onProcessPayment}
             businessStaff={businessStaff}
             staffTab={staffTab}

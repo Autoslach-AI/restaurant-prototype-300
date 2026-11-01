@@ -9,7 +9,7 @@ import {
   FileText,
   Loader2,
 } from 'lucide-react';
-import { Order, OrderStatus, Customer, Business } from '@/lib/types';
+import { Order, OrderStatus, Customer, Business, Driver } from '@/lib/types';
 import { getOrderStatusLabel } from '@/lib/order-status';
 import { fetchOrderItemsForOrders } from '@/lib/supabase';
 import PrintPreviewModal from '@/components/PrintPreviewModal';
@@ -34,6 +34,7 @@ export interface OrdersSectionProps {
   setOrderPeriodFilter: (period: 'day' | 'week' | 'month' | 'year' | 'all') => void;
   selectedCustomerId: string | null;
   setSelectedCustomerId: (id: string | null) => void;
+  drivers?: Driver[];
   getInitials: (name?: string) => string;
   onUpdateOrderStatus: (orderId: string, status: OrderStatus) => void;
   onCancelOrder: (orderId: string, reason: string) => Promise<void>;
@@ -59,6 +60,7 @@ export default function OrdersSection({
   setOrderPeriodFilter,
   selectedCustomerId,
   setSelectedCustomerId,
+  drivers = [],
   getInitials,
   onUpdateOrderStatus,
   onCancelOrder,
@@ -427,6 +429,7 @@ export default function OrdersSection({
                       <th className="py-3 px-3.5">Canal de paiement</th>
                       <th className="py-3 px-3.5">Priorité</th>
                       <th className="py-3 px-3.5">Statut</th>
+                      <th className="py-3 px-3.5">Livreur</th>
                       <th className="py-3 px-3.5 text-right">Date / Heure</th>
                       <th className="py-3 px-3.5 text-center">Commentaire</th>
                       <th className="py-3 px-3.5 text-center">Actions</th>
@@ -610,21 +613,32 @@ export default function OrdersSection({
                                   }}
                                   className={`border rounded-lg px-2 py-1 text-xs font-medium focus:outline-none cursor-pointer w-full transition-colors ${getStatusSelectClass(ord.status)}`}
                                 >
-                                  {/* Si la commande a un statut preparing existant en base, affiche Confirmée */}
-                                  {ord.status === 'preparing' && (
-                                    <option value="preparing" className="bg-blue-100 text-blue-900">
-                                      {getOrderStatusLabel('preparing', ord.order_type)}
+                                  {/* Si la commande a un statut pending en base */}
+                                  {ord.status === 'pending' && (
+                                    <option value="pending" className="bg-amber-100 text-amber-900">
+                                      {getOrderStatusLabel('pending', ord.order_type, ord)}
                                     </option>
                                   )}
 
-                                  {/* confirmed (« Confirmée ») */}
+                                  {/* Si la commande a un statut preparing existant en base, affiche Confirmée ou En charge */}
+                                  {ord.status === 'preparing' && (
+                                    <option value="preparing" className="bg-blue-100 text-blue-900">
+                                      {getOrderStatusLabel('preparing', ord.order_type, ord)}
+                                    </option>
+                                  )}
+
+                                  {/* confirmed (« Confirmée » ou « En charge » si assignée) */}
                                   <option value="confirmed" className="bg-blue-100 text-blue-900">
-                                    {getOrderStatusLabel('confirmed', ord.order_type)}
+                                    {ord.status === 'confirmed'
+                                      ? getOrderStatusLabel('confirmed', ord.order_type, ord)
+                                      : getOrderStatusLabel('confirmed', ord.order_type)}
                                   </option>
 
-                                  {/* Transition proposée : → ready (« Prête ») */}
+                                  {/* Transition proposée : → ready (« Prête » ou « En charge » si assignée) */}
                                   <option value="ready" className="bg-amber-100 text-amber-900">
-                                    {getOrderStatusLabel('ready', ord.order_type)}
+                                    {ord.status === 'ready'
+                                      ? getOrderStatusLabel('ready', ord.order_type, ord)
+                                      : getOrderStatusLabel('ready', ord.order_type)}
                                   </option>
 
                                   {/* Retrait sur place (order_type = pickup) : ready → delivered, affiché « Retirée » */}
@@ -658,6 +672,35 @@ export default function OrdersSection({
                                 {ord.cancellation_reason}
                               </div>
                             )}
+                          </td>
+
+                          {/* Livreur */}
+                          <td className="py-3.5 px-3.5 text-[11px] whitespace-nowrap text-slate-700">
+                            {(() => {
+                              if (ord.order_type === 'pickup') {
+                                return <span className="text-slate-400 font-medium">-</span>;
+                              }
+                              let driverName: string | null = null;
+                              if (ord.driver_id) {
+                                const found = drivers.find((d) => d.id === ord.driver_id);
+                                if (found) {
+                                  driverName = found.name;
+                                } else if (ord.assigned_to && ord.assigned_to.trim()) {
+                                  driverName = ord.assigned_to.trim();
+                                }
+                              } else if (ord.assigned_to && ord.assigned_to.trim()) {
+                                driverName = ord.assigned_to.trim();
+                              }
+
+                              if (driverName) {
+                                return <span className="font-bold text-slate-800">{driverName}</span>;
+                              }
+                              return (
+                                <span className="text-amber-700 bg-amber-50 border border-amber-200/80 px-2 py-0.5 rounded-full text-[10px] font-bold inline-block">
+                                  Non assignée
+                                </span>
+                              );
+                            })()}
                           </td>
 
                           {/* 10. Date / Heure */}
@@ -738,7 +781,7 @@ export default function OrdersSection({
                     })}
                     {filteredOrders.length === 0 && (
                       <tr>
-                        <td colSpan={12} className="py-12 text-center text-slate-400 text-xs">
+                        <td colSpan={13} className="py-12 text-center text-slate-400 text-xs">
                           Aucune commande ne correspond aux critères.
                         </td>
                       </tr>

@@ -12,10 +12,25 @@ import { OrderStatus, OrderType } from './types';
  */
 export function getOrderStatusLabel(
   status?: OrderStatus | string | null,
-  orderType?: OrderType | string | null
+  orderType?: OrderType | string | null,
+  driverInfo?: { driver_id?: string | null; assigned_to?: string | null } | null
 ): string {
   if (!status) return '';
   const s = status.toLowerCase();
+
+  const hasDriver = Boolean(
+    driverInfo &&
+    ((driverInfo.driver_id && driverInfo.driver_id.trim()) ||
+     (driverInfo.assigned_to && driverInfo.assigned_to.trim()))
+  );
+
+  if (
+    orderType === 'delivery' &&
+    hasDriver &&
+    (s === 'pending' || s === 'confirmed' || s === 'preparing' || s === 'ready')
+  ) {
+    return 'En charge';
+  }
 
   switch (s) {
     case 'pending':
