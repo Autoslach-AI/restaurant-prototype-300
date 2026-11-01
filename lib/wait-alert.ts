@@ -19,6 +19,16 @@ export function getReadySinceMs(order: Order): number {
 }
 
 /**
+ * Retourne le timestamp (en millisecondes) de création de la commande (created_at).
+ * Retourne 0 si la date est absente ou invalide.
+ */
+export function getOrderedSinceMs(order: Order): number {
+  if (!order?.created_at) return 0;
+  const timeMs = new Date(order.created_at).getTime();
+  return isNaN(timeMs) ? 0 : timeMs;
+}
+
+/**
  * Formate une durée d'attente en minutes :
  * - Moins de 60 min : "15 min", "16 min"...
  * - De 60 min à 24 h : "1 h 05"

@@ -23,7 +23,7 @@ import {
 } from 'recharts';
 import { Business, Order, Customer, AgentEvent } from '@/lib/types';
 import { getOrderStatusLabel } from '@/lib/order-status';
-import { getReadySinceMs, formatWaitDuration } from '@/lib/wait-alert';
+import { getReadySinceMs, getOrderedSinceMs, formatWaitDuration } from '@/lib/wait-alert';
 
 export interface OverviewSectionProps {
   business: Business;
@@ -124,6 +124,21 @@ export default function OverviewSection({
     const elapsedMinutes = Math.floor(maxElapsedMs / 60000);
     return formatWaitDuration(elapsedMinutes);
   }, [preparingOver45Min, nowMs]);
+
+  // Durée d'attente de la plus ancienne commande urgente en attente
+  const oldestUrgentWaitText = useMemo(() => {
+    if (!urgentUndelivered || urgentUndelivered.length === 0) return null;
+    let maxElapsedMs = 0;
+    for (const ord of urgentUndelivered) {
+      const startMs = getOrderedSinceMs(ord);
+      const elapsed = Math.max(0, nowMs - startMs);
+      if (elapsed > maxElapsedMs) {
+        maxElapsedMs = elapsed;
+      }
+    }
+    const elapsedMinutes = Math.floor(maxElapsedMs / 60000);
+    return formatWaitDuration(elapsedMinutes);
+  }, [urgentUndelivered, nowMs]);
 
   // Today and Yesterday Timestamps
   const currentDateObj = new Date(nowMs);
@@ -412,6 +427,11 @@ export default function OverviewSection({
                     >
                       <div className="flex flex-col min-w-0 pr-1">
                         <span className="text-xs font-bold leading-tight">{cat.title}</span>
+                        {cat.id === 'urgent_undelivered' && cat.count > 0 && oldestUrgentWaitText && (
+                          <span className="text-[10px] font-medium opacity-80 mt-0.5">
+                            la plus ancienne : {oldestUrgentWaitText}
+                          </span>
+                        )}
                         {cat.id === 'preparing_45m' && cat.count > 0 && oldestReadyWaitText && (
                           <span className="text-[10px] font-medium opacity-80 mt-0.5">
                             la plus ancienne : {oldestReadyWaitText}
