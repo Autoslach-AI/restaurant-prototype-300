@@ -242,6 +242,16 @@ export default function DeliveriesSection({
     return `${y}-${m}-${day}`;
   };
 
+  // Helper pour formater une chaîne YYYY-MM-DD en JJ/MM/AAAA
+  const formatDateToDMY = (dateStr?: string | null) => {
+    if (!dateStr) return '';
+    const parts = dateStr.split('-');
+    if (parts.length === 3) {
+      return `${parts[2]}/${parts[1]}/${parts[0]}`;
+    }
+    return dateStr;
+  };
+
   // Début de la journée pour les calculs de dates et filtres
   const startOfTodayMs = useMemo(() => {
     const d = new Date(nowMs);
@@ -473,22 +483,27 @@ export default function DeliveriesSection({
     return Array.from(map.entries()).map(([id, name]) => ({ id, name }));
   }, [deliveredOrders]);
 
-  // Formatage de l'heure de livraison pour l'onglet « Livrées » (la date étant dans l'en-tête du jour)
+  // Formatage de la date et heure de livraison pour l'onglet « Livrées »
   const formatDeliveryTime = (ord: Order) => {
-    if (!ord.delivered_at) {
-      return { timeText: '—', isApproximate: true };
+    const dateStr = ord.delivered_at || ord.updated_at;
+    if (!dateStr) {
+      return { dateText: '—', timeText: '—', isApproximate: true };
     }
     try {
-      const d = new Date(ord.delivered_at);
-      if (isNaN(d.getTime())) return { timeText: '—', isApproximate: true };
+      const d = new Date(dateStr);
+      if (isNaN(d.getTime())) return { dateText: '—', timeText: '—', isApproximate: true };
+      const y = d.getFullYear();
+      const m = String(d.getMonth() + 1).padStart(2, '0');
+      const day = String(d.getDate()).padStart(2, '0');
       const hours = String(d.getHours()).padStart(2, '0');
       const minutes = String(d.getMinutes()).padStart(2, '0');
       return {
+        dateText: `${day}/${m}/${y}`,
         timeText: `${hours}:${minutes}`,
-        isApproximate: false,
+        isApproximate: !ord.delivered_at,
       };
     } catch {
-      return { timeText: '—', isApproximate: true };
+      return { dateText: '—', timeText: '—', isApproximate: true };
     }
   };
 
@@ -513,12 +528,18 @@ export default function DeliveriesSection({
           const day = String(d.getDate()).padStart(2, '0');
           dayKey = `${y}-${m}-${day}`;
 
-          const rawLabel = d.toLocaleDateString('fr-FR', {
-            weekday: 'long',
-            day: 'numeric',
-            month: 'short',
-          });
-          dayLabel = rawLabel.charAt(0).toUpperCase() + rawLabel.slice(1);
+          const formattedDate = `${day}/${m}/${y}`;
+          const nowD = new Date(nowMs);
+          const todayKey = formatLocalDate(nowD);
+          const yesterdayKey = formatLocalDate(new Date(nowD.getFullYear(), nowD.getMonth(), nowD.getDate() - 1));
+
+          if (dayKey === todayKey) {
+            dayLabel = `Aujourd'hui · ${formattedDate}`;
+          } else if (dayKey === yesterdayKey) {
+            dayLabel = `Hier · ${formattedDate}`;
+          } else {
+            dayLabel = formattedDate;
+          }
         }
       }
 
@@ -557,7 +578,7 @@ export default function DeliveriesSection({
     }
 
     return visibleGroups;
-  }, [filteredDeliveredOrders, deliveredVisibleLimit]);
+  }, [filteredDeliveredOrders, deliveredVisibleLimit, nowMs]);
 
   // Réinitialiser à 50 commandes visibles lorsque les filtres changent
   useEffect(() => {
@@ -2830,7 +2851,13 @@ export default function DeliveriesSection({
                 <option value="this_month">Ce mois</option>
                 <option value="last_month">Mois dernier</option>
                 <option value="all">Toutes</option>
-                <option value="custom">Personnalisée</option>
+                <option value="custom">
+                  {isSingleDayCustom && customStartDate
+                    ? formatDateToDMY(customStartDate)
+                    : customStartDate && customEndDate && customStartDate !== customEndDate
+                    ? `Du ${formatDateToDMY(customStartDate)} au ${formatDateToDMY(customEndDate)}`
+                    : 'Personnalisée'}
+                </option>
               </select>
             </div>
 
@@ -2943,17 +2970,17 @@ export default function DeliveriesSection({
               <div className="overflow-x-auto">
                 <table className="w-full text-left text-xs text-slate-700 table-fixed">
                   <colgroup>
-                    <col className="w-[85px]" style={{ width: '85px' }} />
-                    <col />
-                    <col className="w-[130px]" style={{ width: '130px' }} />
+                    <col className="w-[110px]" style={{ width: '110px' }} />
+                    <col className="w-[180px]" style={{ width: '180px' }} />
                     <col className="w-[140px]" style={{ width: '140px' }} />
+                    <col />
                     <col className="w-[120px]" style={{ width: '120px' }} />
                     <col className="w-[150px]" style={{ width: '150px' }} />
                     <col className="w-[85px]" style={{ width: '85px' }} />
                   </colgroup>
                   <thead className="bg-slate-50/60 text-slate-400 uppercase font-semibold text-[10px] border-b border-slate-100">
                     <tr>
-                      <th className="py-2 px-3">Heure</th>
+                      <th className="py-2 px-3">Livrée le</th>
                       <th className="py-2 px-3">Client</th>
                       <th className="py-2 px-3">Téléphone</th>
                       <th className="py-2 px-3">Zone</th>
@@ -2983,16 +3010,17 @@ export default function DeliveriesSection({
                         {/* Lignes du groupe */}
                         {grp.orders.map((ord) => {
                           const refShort = getOrderShortRef(ord);
-                          const { timeText, isApproximate } = formatDeliveryTime(ord);
+                          const { dateText, timeText, isApproximate } = formatDeliveryTime(ord);
                           const clientInitial = ((ord.customer_name || 'C').trim().charAt(0) || 'C').toUpperCase();
                           const matchedDriver = ord.driver_id ? drivers.find((d) => d.id === ord.driver_id) : null;
                           const driverName = matchedDriver?.name || ord.assigned_to || 'Non assigné';
 
                           return (
                             <tr key={ord.id} className="hover:bg-slate-50/60 transition-colors bg-white">
-                              {/* Heure (HH:mm, date dans l'en-tête du jour) */}
+                              {/* Livrée le (date courte et heure de livraison) */}
                               <td className="py-2 px-3 align-top whitespace-nowrap">
-                                <div className="font-medium text-slate-900 font-mono text-xs">{timeText}</div>
+                                <div className="font-medium text-slate-900 font-mono text-xs">{dateText}</div>
+                                <div className="text-[11px] text-slate-500 font-mono">{timeText}</div>
                                 {isApproximate && (
                                   <div className="text-[10px] text-amber-700 font-medium">date approximative</div>
                                 )}
