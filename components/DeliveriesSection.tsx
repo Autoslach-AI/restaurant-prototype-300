@@ -38,6 +38,7 @@ import {
   generateRoutePdf,
   generateTicketsPdf,
   getOrderShortRef,
+  getPaymentMethodLabel,
 } from '@/lib/print-docs';
 import PrintPreviewModal from '@/components/PrintPreviewModal';
 import { getOrderStatusLabel } from '@/lib/order-status';
@@ -77,8 +78,10 @@ export default function DeliveriesSection({
   const [customEndDate, setCustomEndDate] = useState<string>('');
   const [deliveredDriverFilter, setDeliveredDriverFilter] = useState<string>('all');
   const [deliveredZoneFilter, setDeliveredZoneFilter] = useState<string>('all');
+  const [deliveredChannelFilter, setDeliveredChannelFilter] = useState<string>('all');
   const [deliveredSearchQuery, setDeliveredSearchQuery] = useState<string>('');
   const [deliveredVisibleLimit, setDeliveredVisibleLimit] = useState<number>(50);
+  const [isSummaryExpanded, setIsSummaryExpanded] = useState<boolean>(false);
 
   // Filtre pour inclure les commandes déjà assignées dans l'onglet « À assigner » (désactivé par défaut)
   const [includeAssignedOrders, setIncludeAssignedOrders] = useState<boolean>(false);
@@ -432,7 +435,13 @@ export default function DeliveriesSection({
         if (ordZoneId !== deliveredZoneFilter) return false;
       }
 
-      // 4. Recherche client, tél, réf, adresse, livreur
+      // 4. Filtre canal de paiement
+      if (deliveredChannelFilter !== 'all') {
+        const methodLabel = getPaymentMethodLabel(ord.payment_method);
+        if (methodLabel !== deliveredChannelFilter) return false;
+      }
+
+      // 5. Recherche client, tél, réf, adresse, livreur
       if (deliveredSearchQuery.trim()) {
         const q = deliveredSearchQuery.toLowerCase().trim();
         const matchesClient = ord.customer_name?.toLowerCase().includes(q) ?? false;
@@ -464,12 +473,101 @@ export default function DeliveriesSection({
     deliveredDateBounds,
     deliveredDriverFilter,
     deliveredZoneFilter,
+    deliveredChannelFilter,
     deliveredSearchQuery,
   ]);
 
   // Montant total des commandes livrées filtrées
   const totalDeliveredFilteredAmount = useMemo(() => {
     return filteredDeliveredOrders.reduce((sum, o) => sum + Number(o.total_amount || 0), 0);
+  }, [filteredDeliveredOrders]);
+
+  // Récapitulatif par livreur sur TOUTES les livraisons filtrées
+  const deliveredDriverSummary = useMemo(() => {
+    const map = new Map<
+      string,
+      { driverKey: string; driverName: string; count: number; totalAmount: number; deliveryFee: number }
+    >();
+
+    for (const ord of filteredDeliveredOrders) {
+      let driverName = 'Non assigné';
+      let driverKey = '__unassigned__';
+
+      if (ord.driver_id) {
+        const matched = drivers.find((d) => d.id === ord.driver_id);
+        if (matched) {
+          driverName = matched.name;
+          driverKey = matched.id;
+        } else if (ord.assigned_to && ord.assigned_to.trim()) {
+          driverName = ord.assigned_to.trim();
+          driverKey = ord.driver_id;
+        }
+      } else if (ord.assigned_to && ord.assigned_to.trim()) {
+        const trimmed = ord.assigned_to.trim();
+        const matched = drivers.find((d) => d.name.toLowerCase() === trimmed.toLowerCase());
+        if (matched) {
+          driverName = matched.name;
+          driverKey = matched.id;
+        } else {
+          driverName = trimmed;
+          driverKey = `name:${trimmed.toLowerCase()}`;
+        }
+      }
+
+      let item = map.get(driverKey);
+      if (!item) {
+        item = { driverKey, driverName, count: 0, totalAmount: 0, deliveryFee: 0 };
+        map.set(driverKey, item);
+      }
+      item.count += 1;
+      item.totalAmount += Number(ord.total_amount || 0);
+      item.deliveryFee += Number(ord.delivery_fee || 0);
+    }
+
+    const list = Array.from(map.values());
+    list.sort((a, b) => b.totalAmount - a.totalAmount);
+
+    const totals = list.reduce(
+      (acc, cur) => {
+        acc.count += cur.count;
+        acc.totalAmount += cur.totalAmount;
+        acc.deliveryFee += cur.deliveryFee;
+        return acc;
+      },
+      { count: 0, totalAmount: 0, deliveryFee: 0 }
+    );
+
+    return { list, totals };
+  }, [filteredDeliveredOrders, drivers]);
+
+  // Récapitulatif par canal sur TOUTES les livraisons filtrées
+  const deliveredChannelSummary = useMemo(() => {
+    const map = new Map<string, { channelLabel: string; count: number; totalAmount: number }>();
+
+    for (const ord of filteredDeliveredOrders) {
+      const channelLabel = getPaymentMethodLabel(ord.payment_method);
+      let item = map.get(channelLabel);
+      if (!item) {
+        item = { channelLabel, count: 0, totalAmount: 0 };
+        map.set(channelLabel, item);
+      }
+      item.count += 1;
+      item.totalAmount += Number(ord.total_amount || 0);
+    }
+
+    const list = Array.from(map.values());
+    list.sort((a, b) => b.totalAmount - a.totalAmount);
+
+    const totals = list.reduce(
+      (acc, cur) => {
+        acc.count += cur.count;
+        acc.totalAmount += cur.totalAmount;
+        return acc;
+      },
+      { count: 0, totalAmount: 0 }
+    );
+
+    return { list, totals };
   }, [filteredDeliveredOrders]);
 
   // Extraction des zones distinctes pour le filtre Livrées
@@ -2948,6 +3046,21 @@ export default function DeliveriesSection({
               </select>
             </div>
 
+            {/* Menu Canal */}
+            <div className="shrink-0 min-w-[130px]">
+              <select
+                value={deliveredChannelFilter}
+                onChange={(e) => setDeliveredChannelFilter(e.target.value)}
+                className="w-full bg-[#FAF7F2] border border-[#E5DCD0] rounded-lg px-2.5 py-1 text-xs text-slate-900 focus:outline-none focus:border-[#1B4B4A] cursor-pointer"
+              >
+                <option value="all">Tous les canaux</option>
+                <option value="Wave">Wave</option>
+                <option value="Orange Money">Orange Money</option>
+                <option value="Carte">Carte</option>
+                <option value="Espèces">Espèces</option>
+              </select>
+            </div>
+
             {/* À droite : « n livraisons · total X devise » */}
             <div className="shrink-0 whitespace-nowrap text-xs font-semibold text-slate-800 px-3 py-1 bg-[#FAF7F2] border border-[#E5DCD0] rounded-lg ml-auto">
               <span className="tabular-nums font-bold text-slate-900">
@@ -2958,6 +3071,126 @@ export default function DeliveriesSection({
                 {totalDeliveredFilteredAmount.toLocaleString()} {business.currency}
               </span>
             </div>
+          </div>
+
+          {/* Bloc Récapitulatif repliable (replié par défaut) */}
+          <div className="bg-white rounded-xl border border-[#E5DCD0] overflow-hidden">
+            <button
+              type="button"
+              onClick={() => setIsSummaryExpanded((prev) => !prev)}
+              className="w-full px-4 py-2.5 flex items-center justify-between text-xs font-semibold text-slate-800 hover:bg-slate-50/70 transition-colors cursor-pointer"
+            >
+              <div className="flex items-center gap-2">
+                <ChevronDown
+                  className={`w-4 h-4 text-slate-500 transition-transform duration-200 ${
+                    isSummaryExpanded ? 'rotate-180' : ''
+                  }`}
+                />
+                <span>Récapitulatif (par livreur et par canal)</span>
+              </div>
+              <span className="text-[11px] font-normal text-slate-500">
+                {isSummaryExpanded ? 'Masquer' : 'Afficher'}
+              </span>
+            </button>
+
+            {isSummaryExpanded && (
+              <div className="p-4 border-t border-[#E5DCD0] bg-[#FAF7F2]/40">
+                {filteredDeliveredOrders.length === 0 ? (
+                  <p className="text-xs text-slate-500 text-center py-2">
+                    Aucune livraison pour les filtres sélectionnés.
+                  </p>
+                ) : (
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                    {/* Tableau a : Par livreur */}
+                    <div className="bg-white rounded-lg border border-[#E5DCD0] overflow-hidden shadow-xs">
+                      <div className="px-3 py-2 bg-[#FAF7F2] border-b border-[#E5DCD0] font-semibold text-xs text-slate-800">
+                        Par livreur
+                      </div>
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-left text-xs">
+                          <thead className="bg-slate-50 text-slate-500 font-medium text-[11px] border-b border-slate-100">
+                            <tr>
+                              <th className="py-2 px-3">Livreur</th>
+                              <th className="py-2 px-3 text-center">Livraisons</th>
+                              <th className="py-2 px-3 text-right">Montant</th>
+                              <th className="py-2 px-3 text-right">Frais</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100 text-slate-700">
+                            {deliveredDriverSummary.list.map((row) => (
+                              <tr key={row.driverKey} className="hover:bg-slate-50/60 transition-colors">
+                                <td className="py-2 px-3 font-medium text-slate-900">{row.driverName}</td>
+                                <td className="py-2 px-3 text-center tabular-nums">{row.count}</td>
+                                <td className="py-2 px-3 text-right tabular-nums font-medium text-slate-900">
+                                  {row.totalAmount.toLocaleString()} {business.currency}
+                                </td>
+                                <td className="py-2 px-3 text-right tabular-nums text-slate-600">
+                                  {row.deliveryFee.toLocaleString()} {business.currency}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                          <tfoot className="bg-[#FAF7F2] border-t-2 border-[#E5DCD0] font-bold text-slate-900">
+                            <tr>
+                              <td className="py-2 px-3">Total</td>
+                              <td className="py-2 px-3 text-center tabular-nums">
+                                {deliveredDriverSummary.totals.count}
+                              </td>
+                              <td className="py-2 px-3 text-right tabular-nums text-[#1B4B4A]">
+                                {deliveredDriverSummary.totals.totalAmount.toLocaleString()} {business.currency}
+                              </td>
+                              <td className="py-2 px-3 text-right tabular-nums">
+                                {deliveredDriverSummary.totals.deliveryFee.toLocaleString()} {business.currency}
+                              </td>
+                            </tr>
+                          </tfoot>
+                        </table>
+                      </div>
+                    </div>
+
+                    {/* Tableau b : Par canal */}
+                    <div className="bg-white rounded-lg border border-[#E5DCD0] overflow-hidden shadow-xs">
+                      <div className="px-3 py-2 bg-[#FAF7F2] border-b border-[#E5DCD0] font-semibold text-xs text-slate-800">
+                        Par canal
+                      </div>
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-left text-xs">
+                          <thead className="bg-slate-50 text-slate-500 font-medium text-[11px] border-b border-slate-100">
+                            <tr>
+                              <th className="py-2 px-3">Canal</th>
+                              <th className="py-2 px-3 text-center">Livraisons</th>
+                              <th className="py-2 px-3 text-right">Montant</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100 text-slate-700">
+                            {deliveredChannelSummary.list.map((row) => (
+                              <tr key={row.channelLabel} className="hover:bg-slate-50/60 transition-colors">
+                                <td className="py-2 px-3 font-medium text-slate-900">{row.channelLabel}</td>
+                                <td className="py-2 px-3 text-center tabular-nums">{row.count}</td>
+                                <td className="py-2 px-3 text-right tabular-nums font-medium text-slate-900">
+                                  {row.totalAmount.toLocaleString()} {business.currency}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                          <tfoot className="bg-[#FAF7F2] border-t-2 border-[#E5DCD0] font-bold text-slate-900">
+                            <tr>
+                              <td className="py-2 px-3">Total</td>
+                              <td className="py-2 px-3 text-center tabular-nums">
+                                {deliveredChannelSummary.totals.count}
+                              </td>
+                              <td className="py-2 px-3 text-right tabular-nums text-[#1B4B4A]">
+                                {deliveredChannelSummary.totals.totalAmount.toLocaleString()} {business.currency}
+                              </td>
+                            </tr>
+                          </tfoot>
+                        </table>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
 
           {/* Liste en lecture seule des commandes livrées groupée par jour */}
