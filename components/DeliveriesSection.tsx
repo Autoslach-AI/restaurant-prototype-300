@@ -41,8 +41,10 @@ import {
   getPaymentMethodLabel,
 } from '@/lib/print-docs';
 import PrintPreviewModal from '@/components/PrintPreviewModal';
+import PickupsSection from '@/components/PickupsSection';
 import { getOrderStatusLabel } from '@/lib/order-status';
 import { getStore } from '@/lib/store';
+import { formatWaitDuration } from '@/lib/wait-alert';
 import {
   buildCustomerDriverHistory,
   buildZoneDriverHistory,
@@ -62,8 +64,8 @@ export default function DeliveriesSection({
   orders,
   nowMs,
 }: DeliveriesSectionProps) {
-  // Navigation segmentée : « À assigner », « En tournée », « Livrées »
-  const [activeSubTab, setActiveSubTab] = useState<'pending' | 'routes' | 'delivered'>('pending');
+  // Navigation segmentée : « À assigner », « En tournée », « Livrées », « Récupérées »
+  const [activeSubTab, setActiveSubTab] = useState<'pending' | 'routes' | 'delivered' | 'pickups'>('pending');
 
 
 
@@ -235,6 +237,13 @@ export default function DeliveriesSection({
       const isDeliv = o.order_type === 'delivery';
       return isBiz && isDeliv && o.status === 'delivered';
     });
+  }, [orders, business.id]);
+
+  // Retraits clôturés (historique)
+  const completedPickupsCount = useMemo(() => {
+    return orders.filter(
+      (o) => o.business_id === business.id && o.order_type === 'pickup' && o.status === 'delivered'
+    ).length;
   }, [orders, business.id]);
 
   // Helper pour formater une Date en YYYY-MM-DD local
@@ -482,11 +491,28 @@ export default function DeliveriesSection({
     return filteredDeliveredOrders.reduce((sum, o) => sum + Number(o.total_amount || 0), 0);
   }, [filteredDeliveredOrders]);
 
+  // Calcul de la durée de livraison en ms (uniquement si delivered_at et ready_at existent et delivered_at >= ready_at)
+  const getOrderDeliveryDurationMs = (ord: Order): number | null => {
+    if (!ord.delivered_at || !ord.ready_at) return null;
+    const dMs = new Date(ord.delivered_at).getTime();
+    const rMs = new Date(ord.ready_at).getTime();
+    if (isNaN(dMs) || isNaN(rMs) || dMs < rMs) return null;
+    return dMs - rMs;
+  };
+
   // Récapitulatif par livreur sur TOUTES les livraisons filtrées
   const deliveredDriverSummary = useMemo(() => {
     const map = new Map<
       string,
-      { driverKey: string; driverName: string; count: number; totalAmount: number; deliveryFee: number }
+      {
+        driverKey: string;
+        driverName: string;
+        count: number;
+        totalAmount: number;
+        deliveryFee: number;
+        validDurationCount: number;
+        totalDurationMs: number;
+      }
     >();
 
     for (const ord of filteredDeliveredOrders) {
@@ -516,26 +542,56 @@ export default function DeliveriesSection({
 
       let item = map.get(driverKey);
       if (!item) {
-        item = { driverKey, driverName, count: 0, totalAmount: 0, deliveryFee: 0 };
+        item = {
+          driverKey,
+          driverName,
+          count: 0,
+          totalAmount: 0,
+          deliveryFee: 0,
+          validDurationCount: 0,
+          totalDurationMs: 0,
+        };
         map.set(driverKey, item);
       }
       item.count += 1;
       item.totalAmount += Number(ord.total_amount || 0);
       item.deliveryFee += Number(ord.delivery_fee || 0);
+
+      const durationMs = getOrderDeliveryDurationMs(ord);
+      if (durationMs !== null) {
+        item.validDurationCount += 1;
+        item.totalDurationMs += durationMs;
+      }
     }
 
-    const list = Array.from(map.values());
+    const list = Array.from(map.values()).map((item) => ({
+      ...item,
+      avgDurationText:
+        item.validDurationCount > 0
+          ? formatWaitDuration(Math.round(item.totalDurationMs / item.validDurationCount / 60000))
+          : '—',
+    }));
     list.sort((a, b) => b.totalAmount - a.totalAmount);
 
-    const totals = list.reduce(
+    const totalsBase = list.reduce(
       (acc, cur) => {
         acc.count += cur.count;
         acc.totalAmount += cur.totalAmount;
         acc.deliveryFee += cur.deliveryFee;
+        acc.validDurationCount += cur.validDurationCount;
+        acc.totalDurationMs += cur.totalDurationMs;
         return acc;
       },
-      { count: 0, totalAmount: 0, deliveryFee: 0 }
+      { count: 0, totalAmount: 0, deliveryFee: 0, validDurationCount: 0, totalDurationMs: 0 }
     );
+
+    const totals = {
+      ...totalsBase,
+      avgDurationText:
+        totalsBase.validDurationCount > 0
+          ? formatWaitDuration(Math.round(totalsBase.totalDurationMs / totalsBase.validDurationCount / 60000))
+          : '—',
+    };
 
     return { list, totals };
   }, [filteredDeliveredOrders, drivers]);
@@ -687,6 +743,7 @@ export default function DeliveriesSection({
     customEndDate,
     deliveredDriverFilter,
     deliveredZoneFilter,
+    deliveredChannelFilter,
     deliveredSearchQuery,
   ]);
 
@@ -1404,6 +1461,17 @@ export default function DeliveriesSection({
                 }`}
               >
                 Livrées ({deliveredOrders.length})
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveSubTab('pickups')}
+                className={`px-2.5 py-1 rounded-md font-semibold transition-colors cursor-pointer ${
+                  activeSubTab === 'pickups'
+                    ? 'bg-[#1B4B4A] text-white'
+                    : 'text-slate-700 hover:text-slate-900'
+                }`}
+              >
+                Récupérées ({completedPickupsCount})
               </button>
             </div>
           </div>
@@ -3114,6 +3182,7 @@ export default function DeliveriesSection({
                               <th className="py-2 px-3 text-center">Livraisons</th>
                               <th className="py-2 px-3 text-right">Montant</th>
                               <th className="py-2 px-3 text-right">Frais</th>
+                              <th className="py-2 px-3 text-right">Durée moy.</th>
                             </tr>
                           </thead>
                           <tbody className="divide-y divide-slate-100 text-slate-700">
@@ -3126,6 +3195,9 @@ export default function DeliveriesSection({
                                 </td>
                                 <td className="py-2 px-3 text-right tabular-nums text-slate-600">
                                   {row.deliveryFee.toLocaleString()} {business.currency}
+                                </td>
+                                <td className="py-2 px-3 text-right tabular-nums text-slate-600 font-mono">
+                                  {row.avgDurationText}
                                 </td>
                               </tr>
                             ))}
@@ -3141,6 +3213,9 @@ export default function DeliveriesSection({
                               </td>
                               <td className="py-2 px-3 text-right tabular-nums">
                                 {deliveredDriverSummary.totals.deliveryFee.toLocaleString()} {business.currency}
+                              </td>
+                              <td className="py-2 px-3 text-right tabular-nums font-mono">
+                                {deliveredDriverSummary.totals.avgDurationText}
                               </td>
                             </tr>
                           </tfoot>
@@ -3209,6 +3284,7 @@ export default function DeliveriesSection({
                     <col />
                     <col className="w-[120px]" style={{ width: '120px' }} />
                     <col className="w-[150px]" style={{ width: '150px' }} />
+                    <col className="w-[80px]" style={{ width: '80px' }} />
                     <col className="w-[85px]" style={{ width: '85px' }} />
                   </colgroup>
                   <thead className="bg-slate-50/60 text-slate-400 uppercase font-semibold text-[10px] border-b border-slate-100">
@@ -3219,6 +3295,7 @@ export default function DeliveriesSection({
                       <th className="py-2 px-3">Zone</th>
                       <th className="py-2 px-3 text-right">Montant</th>
                       <th className="py-2 px-3">Livreur</th>
+                      <th className="py-2 px-3">Durée</th>
                       <th className="py-2 px-3 text-right">Réf</th>
                     </tr>
                   </thead>
@@ -3227,7 +3304,7 @@ export default function DeliveriesSection({
                       <React.Fragment key={grp.dayKey}>
                         {/* En-tête de jour : « Mercredi 15 oct. · n livraisons · total X » (porte sur TOUTES les livraisons filtrées de ce jour) */}
                         <tr className="bg-[#FAF7F2] border-y border-[#E5DCD0]">
-                          <td colSpan={7} className="py-2 px-3 text-xs font-bold text-slate-800">
+                          <td colSpan={8} className="py-2 px-3 text-xs font-bold text-slate-800">
                             <span>{grp.dayLabel}</span>
                             <span className="text-slate-400 font-normal mx-1.5">·</span>
                             <span className="font-semibold text-slate-700">
@@ -3255,7 +3332,7 @@ export default function DeliveriesSection({
                                 <div className="font-medium text-slate-900 font-mono text-xs">{dateText}</div>
                                 <div className="text-[11px] text-slate-500 font-mono">{timeText}</div>
                                 {isApproximate && (
-                                  <div className="text-[10px] text-amber-700 font-medium">date approximative</div>
+                                   <div className="text-[10px] text-amber-700 font-medium">date approximative</div>
                                 )}
                               </td>
 
@@ -3303,6 +3380,16 @@ export default function DeliveriesSection({
                                 </span>
                               </td>
 
+                              {/* Durée (delivered_at - ready_at si valide, sinon —) */}
+                              <td className="py-2 px-3 align-top whitespace-nowrap font-mono text-xs text-slate-600">
+                                {(() => {
+                                  const durationMs = getOrderDeliveryDurationMs(ord);
+                                  return durationMs !== null
+                                    ? formatWaitDuration(Math.round(durationMs / 60000))
+                                    : '—';
+                                })()}
+                              </td>
+
                               {/* Référence courte */}
                               <td className="py-2 px-3 align-top text-right whitespace-nowrap">
                                 <span className="font-mono text-xs text-slate-400 font-medium">
@@ -3333,6 +3420,13 @@ export default function DeliveriesSection({
             </div>
           )}
         </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* 4. ONGLET 4 : RÉCUPÉRÉES (HISTORIQUE DES RETRAITS CLÔTURÉS) */}
+      {/* ========================================================================= */}
+      {activeSubTab === 'pickups' && (
+        <PickupsSection business={business} orders={orders} nowMs={nowMs} />
       )}
 
 

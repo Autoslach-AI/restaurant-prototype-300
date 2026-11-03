@@ -7,7 +7,7 @@ import { OrderStatus, OrderType } from './types';
  * - confirmed : « Confirmée »
  * - preparing : « Confirmée » (alias d'affichage : la valeur existe en base mais n'est plus proposée)
  * - ready     : « Prête »
- * - delivered : « Livrée » si order_type = 'delivery', « Retirée » si order_type = 'pickup'
+ * - delivered : « Livrée » si order_type = 'delivery', « Récupérée » si order_type = 'pickup'
  * - cancelled : « Annulée »
  */
 export function getOrderStatusLabel(
@@ -41,7 +41,7 @@ export function getOrderStatusLabel(
     case 'ready':
       return 'Prête';
     case 'delivered':
-      return orderType === 'pickup' ? 'Retirée' : 'Livrée';
+      return orderType === 'pickup' ? 'Récupérée' : 'Livrée';
     case 'cancelled':
       return 'Annulée';
     default:

@@ -588,12 +588,12 @@ export default function OrdersSection({
                                 );
                               }
 
-                              // Une commande de retrait déjà delivered s'affiche « Retirée » en lecture seule
+                              // Une commande de retrait déjà delivered s'affiche « Récupérée » en lecture seule
                               if (isPickup && isDelivered) {
                                 return (
                                   <div
                                     className={`border rounded-lg px-2 py-1 text-xs font-medium w-full cursor-default ${getStatusSelectClass('delivered')}`}
-                                    title="Commande retirée (lecture seule)"
+                                    title="Commande récupérée (lecture seule)"
                                   >
                                     {getOrderStatusLabel('delivered', 'pickup')}
                                   </div>
@@ -644,7 +644,7 @@ export default function OrdersSection({
                                       : getOrderStatusLabel('ready', ord.order_type)}
                                   </option>
 
-                                  {/* Retrait sur place (order_type = pickup) : ready → delivered, affiché « Retirée » */}
+                                  {/* Retrait sur place (order_type = pickup) : ready → delivered, affiché « Récupérée » */}
                                   {isPickup ? (
                                     <option value="delivered" className="bg-emerald-100 text-emerald-900">
                                       {getOrderStatusLabel('delivered', 'pickup')}
