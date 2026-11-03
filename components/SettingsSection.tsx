@@ -40,9 +40,10 @@ import {
   updateBusinessConfig,
   fetchDrivers,
   setDriverActive,
-  fetchOrderItemsForOrders,
+  fetchSoldTodayByProduct,
   updateProduct,
 } from '@/lib/supabase';
+import { getStartOfTodayMs, isLimitReached as isLimitReachedFn } from '@/lib/daily-limit';
 import { getStore } from '@/lib/store';
 import { Business, Staff, StaffPermissions, Order, DeliveryZone, Driver, Product, Category } from '@/lib/types';
 import DriverFormModal from './DriverFormModal';
@@ -168,33 +169,12 @@ export default function SettingsSection({
     setIsSoldLoading(true);
     setSoldError(null);
     try {
-      const now = new Date();
-      const startOfTodayMs = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
-
-      const todayActiveOrderIds = businessOrders
-        .filter((o) => {
-          if (o.status === 'cancelled') return false;
-          const t = new Date(o.created_at).getTime();
-          return !isNaN(t) && t >= startOfTodayMs;
-        })
-        .map((o) => o.id);
-
-      if (todayActiveOrderIds.length === 0) {
-        setSoldTodayMap({});
-        setIsSoldLoading(false);
-        return;
+      const startOfTodayMs = getStartOfTodayMs(Date.now());
+      const res = await fetchSoldTodayByProduct(business.id, startOfTodayMs);
+      if (!res.success) {
+        throw new Error(res.error || 'Erreur lors du calcul des ventes du jour.');
       }
-
-      const itemsByOrder = await fetchOrderItemsForOrders(todayActiveOrderIds);
-      const counts: Record<string, number> = {};
-      for (const items of Object.values(itemsByOrder)) {
-        for (const item of items) {
-          if (item.product_id) {
-            counts[item.product_id] = (counts[item.product_id] || 0) + Number(item.quantity || 0);
-          }
-        }
-      }
-      setSoldTodayMap(counts);
+      setSoldTodayMap(res.counts || {});
     } catch (err: any) {
       console.warn('Erreur chargement articles du jour pour capacité:', err);
       setSoldError(err?.message || 'Erreur lors du calcul des ventes du jour.');
@@ -1954,7 +1934,7 @@ export default function SettingsSection({
                       const catName = categoryMap.get(prod.category_id) || 'Non catégorisé';
                       const soldCount = soldTodayMap[prod.id] || 0;
                       const hasLimit = prod.daily_limit !== null && prod.daily_limit !== undefined;
-                      const isLimitReached = hasLimit && soldCount >= (prod.daily_limit as number);
+                      const isLimitReached = isLimitReachedFn(prod, soldCount);
                       const currentInputValue = limitInputs[prod.id] !== undefined
                         ? limitInputs[prod.id]
                         : (hasLimit ? String(prod.daily_limit) : '');

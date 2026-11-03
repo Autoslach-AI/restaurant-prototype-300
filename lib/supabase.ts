@@ -5102,6 +5102,98 @@ export async function fetchAgentMemoryConfig(businessId: string): Promise<Resolv
   }
 }
 
+/**
+ * Calcule le nombre d'articles vendus aujourd'hui par produit pour un commerce donné.
+ * Lit uniquement platform_orders(id) et platform_order_items(order_id, product_id, quantity).
+ * En cas d'erreur, renvoie { success: false, error: ... } et jamais un objet vide trompeur.
+ */
+export async function fetchSoldTodayByProduct(
+  businessId: string,
+  startOfDayMs: number
+): Promise<{ success: boolean; counts?: Record<string, number>; error?: string }> {
+  if (!businessId) {
+    return { success: false, error: 'Identifiant commerce manquant.' };
+  }
+
+  const store = getStore();
+  const hasCredentials =
+    Boolean(process.env.NEXT_PUBLIC_SUPABASE_URL?.trim()) &&
+    Boolean(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY?.trim());
+
+  if (!hasCredentials) {
+    try {
+      const counts: Record<string, number> = {};
+      const todayActiveOrders = (store.orders || []).filter((o) => {
+        if (o.business_id !== businessId) return false;
+        if (o.status === 'cancelled') return false;
+        const t = new Date(o.created_at).getTime();
+        return !isNaN(t) && t >= startOfDayMs;
+      });
+
+      for (const order of todayActiveOrders) {
+        for (const item of (order.items || [])) {
+          if (item && item.product_id) {
+            counts[item.product_id] = (counts[item.product_id] || 0) + Number(item.quantity || 0);
+          }
+        }
+      }
+
+      return { success: true, counts };
+    } catch (err: any) {
+      return { success: false, error: err?.message || 'Erreur lors du calcul local des ventes.' };
+    }
+  }
+
+  try {
+    const client = getSupabase();
+    const startIso = new Date(startOfDayMs).toISOString();
+
+    const { data: ordersData, error: ordersError } = await (client as any)
+      .from('platform_orders')
+      .select('id')
+      .eq('business_id', businessId)
+      .gte('created_at', startIso)
+      .neq('status', 'cancelled');
+
+    if (ordersError) {
+      console.warn('Supabase fetchSoldTodayByProduct orders error:', ordersError.message);
+      return { success: false, error: ordersError.message };
+    }
+
+    const orderRows = (ordersData as { id: string }[]) || [];
+    if (orderRows.length === 0) {
+      return { success: true, counts: {} };
+    }
+
+    const orderIds = orderRows.map((r) => r.id);
+
+    const { data: itemsData, error: itemsError } = await (client as any)
+      .from('platform_order_items')
+      .select('order_id, product_id, quantity')
+      .in('order_id', orderIds);
+
+    if (itemsError) {
+      console.warn('Supabase fetchSoldTodayByProduct items error:', itemsError.message);
+      return { success: false, error: itemsError.message };
+    }
+
+    const itemRows = (itemsData as { order_id?: string; product_id?: string; quantity?: number }[]) || [];
+    const counts: Record<string, number> = {};
+
+    for (const row of itemRows) {
+      if (row && row.product_id) {
+        counts[row.product_id] = (counts[row.product_id] || 0) + Number(row.quantity || 0);
+      }
+    }
+
+    return { success: true, counts };
+  } catch (err: any) {
+    console.warn('Supabase fetchSoldTodayByProduct exception:', err?.message || err);
+    return { success: false, error: err?.message || 'Erreur lors du calcul des ventes du jour.' };
+  }
+}
+
+
 
 
 
