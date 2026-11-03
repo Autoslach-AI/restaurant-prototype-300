@@ -25,7 +25,9 @@ import {
   insertOrder,
   updateOrderStatus,
   cancelOrder,
+  fetchSoldTodayByProduct,
 } from '@/lib/supabase';
+import { getStartOfTodayMs, isLimitReached } from '@/lib/daily-limit';
 
 const emptySubscribe = () => () => {};
 
@@ -51,6 +53,36 @@ export default function HomePage() {
   }, [store]);
 
   const activeBusiness = store.getActiveBusiness();
+
+  // Suivi des ventes du jour pour les limites journalières
+  const [soldTodayMap, setSoldTodayMap] = useState<Record<string, number>>({});
+  const [soldTodayError, setSoldTodayError] = useState<boolean>(false);
+
+  const loadSoldToday = useCallback(async () => {
+    if (!activeBusiness?.id) return;
+    try {
+      const startOfTodayMs = getStartOfTodayMs(Date.now());
+      const res = await fetchSoldTodayByProduct(activeBusiness.id, startOfTodayMs);
+      if (!res.success) {
+        setSoldTodayError(true);
+      } else {
+        setSoldTodayMap(res.counts || {});
+        setSoldTodayError(false);
+      }
+    } catch (err) {
+      console.warn('Erreur chargement ventes du jour (limites):', err);
+      setSoldTodayError(true);
+    }
+  }, [activeBusiness?.id]);
+
+  useEffect(() => {
+    if (!activeBusiness?.id) return;
+    loadSoldToday();
+    const interval = setInterval(() => {
+      loadSoldToday();
+    }, 60000);
+    return () => clearInterval(interval);
+  }, [activeBusiness?.id, loadSoldToday]);
   const prevEffectDepsRef = useRef<{ activeBusinessId?: string; store?: AppStore; isFirstRun: boolean }>({
     activeBusinessId: undefined,
     store: undefined,
@@ -236,12 +268,24 @@ export default function HomePage() {
   };
 
   const handleAddToCart = (product: any) => {
+    if (!soldTodayError) {
+      const existing = cart.find((i) => i.product.id === product.id);
+      const currentQty = existing ? existing.quantity : 0;
+      if (isLimitReached(product, soldTodayMap[product.id] || 0, currentQty)) {
+        return;
+      }
+    }
     store.addToCart(product, 1);
   };
 
   const handleUpdateCartQty = (productId: string, delta: number) => {
     const existing = cart.find((i) => i.product.id === productId);
     if (!existing) return;
+    if (delta > 0 && !soldTodayError) {
+      if (isLimitReached(existing.product, soldTodayMap[productId] || 0, existing.quantity)) {
+        return;
+      }
+    }
     store.updateCartQuantity(productId, existing.quantity + delta);
   };
 
@@ -259,6 +303,56 @@ export default function HomePage() {
     priorityLevel?: string | null;
     requestedDeliveryTime?: string | null;
   }) => {
+    // 0. Vérification stricte des limites journalières avant toute écriture
+    const hasLimitedProducts = store.cart.some((cartItem) => {
+      const liveProd = store.products.find((p) => p.id === cartItem.product.id);
+      return liveProd && liveProd.daily_limit !== null && liveProd.daily_limit !== undefined;
+    });
+
+    if (hasLimitedProducts && activeBusiness?.id) {
+      const startOfTodayMs = getStartOfTodayMs(Date.now());
+      const soldRes = await fetchSoldTodayByProduct(activeBusiness.id, startOfTodayMs);
+
+      if (!soldRes.success || !soldRes.counts) {
+        loadSoldToday();
+        return {
+          order: null as any,
+          clientMsg: '',
+          merchantMsg: '',
+          errorMessage: 'Impossible de vérifier la disponibilité. Réessayez dans un instant.',
+        };
+      }
+
+      const limitErrors: string[] = [];
+      for (const cartItem of store.cart) {
+        const liveProd = store.products.find((p) => p.id === cartItem.product.id);
+        if (liveProd && liveProd.daily_limit !== null && liveProd.daily_limit !== undefined) {
+          const sold = soldRes.counts[liveProd.id] || 0;
+          const limit = liveProd.daily_limit;
+          if (sold + cartItem.quantity > limit) {
+            const n = Math.max(0, limit - sold);
+            if (n === 0) {
+              limitErrors.push(`« ${liveProd.name} » est complet pour aujourd'hui.`);
+            } else {
+              limitErrors.push(
+                `« ${liveProd.name} » : il ne reste que ${n} unité(s) aujourd'hui. Réduisez la quantité.`
+              );
+            }
+          }
+        }
+      }
+
+      if (limitErrors.length > 0) {
+        loadSoldToday();
+        return {
+          order: null as any,
+          clientMsg: '',
+          merchantMsg: '',
+          errorMessage: limitErrors.join('\n'),
+        };
+      }
+    }
+
     const cartItemsTotal = store.getCartTotal();
     const isDelivery = (data.orderType || 'delivery') === 'delivery';
     const deliveryFee = isDelivery ? Number(data.deliveryFee || 0) : 0;
@@ -340,6 +434,7 @@ export default function HomePage() {
 
     // 3. Mise à jour du store local & déduction du stock
     store.upsertOrder(createdOrder);
+    loadSoldToday();
 
     for (const item of store.cart) {
       const prod = store.products.find((p) => p.id === item.product.id);
@@ -473,6 +568,7 @@ export default function HomePage() {
           onCreateOrder={handleCreateOrder}
           onSimulatePayment={handleSimulatePayment}
           onSubmitRating={(orderId, rating, comment) => store.submitCustomerRating(orderId, rating, comment)}
+          soldTodayMap={soldTodayMap}
         />
       ) : (
         <MerchantDashboard

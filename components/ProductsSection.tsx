@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import Image from 'next/image';
 import {
   Package,
@@ -11,9 +11,11 @@ import {
   Upload,
   AlertCircle,
   Loader2,
+  RefreshCw,
 } from 'lucide-react';
 import { Business, Category, Product } from '@/lib/types';
-import { uploadProductImage } from '@/lib/supabase';
+import { uploadProductImage, fetchSoldTodayByProduct } from '@/lib/supabase';
+import { getStartOfTodayMs, isLimitReached } from '@/lib/daily-limit';
 
 export interface ProductsSectionProps {
   business: Business;
@@ -36,6 +38,34 @@ export default function ProductsSection({
 }: ProductsSectionProps) {
   // Category filter state
   const [selectedCategoryId, setSelectedCategoryId] = useState<string>('all');
+
+  // Suivi des ventes du jour pour la limite journalière (lecture seule)
+  const [soldTodayMap, setSoldTodayMap] = useState<Record<string, number> | null>(null);
+  const [isSoldLoading, setIsSoldLoading] = useState<boolean>(true);
+  const [soldError, setSoldError] = useState<string | null>(null);
+
+  const loadTodaySales = useCallback(async () => {
+    setIsSoldLoading(true);
+    setSoldError(null);
+    try {
+      const startOfTodayMs = getStartOfTodayMs(Date.now());
+      const res = await fetchSoldTodayByProduct(business.id, startOfTodayMs);
+      if (!res.success) {
+        throw new Error(res.error || 'Erreur lors du calcul des ventes du jour.');
+      }
+      setSoldTodayMap(res.counts || {});
+    } catch (err: any) {
+      console.warn('Erreur chargement articles du jour pour produits:', err);
+      setSoldError(err?.message || 'Erreur lors du chargement des limites');
+      setSoldTodayMap(null);
+    } finally {
+      setIsSoldLoading(false);
+    }
+  }, [business.id]);
+
+  useEffect(() => {
+    loadTodaySales();
+  }, [loadTodaySales]);
 
   // Product modal states
   const [isProductModalOpen, setIsProductModalOpen] = useState(false);
@@ -108,6 +138,30 @@ export default function ProductsSection({
               })}
             </select>
           </div>
+
+          {/* Bouton Actualiser les ventes du jour */}
+          <button
+            onClick={loadTodaySales}
+            disabled={isSoldLoading}
+            className="px-3 py-2 bg-slate-50 hover:bg-slate-100 text-slate-700 rounded-2xl border border-slate-200 text-xs font-bold transition-all shadow-2xs flex items-center space-x-1.5 cursor-pointer disabled:opacity-50"
+            title="Actualiser les ventes du jour"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 text-slate-500 ${isSoldLoading ? 'animate-spin text-emerald-600' : ''}`} />
+            <span>Actualiser</span>
+          </button>
+
+          {soldError && (
+            <div className="flex items-center space-x-1.5 text-xs text-rose-600 bg-rose-50 border border-rose-200 px-3 py-1.5 rounded-2xl">
+              <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+              <span>Erreur de chargement des limites</span>
+              <button
+                onClick={loadTodaySales}
+                className="underline font-bold hover:text-rose-800 cursor-pointer ml-1"
+              >
+                Réessayer
+              </button>
+            </div>
+          )}
         </div>
 
         <div className="flex items-center space-x-3 shrink-0">
@@ -228,6 +282,37 @@ export default function ProductsSection({
                     <span className="text-[10px] text-slate-400 block">
                       Stock : {prod.stock_qty === null ? 'Illimité' : `${prod.stock_qty} unités`}
                     </span>
+                    {prod.daily_limit !== null && prod.daily_limit !== undefined && (
+                      <div className="mt-1">
+                        {isSoldLoading ? (
+                          <span className="text-[10px] text-slate-400 italic block">
+                            Aujourd&apos;hui : Chargement...
+                          </span>
+                        ) : soldError ? (
+                          <div className="flex items-center space-x-1 text-[10px] text-rose-600">
+                            <span>Aujourd&apos;hui : Erreur</span>
+                            <button
+                              onClick={loadTodaySales}
+                              className="underline font-bold hover:text-rose-800 cursor-pointer"
+                            >
+                              Réessayer
+                            </button>
+                          </div>
+                        ) : (
+                          <>
+                            <span className="text-[10px] font-semibold text-slate-600 block">
+                              Aujourd&apos;hui : {soldTodayMap?.[prod.id] || 0} / {prod.daily_limit} unités
+                            </span>
+                            {isLimitReached(prod, soldTodayMap?.[prod.id] || 0) && (
+                              <span className="inline-flex items-center space-x-1 mt-1 px-2 py-0.5 rounded-md bg-amber-50 text-amber-800 border border-amber-200 text-[10px] font-extrabold">
+                                <AlertCircle className="w-3 h-3 text-amber-600 shrink-0" />
+                                <span>Limite atteinte</span>
+                              </span>
+                            )}
+                          </>
+                        )}
+                      </div>
+                    )}
                   </div>
 
                   <div className="flex items-center space-x-2 mt-3">
