@@ -38,6 +38,7 @@ export interface BusinessConfig {
     time?: string;
     message?: string;
   };
+  low_stock_threshold?: number;
 }
 
 export interface Business {

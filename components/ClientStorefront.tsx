@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import Image from 'next/image';
 import {
   Search,
@@ -25,7 +25,8 @@ import {
 } from 'lucide-react';
 import { Business, Category, Product, CartItem, PaymentMethod, Order, DeliveryZone, OrderType } from '@/lib/types';
 import { getStore } from '@/lib/store';
-import { getRemainingUnits } from '@/lib/daily-limit';
+import { getRemainingUnits, getCutoffInfo } from '@/lib/daily-limit';
+import { formatWaitDuration } from '@/lib/wait-alert';
 
 interface ClientStorefrontProps {
   business: Business;
@@ -82,6 +83,34 @@ export default function ClientStorefront({
   const [isCheckoutOpen, setIsCheckoutOpen] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [checkoutErrorMessage, setCheckoutErrorMessage] = useState<string | null>(null);
+
+  // Horloge locale pour le compte à rebours de l'heure limite (mise à jour chaque minute)
+  const [currentTimeMs, setCurrentTimeMs] = useState(() => Date.now());
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setCurrentTimeMs(Date.now());
+    }, 60000);
+    return () => clearInterval(timer);
+  }, []);
+
+  const cutoffInfo = useMemo(() => {
+    return getCutoffInfo(business.config, currentTimeMs);
+  }, [business.config, currentTimeMs]);
+
+  const bannerMessage = useMemo(() => {
+    if (!cutoffInfo || cutoffInfo.passed) return '';
+    const custom = business.config?.order_cutoff?.message?.trim();
+    if (custom) return custom;
+    const [h, m] = cutoffInfo.time.split(':');
+    return `Commandez avant ${h}h${m} pour être servi aujourd'hui`;
+  }, [cutoffInfo, business.config?.order_cutoff?.message]);
+
+  const countdownText = useMemo(() => {
+    if (!cutoffInfo || cutoffInfo.passed) return '';
+    const remainingMinutes = Math.max(1, Math.round(cutoffInfo.remainingMs / 60000));
+    return `Plus que ${formatWaitDuration(remainingMinutes)}`;
+  }, [cutoffInfo]);
 
   useEffect(() => {
     setCheckoutErrorMessage(null);
@@ -249,6 +278,24 @@ export default function ClientStorefront({
         </div>
       </section>
 
+      {/* Bannière Heure limite des commandes */}
+      {cutoffInfo && !cutoffInfo.passed && (
+        <aside
+          aria-label="Heure limite des commandes"
+          className="bg-amber-50 border-b border-amber-200/80 px-4 py-2.5 sm:py-2"
+        >
+          <div className="max-w-7xl mx-auto flex flex-col sm:flex-row items-start sm:items-center justify-between gap-1.5 sm:gap-4 text-amber-950 text-xs">
+            <div className="flex items-center space-x-2 font-medium">
+              <Clock className="w-4 h-4 text-amber-600 shrink-0" />
+              <span>{bannerMessage}</span>
+            </div>
+            <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-[11px] font-extrabold bg-amber-100/90 text-amber-900 border border-amber-300/80 shrink-0 shadow-2xs">
+              {countdownText}
+            </span>
+          </div>
+        </aside>
+      )}
+
       {/* Main Catalog View */}
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         {/* Search & Category Tabs */}
@@ -313,6 +360,8 @@ export default function ClientStorefront({
                 ? Math.max(0, rawRemaining - qtyInCart)
                 : null;
               const isCompleteToday = hasDailyLimit && remainingToday === 0;
+              const lowStockThreshold = business.config?.low_stock_threshold ?? 5;
+              const isLowStock = hasDailyLimit && remainingToday !== null && remainingToday > 0 && remainingToday <= lowStockThreshold;
 
               return (
                 <div
@@ -327,16 +376,30 @@ export default function ClientStorefront({
                         alt={product.name}
                         fill
                         unoptimized
-                        className="object-cover group-hover:scale-105 transition-transform duration-300"
+                        className={`object-cover group-hover:scale-105 transition-transform duration-300 ${
+                          isCompleteToday ? 'grayscale opacity-60' : ''
+                        }`}
                         referrerPolicy="no-referrer"
                       />
-                      {!product.available && (
+                      {!product.available ? (
                         <div className="absolute inset-0 bg-[#241F1B]/60 backdrop-blur-xs flex items-center justify-center">
                           <span className="px-3 py-1 bg-[#A63A2F] text-white font-bold text-xs rounded-full shadow-sm">
                             Non disponible
                           </span>
                         </div>
-                      )}
+                      ) : isCompleteToday ? (
+                        <div className="absolute top-2.5 right-2.5">
+                          <span className="px-2.5 py-1 bg-slate-900/90 text-white font-extrabold text-[11px] rounded-full shadow-md backdrop-blur-xs">
+                            Complet aujourd&apos;hui
+                          </span>
+                        </div>
+                      ) : isLowStock ? (
+                        <div className="absolute top-2.5 right-2.5">
+                          <span className="px-2.5 py-1 bg-amber-500 text-white font-extrabold text-[11px] rounded-full shadow-md">
+                            Plus que {remainingToday}
+                          </span>
+                        </div>
+                      ) : null}
                     </div>
 
                     {/* Content */}
@@ -347,12 +410,24 @@ export default function ClientStorefront({
                       <p className="text-xs text-[#6B6259] mt-1.5 line-clamp-2 leading-relaxed">
                         {product.description}
                       </p>
-                      {hasDailyLimit && remainingToday !== null && (
-                        <span className="text-xs font-semibold text-amber-700 mt-2 block">
-                          {remainingToday === 0
-                            ? "Complet pour aujourd'hui"
-                            : `Plus que ${remainingToday} disponible${remainingToday > 1 ? 's' : ''} aujourd'hui`}
-                        </span>
+                      {/* Jauge et texte discret si de 1 à seuil */}
+                      {isLowStock && product.daily_limit && (
+                        <div className="mt-2.5 space-y-1">
+                          <div className="flex items-center justify-between text-[11px] text-amber-800 font-semibold">
+                            <span>Quantité limitée aujourd&apos;hui</span>
+                            <span className="font-mono text-[10px] text-amber-700">
+                              {remainingToday}/{product.daily_limit}
+                            </span>
+                          </div>
+                          <div className="w-full h-1.5 bg-amber-100 rounded-full overflow-hidden">
+                            <div
+                              className="h-full bg-amber-500 rounded-full transition-all duration-300"
+                              style={{
+                                width: `${Math.min(100, Math.max(8, Math.round((remainingToday / product.daily_limit) * 100)))}%`,
+                              }}
+                            />
+                          </div>
+                        </div>
                       )}
                     </div>
                   </div>
@@ -401,7 +476,7 @@ export default function ClientStorefront({
                         }`}
                       >
                         {!isCompleteToday && <Plus className="w-3.5 h-3.5" />}
-                        <span>{isCompleteToday ? 'Complet pour aujourd\u2019hui' : 'Ajouter'}</span>
+                        <span>{isCompleteToday ? 'Revenez demain' : 'Ajouter'}</span>
                       </button>
                     )}
                   </div>
