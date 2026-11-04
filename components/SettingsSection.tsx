@@ -8,6 +8,7 @@ import {
   Check,
   ChevronLeft,
   ChevronRight,
+  Clock,
   CreditCard,
   Edit2,
   Eye,
@@ -21,6 +22,7 @@ import {
   Plus,
   RefreshCw,
   RotateCcw,
+  Save,
   ShieldCheck,
   Sliders,
   Trash2,
@@ -161,6 +163,33 @@ export default function SettingsSection({
   const [isSoldLoading, setIsSoldLoading] = useState<boolean>(false);
   const [soldError, setSoldError] = useState<string | null>(null);
 
+  // États pour l'heure limite des commandes (Capacité)
+  const [orderCutoffEnabled, setOrderCutoffEnabled] = useState<boolean>(
+    () => Boolean(business.config?.order_cutoff?.enabled)
+  );
+  const [orderCutoffTime, setOrderCutoffTime] = useState<string>(
+    () => business.config?.order_cutoff?.time || ''
+  );
+  const [orderCutoffMessage, setOrderCutoffMessage] = useState<string>(
+    () => business.config?.order_cutoff?.message || ''
+  );
+  const [isOrderCutoffSaving, setIsOrderCutoffSaving] = useState<boolean>(false);
+  const [orderCutoffFeedback, setOrderCutoffFeedback] = useState<{
+    type: 'success' | 'error';
+    message: string;
+  } | null>(null);
+
+  useEffect(() => {
+    setOrderCutoffEnabled(Boolean(business.config?.order_cutoff?.enabled));
+    setOrderCutoffTime(business.config?.order_cutoff?.time || '');
+    setOrderCutoffMessage(business.config?.order_cutoff?.message || '');
+  }, [
+    business.id,
+    business.config?.order_cutoff?.enabled,
+    business.config?.order_cutoff?.time,
+    business.config?.order_cutoff?.message,
+  ]);
+
   useEffect(() => {
     setCapacityProducts(products);
   }, [products]);
@@ -188,6 +217,71 @@ export default function SettingsSection({
       loadTodaySales();
     }
   }, [activeSettingsSection]);
+
+  const handleSaveOrderCutoff = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    setOrderCutoffFeedback(null);
+
+    const trimmedTime = orderCutoffTime.trim();
+    const timeRegex = /^([01]\d|2[0-3]):([0-5]\d)$/;
+
+    if (orderCutoffEnabled) {
+      if (!trimmedTime || !timeRegex.test(trimmedTime)) {
+        setOrderCutoffFeedback({
+          type: 'error',
+          message: 'Veuillez renseigner une heure valide (HH:mm)',
+        });
+        return;
+      }
+    }
+
+    setIsOrderCutoffSaving(true);
+    try {
+      const orderCutoffPayload = {
+        enabled: orderCutoffEnabled,
+        time: trimmedTime,
+        message: orderCutoffMessage.trim().slice(0, 120),
+      };
+
+      const res = await updateBusinessConfig(business.id, {
+        config: {
+          ...(business.config || {}),
+          message_templates: business.config?.message_templates || {
+            confirmation: '',
+            alert: '',
+            relance: '',
+            follow_up: '',
+          },
+          order_cutoff: orderCutoffPayload,
+        },
+      });
+
+      if (res.success) {
+        store.updateBusinessConfig(business.id, {
+          order_cutoff: orderCutoffPayload,
+        });
+        setOrderCutoffFeedback({
+          type: 'success',
+          message: 'Heure limite des commandes enregistrée avec succès !',
+        });
+        setTimeout(() => {
+          setOrderCutoffFeedback((prev) => (prev?.type === 'success' ? null : prev));
+        }, 3000);
+      } else {
+        setOrderCutoffFeedback({
+          type: 'error',
+          message: res.error || 'Erreur lors de la sauvegarde.',
+        });
+      }
+    } catch (err: any) {
+      setOrderCutoffFeedback({
+        type: 'error',
+        message: err?.message || 'Erreur inattendue lors de la sauvegarde.',
+      });
+    } finally {
+      setIsOrderCutoffSaving(false);
+    }
+  };
 
   const categoryMap = useMemo(() => {
     return new Map((categories || []).map((c) => [c.id, c.name]));
@@ -1912,6 +2006,147 @@ export default function SettingsSection({
                 </button>
               </div>
             )}
+
+            {/* Bloc Heure limite des commandes */}
+            <div className="p-5 bg-slate-50/70 border border-slate-200/90 rounded-2xl space-y-4">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-200">
+                <div className="flex items-center space-x-2.5">
+                  <div className="w-8 h-8 rounded-xl bg-amber-100 text-amber-700 flex items-center justify-center shrink-0">
+                    <Clock className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <h4 className="text-sm font-extrabold text-slate-900">Heure limite des commandes</h4>
+                    <p className="text-[11px] text-slate-500">
+                      Affiche une bannière d&apos;information sur la boutique pour indiquer aux clients l&apos;heure limite de prise de commande.
+                    </p>
+                  </div>
+                </div>
+
+                {/* Interrupteur Afficher la bannière */}
+                <label className="inline-flex items-center space-x-2.5 cursor-pointer select-none shrink-0 self-start sm:self-auto">
+                  <input
+                    type="checkbox"
+                    checked={orderCutoffEnabled}
+                    onChange={(e) => {
+                      setOrderCutoffEnabled(e.target.checked);
+                      if (orderCutoffFeedback?.type === 'error') setOrderCutoffFeedback(null);
+                    }}
+                    className="sr-only peer"
+                  />
+                  <div className="w-11 h-6 bg-slate-200 peer-focus:outline-hidden rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-amber-600 relative transition-colors"></div>
+                  <span className="text-xs font-bold text-slate-700">Afficher la bannière</span>
+                </label>
+              </div>
+
+              {/* Formulaire : heure et message */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-[11px] font-bold text-slate-700 mb-1">
+                    Heure limite <span className={orderCutoffEnabled ? 'text-amber-600 font-extrabold' : 'text-slate-400 font-normal'}>({orderCutoffEnabled ? 'obligatoire si activé' : 'optionnelle'})</span>
+                  </label>
+                  <input
+                    type="time"
+                    value={orderCutoffTime}
+                    onChange={(e) => {
+                      setOrderCutoffTime(e.target.value);
+                      if (orderCutoffFeedback?.type === 'error') setOrderCutoffFeedback(null);
+                    }}
+                    className="w-full px-3.5 py-2 bg-white border border-slate-200 rounded-xl text-xs font-extrabold text-slate-800 focus:outline-hidden focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500 transition-all font-mono"
+                  />
+                  <p className="text-[10px] text-slate-400 mt-1">Exemple : 11:30 ou 14:00</p>
+                </div>
+
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="block text-[11px] font-bold text-slate-700">
+                      Message personnalisé <span className="text-slate-400 font-normal">(optionnel)</span>
+                    </label>
+                    <span className="text-[10px] text-slate-400 font-mono">
+                      {orderCutoffMessage.length}/120
+                    </span>
+                  </div>
+                  <input
+                    type="text"
+                    maxLength={120}
+                    value={orderCutoffMessage}
+                    onChange={(e) => setOrderCutoffMessage(e.target.value)}
+                    placeholder={
+                      orderCutoffTime.trim()
+                        ? `Commandes acceptées jusqu'à ${orderCutoffTime.trim()}`
+                        : "Commandes acceptées jusqu'à l'heure limite"
+                    }
+                    className="w-full px-3.5 py-2 bg-white border border-slate-200 rounded-xl text-xs text-slate-800 placeholder:text-slate-400 focus:outline-hidden focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500 transition-all"
+                  />
+                  <p className="text-[10px] text-slate-400 mt-1">
+                    Laisser vide pour utiliser le texte automatique basé sur l&apos;heure.
+                  </p>
+                </div>
+              </div>
+
+              {/* Aperçu en direct */}
+              <div className="pt-1">
+                <div className="text-[11px] font-bold text-slate-500 mb-1.5 flex items-center justify-between">
+                  <span>Aperçu en direct de la bannière :</span>
+                  {!orderCutoffEnabled && (
+                    <span className="text-[10px] text-slate-400 font-medium italic">
+                      (Bannière masquée sur le site public)
+                    </span>
+                  )}
+                </div>
+                <div
+                  className={`p-3 rounded-xl border flex items-center space-x-2.5 transition-all ${
+                    orderCutoffEnabled
+                      ? 'bg-amber-500/10 border-amber-300 text-amber-950'
+                      : 'bg-slate-100 border-slate-200 text-slate-400 opacity-60'
+                  }`}
+                >
+                  <Clock className={`w-4 h-4 shrink-0 ${orderCutoffEnabled ? 'text-amber-600' : 'text-slate-400'}`} />
+                  <span className="text-xs font-bold leading-tight">
+                    {orderCutoffMessage.trim() ||
+                      (orderCutoffTime.trim()
+                        ? `Commandes acceptées jusqu'à ${orderCutoffTime.trim()}`
+                        : "Commandes acceptées jusqu'à l'heure limite")}
+                  </span>
+                </div>
+              </div>
+
+              {/* Barre de statut et bouton Enregistrer */}
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-2 border-t border-slate-200">
+                <div className="min-h-[22px] flex items-center">
+                  {orderCutoffFeedback?.type === 'error' && (
+                    <div className="flex items-center space-x-1.5 text-xs font-bold text-rose-600">
+                      <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                      <span>{orderCutoffFeedback.message}</span>
+                    </div>
+                  )}
+                  {orderCutoffFeedback?.type === 'success' && (
+                    <div className="flex items-center space-x-1.5 text-xs font-bold text-emerald-600">
+                      <Check className="w-3.5 h-3.5 shrink-0" />
+                      <span>{orderCutoffFeedback.message}</span>
+                    </div>
+                  )}
+                </div>
+
+                <button
+                  type="button"
+                  onClick={handleSaveOrderCutoff}
+                  disabled={isOrderCutoffSaving}
+                  className="px-4 py-2 bg-amber-600 hover:bg-amber-700 active:bg-amber-800 disabled:opacity-50 text-white text-xs font-extrabold rounded-xl transition-all shadow-xs flex items-center justify-center space-x-2 cursor-pointer shrink-0 self-end sm:self-auto"
+                >
+                  {isOrderCutoffSaving ? (
+                    <>
+                      <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                      <span>Enregistrement...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Save className="w-3.5 h-3.5" />
+                      <span>Enregistrer</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
 
             {capacityProducts.length === 0 ? (
               <div className="p-8 text-center bg-slate-50 border border-slate-200 rounded-2xl">

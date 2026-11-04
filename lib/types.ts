@@ -33,6 +33,11 @@ export interface BusinessConfig {
     footer_text?: string;
   };
   wait_alert_minutes?: number;
+  order_cutoff?: {
+    enabled?: boolean;
+    time?: string;
+    message?: string;
+  };
 }
 
 export interface Business {
