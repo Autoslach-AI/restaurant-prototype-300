@@ -1,10 +1,11 @@
 'use client';
 
 import React, { useState, useMemo, useEffect } from 'react';
-import { Search, ChevronDown, Clock } from 'lucide-react';
-import { Order, Business } from '@/lib/types';
+import { Search, AlertCircle, RefreshCw } from 'lucide-react';
+import { Order, Business, OrderItem } from '@/lib/types';
 import { getOrderShortRef, getPaymentMethodLabel } from '@/lib/print-docs';
 import { formatWaitDuration } from '@/lib/wait-alert';
+import { fetchOrderItemsForOrders } from '@/lib/supabase';
 
 export interface PickupsSectionProps {
   business: Business;
@@ -26,7 +27,12 @@ export default function PickupsSection({
   const [channelFilter, setChannelFilter] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [visibleLimit, setVisibleLimit] = useState<number>(50);
-  const [isSummaryExpanded, setIsSummaryExpanded] = useState<boolean>(false);
+
+  // État de chargement par lot des articles de commande
+  const [itemsByOrderId, setItemsByOrderId] = useState<Record<string, OrderItem[]>>({});
+  const [isLoadingItems, setIsLoadingItems] = useState<boolean>(false);
+  const [itemsLoadError, setItemsLoadError] = useState<boolean>(false);
+  const [retryTrigger, setRetryTrigger] = useState<number>(0);
 
   // Retraits terminés (order_type = pickup, status = delivered)
   const completedPickups = useMemo(() => {
@@ -264,6 +270,40 @@ export default function PickupsSection({
     return list;
   }, [completedPickups, periodFilter, dateBounds, channelFilter, searchQuery]);
 
+  // Retraits de la période sélectionnée (sans le filtre canal) pour alimenter dynamiquement le menu Canal
+  const periodPickups = useMemo(() => {
+    return completedPickups.filter((ord) => {
+      if (periodFilter !== 'all') {
+        const dateStr = ord.delivered_at || ord.updated_at;
+        if (!dateStr) return false;
+        const timeMs = new Date(dateStr).getTime();
+        if (isNaN(timeMs)) return false;
+        if (timeMs < dateBounds.start || timeMs > dateBounds.end) {
+          return false;
+        }
+      }
+      return true;
+    });
+  }, [completedPickups, periodFilter, dateBounds]);
+
+  // Options du menu Canal calculées sur les commandes de la période (sans le filtre canal)
+  const channelOptions = useMemo(() => {
+    const map = new Map<string, { channelLabel: string; count: number; totalAmount: number }>();
+    for (const ord of periodPickups) {
+      const channelLabel = getPaymentMethodLabel(ord.payment_method);
+      let item = map.get(channelLabel);
+      if (!item) {
+        item = { channelLabel, count: 0, totalAmount: 0 };
+        map.set(channelLabel, item);
+      }
+      item.count += 1;
+      item.totalAmount += Number(ord.total_amount || 0);
+    }
+    const list = Array.from(map.values());
+    list.sort((a, b) => b.totalAmount - a.totalAmount);
+    return list;
+  }, [periodPickups]);
+
   // Montant total sur TOUTES les commandes récupérées filtrées
   const totalFilteredAmount = useMemo(() => {
     return filteredPickups.reduce((sum, o) => sum + Number(o.total_amount || 0), 0);
@@ -418,10 +458,99 @@ export default function PickupsSection({
     return visibleGroups;
   }, [filteredPickups, visibleLimit, nowMs]);
 
+  // Identifiants des commandes visibles à l'écran
+  const visibleOrderIds = useMemo(() => {
+    const ids: string[] = [];
+    for (const grp of pickupDayGroups) {
+      for (const ord of grp.orders) {
+        ids.push(ord.id);
+      }
+    }
+    return ids;
+  }, [pickupDayGroups]);
+
+  // Chargement par lot des articles pour les commandes visibles sans articles en cache
+  useEffect(() => {
+    const missingIds = visibleOrderIds.filter((id) => !(id in itemsByOrderId));
+    if (missingIds.length === 0) return;
+
+    let isMounted = true;
+    setIsLoadingItems(true);
+    setItemsLoadError(false);
+
+    fetchOrderItemsForOrders(missingIds)
+      .then((itemsMap) => {
+        if (!isMounted) return;
+        setItemsByOrderId((prev) => ({
+          ...prev,
+          ...itemsMap,
+        }));
+        setIsLoadingItems(false);
+      })
+      .catch((err) => {
+        if (!isMounted) return;
+        console.warn('Erreur lors du chargement des articles de commande:', err);
+        setItemsLoadError(true);
+        setIsLoadingItems(false);
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [visibleOrderIds, retryTrigger]);
+
+  const handleRetryLoadItems = () => {
+    setItemsLoadError(false);
+    setRetryTrigger((prev) => prev + 1);
+  };
+
+  // Helper pour afficher le récapitulatif des produits d'une commande
+  const formatOrderItemsSummary = (ord: Order): string => {
+    const items = itemsByOrderId[ord.id] ?? (ord.items && ord.items.length > 0 ? ord.items : undefined);
+    if (!items || items.length === 0) {
+      if (isLoadingItems && !(ord.id in itemsByOrderId)) {
+        return '…';
+      }
+      return '—';
+    }
+
+    const first = items[0];
+    const qty = first.quantity || 1;
+    const name = first.product_name || 'Article';
+    const firstPart = `${qty}× ${name}`;
+
+    if (items.length === 1) {
+      return firstPart;
+    }
+    const extraCount = items.length - 1;
+    return `${firstPart}, +${extraCount} autre${extraCount > 1 ? 's' : ''}`;
+  };
+
+  // Badge du canal de paiement
+  const renderChannelBadge = (method?: string | null) => {
+    const label = getPaymentMethodLabel(method);
+    let colorClasses = 'bg-slate-100 text-slate-700 border-slate-200';
+    if (label === 'Wave') {
+      colorClasses = 'bg-[#E0F2FE] text-[#0369A1] border-[#BAE6FD]';
+    } else if (label === 'Orange Money') {
+      colorClasses = 'bg-[#FFEDD5] text-[#C2410C] border-[#FED7AA]';
+    } else if (label === 'Carte') {
+      colorClasses = 'bg-[#EEF2FF] text-[#4338CA] border-[#C7D2FE]';
+    } else if (label === 'Espèces') {
+      colorClasses = 'bg-[#DCFCE7] text-[#15803D] border-[#BBF7D0]';
+    }
+
+    return (
+      <span className={`inline-block px-2 py-0.5 rounded-md text-[11px] font-semibold border ${colorClasses} whitespace-nowrap`}>
+        {label}
+      </span>
+    );
+  };
+
   return (
     <div className="space-y-3">
       {/* Barre de filtres */}
-      <div className="bg-white p-3 rounded-xl border border-[#E5DCD0] flex flex-wrap xl:flex-nowrap items-center gap-2.5">
+      <div className="bg-white p-3 rounded-xl border border-[#E5DCD0] flex flex-wrap items-center gap-2.5">
         {/* Menu Période */}
         <div className="shrink-0">
           <select
@@ -476,163 +605,80 @@ export default function PickupsSection({
           </button>
         </div>
 
-        {/* Dates personnalisées */}
-        {periodFilter === 'custom' && (
-          <div className="flex items-center gap-1.5 shrink-0">
-            <input
-              type="date"
-              value={customStartDate}
-              onChange={(e) => setCustomStartDate(e.target.value)}
-              className="bg-[#FAF7F2] border border-[#E5DCD0] rounded-lg px-2 py-1 text-xs text-slate-900 focus:outline-none focus:border-[#1B4B4A]"
-              title="Date de début"
-            />
-            <span className="text-xs text-slate-400">à</span>
-            <input
-              type="date"
-              value={customEndDate}
-              onChange={(e) => setCustomEndDate(e.target.value)}
-              className="bg-[#FAF7F2] border border-[#E5DCD0] rounded-lg px-2 py-1 text-xs text-slate-900 focus:outline-none focus:border-[#1B4B4A]"
-              title="Date de fin"
-            />
-          </div>
-        )}
-
         {/* Recherche client, téléphone, réf */}
-        <div className="relative flex-1 min-w-[180px]">
+        <div className="relative flex-1 min-w-[140px]">
           <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
           <input
             type="text"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Recherche client, téléphone, réf..."
+            placeholder="Rechercher…"
             className="w-full bg-[#FAF7F2] border border-[#E5DCD0] rounded-lg pl-8 pr-2.5 py-1 text-xs text-slate-900 focus:outline-none focus:border-[#1B4B4A]"
           />
         </div>
 
         {/* Menu Canal */}
-        <div className="shrink-0 min-w-[130px]">
+        <div className="shrink-0 max-w-[150px]">
           <select
             value={channelFilter}
             onChange={(e) => setChannelFilter(e.target.value)}
-            className="w-full bg-[#FAF7F2] border border-[#E5DCD0] rounded-lg px-2.5 py-1 text-xs text-slate-900 focus:outline-none focus:border-[#1B4B4A] cursor-pointer"
+            className="w-full bg-[#FAF7F2] border border-[#E5DCD0] rounded-lg px-2.5 py-1 text-xs text-slate-900 focus:outline-none focus:border-[#1B4B4A] cursor-pointer truncate"
           >
-            <option value="all">Tous les canaux</option>
-            <option value="Wave">Wave</option>
-            <option value="Orange Money">Orange Money</option>
-            <option value="Carte">Carte</option>
-            <option value="Espèces">Espèces</option>
+            <option value="all">Canal : tous</option>
+            {channelOptions.map((ch) => (
+              <option key={ch.channelLabel} value={ch.channelLabel}>
+                {ch.channelLabel} · {ch.count} · {ch.totalAmount.toLocaleString()}
+              </option>
+            ))}
+            {channelFilter !== 'all' && !channelOptions.some((c) => c.channelLabel === channelFilter) && (
+              <option value={channelFilter}>
+                {channelFilter} · 0 · 0
+              </option>
+            )}
           </select>
         </div>
 
-        {/* Bandeau à droite : « n commandes récupérées · total X devise » */}
-        <div className="shrink-0 whitespace-nowrap text-xs font-semibold text-slate-800 px-3 py-1 bg-[#FAF7F2] border border-[#E5DCD0] rounded-lg ml-auto">
-          <span className="tabular-nums font-bold text-slate-900">
-            {filteredPickups.length}
-          </span>{' '}
-          commande{filteredPickups.length > 1 ? 's récupérées' : ' récupérée'} · total{' '}
-          <span className="text-[#1B4B4A] font-bold tabular-nums">
-            {totalFilteredAmount.toLocaleString()} {business.currency}
-          </span>
+        {/* À droite : bouton Effacer les filtres (si actif) + bandeau total */}
+        <div className="shrink-0 flex items-center gap-2 ml-auto">
+          {channelFilter !== 'all' && (
+            <button
+              type="button"
+              onClick={() => setChannelFilter('all')}
+              className="px-2 py-1 text-xs text-[#8A7A68] hover:text-slate-900 border border-dashed border-[#C5B7A5] hover:bg-[#FAF7F2] rounded-lg transition-colors cursor-pointer"
+            >
+              Effacer les filtres
+            </button>
+          )}
+
+          <div className="shrink-0 whitespace-nowrap text-xs font-semibold text-slate-800 px-3 py-1 bg-[#FAF7F2] border border-[#E5DCD0] rounded-lg truncate">
+            <span className="tabular-nums font-bold text-slate-900">
+              {filteredPickups.length}
+            </span>{' '}
+            récup. ·{' '}
+            <span className="text-[#1B4B4A] font-bold tabular-nums">
+              {totalFilteredAmount.toLocaleString()} {business.currency}
+            </span>
+          </div>
         </div>
       </div>
 
-      {/* Bloc Récapitulatif repliable (replié par défaut) */}
-      <div className="bg-white rounded-xl border border-[#E5DCD0] overflow-hidden">
-        <button
-          type="button"
-          onClick={() => setIsSummaryExpanded((prev) => !prev)}
-          className="w-full px-4 py-2.5 flex items-center justify-between text-xs font-semibold text-slate-800 hover:bg-slate-50/70 transition-colors cursor-pointer"
-        >
-          <div className="flex items-center gap-2">
-            <ChevronDown
-              className={`w-4 h-4 text-slate-500 transition-transform duration-200 ${
-                isSummaryExpanded ? 'rotate-180' : ''
-              }`}
-            />
-            <span>Récapitulatif (par canal de paiement & attente)</span>
+      {/* Alerte discrète si erreur de chargement des articles */}
+      {itemsLoadError && (
+        <div className="px-3 py-2 bg-amber-50 border border-amber-200 rounded-lg flex items-center justify-between text-xs text-amber-800">
+          <div className="flex items-center gap-1.5">
+            <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
+            <span>Articles indisponibles pour certaines commandes.</span>
           </div>
-          <span className="text-[11px] font-normal text-slate-500">
-            {isSummaryExpanded ? 'Masquer' : 'Afficher'}
-          </span>
-        </button>
-
-        {isSummaryExpanded && (
-          <div className="p-4 border-t border-[#E5DCD0] bg-[#FAF7F2]/40">
-            {filteredPickups.length === 0 ? (
-              <p className="text-xs text-slate-500 text-center py-2">
-                Aucune commande récupérée pour les filtres sélectionnés.
-              </p>
-            ) : (
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                {/* Tableau par canal (2 colonnes de large sur desktop) */}
-                <div className="md:col-span-2 bg-white rounded-lg border border-[#E5DCD0] overflow-hidden shadow-xs">
-                  <div className="px-3 py-2 bg-[#FAF7F2] border-b border-[#E5DCD0] font-semibold text-xs text-slate-800">
-                    Par canal
-                  </div>
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-left text-xs">
-                      <thead className="bg-slate-50 text-slate-500 font-medium text-[11px] border-b border-slate-100">
-                        <tr>
-                          <th className="py-2 px-3">Canal</th>
-                          <th className="py-2 px-3 text-right">Commandes</th>
-                          <th className="py-2 px-3 text-right">Montant</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-100">
-                        {channelSummary.list.map((item) => (
-                          <tr key={item.channelLabel} className="hover:bg-slate-50/50">
-                            <td className="py-1.5 px-3 font-medium text-slate-800">{item.channelLabel}</td>
-                            <td className="py-1.5 px-3 text-right tabular-nums text-slate-600">{item.count}</td>
-                            <td className="py-1.5 px-3 text-right tabular-nums font-semibold text-slate-900">
-                              {item.totalAmount.toLocaleString()} {business.currency}
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                      <tfoot className="bg-[#FAF7F2] border-t border-[#E5DCD0] font-bold text-slate-900">
-                        <tr>
-                          <td className="py-2 px-3">Total</td>
-                          <td className="py-2 px-3 text-right tabular-nums">{channelSummary.totals.count}</td>
-                          <td className="py-2 px-3 text-right tabular-nums text-[#1B4B4A]">
-                            {channelSummary.totals.totalAmount.toLocaleString()} {business.currency}
-                          </td>
-                        </tr>
-                      </tfoot>
-                    </table>
-                  </div>
-                </div>
-
-                {/* Indicateur Attente moyenne globale */}
-                <div className="bg-white rounded-lg border border-[#E5DCD0] p-4 shadow-xs flex flex-col justify-between">
-                  <div>
-                    <div className="flex items-center gap-1.5 text-xs font-semibold text-slate-800 mb-2">
-                      <Clock className="w-4 h-4 text-[#1B4B4A]" />
-                      <span>Attente moyenne</span>
-                    </div>
-                    <p className="text-[11px] text-slate-500 leading-relaxed">
-                      Durée moyenne écoulée entre la mise à disposition (prête) et la récupération effective par le client.
-                    </p>
-                  </div>
-                  <div className="mt-4 pt-3 border-t border-slate-100">
-                    <div className="text-2xl font-bold font-mono text-[#1B4B4A]">
-                      {overallAverageWait.text}
-                    </div>
-                    <div className="text-[11px] text-slate-500 mt-0.5">
-                      {overallAverageWait.count > 0 ? (
-                        <span>
-                          calculée sur <strong className="text-slate-700">{overallAverageWait.count}</strong> commande{overallAverageWait.count > 1 ? 's récupérées' : ' récupérée'} avec heure valide
-                        </span>
-                      ) : (
-                        <span>aucune heure de mise à disposition disponible</span>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
-        )}
-      </div>
+          <button
+            type="button"
+            onClick={handleRetryLoadItems}
+            className="inline-flex items-center gap-1 font-semibold text-amber-900 hover:underline cursor-pointer ml-3"
+          >
+            <RefreshCw className="w-3 h-3" />
+            <span>Réessayer</span>
+          </button>
+        </div>
+      )}
 
       {/* Tableau en lecture seule des commandes récupérées groupé par jour */}
       {filteredPickups.length === 0 ? (
@@ -644,19 +690,19 @@ export default function PickupsSection({
           <div className="overflow-x-auto">
             <table className="w-full text-left text-xs text-slate-700 table-fixed">
               <colgroup>
+                <col className="w-[105px]" style={{ width: '105px' }} />
+                <col className="w-[185px]" style={{ width: '185px' }} />
+                <col className="w-[230px]" style={{ width: '230px' }} />
                 <col className="w-[110px]" style={{ width: '110px' }} />
-                <col />
-                <col className="w-[140px]" style={{ width: '140px' }} />
-                <col className="w-[120px]" style={{ width: '120px' }} />
-                <col className="w-[130px]" style={{ width: '130px' }} />
-                <col className="w-[100px]" style={{ width: '100px' }} />
+                <col className="w-[110px]" style={{ width: '110px' }} />
                 <col className="w-[85px]" style={{ width: '85px' }} />
+                <col className="w-[80px]" style={{ width: '80px' }} />
               </colgroup>
               <thead className="bg-slate-50/60 text-slate-400 uppercase font-semibold text-[10px] border-b border-slate-100">
                 <tr>
                   <th className="py-2 px-3">Récupérée le</th>
                   <th className="py-2 px-3">Client</th>
-                  <th className="py-2 px-3">Téléphone</th>
+                  <th className="py-2 px-3">Produits</th>
                   <th className="py-2 px-3 text-right">Montant</th>
                   <th className="py-2 px-3">Canal</th>
                   <th className="py-2 px-3">Attente</th>
@@ -681,17 +727,18 @@ export default function PickupsSection({
                       </td>
                     </tr>
 
-                    {/* Lignes du groupe */}
+                    {/* Lignes du groupe : UNE commande = UNE ligne */}
                     {grp.orders.map((ord) => {
                       const refShort = getOrderShortRef(ord);
                       const { dateText, timeText, isApproximate } = formatPickupTime(ord);
                       const clientInitial = ((ord.customer_name || 'C').trim().charAt(0) || 'C').toUpperCase();
                       const waitDurationMs = getPickupWaitDurationMs(ord);
+                      const itemsSummary = formatOrderItemsSummary(ord);
 
                       return (
                         <tr key={ord.id} className="hover:bg-slate-50/60 transition-colors bg-white">
-                          {/* Récupérée le (date courte et heure de récupération) */}
-                          <td className="py-2 px-3 align-top whitespace-nowrap">
+                          {/* 1. Récupérée le (date courte et heure de récupération) */}
+                          <td className="py-2.5 px-3 align-top whitespace-nowrap">
                             <div className="font-medium text-slate-900 font-mono text-xs">{dateText}</div>
                             <div className="text-[11px] text-slate-500 font-mono">{timeText}</div>
                             {isApproximate && (
@@ -699,8 +746,8 @@ export default function PickupsSection({
                             )}
                           </td>
 
-                          {/* Client (avatar et nom) */}
-                          <td className="py-2 px-3 align-top min-w-0">
+                          {/* 2. Client (avatar/initial, nom en gras, téléphone en dessous) */}
+                          <td className="py-2.5 px-3 align-top min-w-0">
                             <div className="flex items-center gap-2 min-w-0">
                               {ord.customer_avatar ? (
                                 <img
@@ -713,38 +760,48 @@ export default function PickupsSection({
                                   {clientInitial}
                                 </div>
                               )}
-                              <span className="font-semibold text-slate-900 text-xs truncate">
-                                {ord.customer_name || 'Client anonyme'}
-                              </span>
+                              <div className="min-w-0 flex-1">
+                                <div className="font-semibold text-slate-900 text-xs truncate" title={ord.customer_name || 'Client anonyme'}>
+                                  {ord.customer_name || 'Client anonyme'}
+                                </div>
+                                <div className="text-[11px] font-mono text-slate-500 truncate">
+                                  {ord.customer_phone || '—'}
+                                </div>
+                              </div>
                             </div>
                           </td>
 
-                          {/* Téléphone (largeur fixe, monospace) */}
-                          <td className="py-2 px-3 align-top whitespace-nowrap font-mono text-xs text-slate-600">
-                            {ord.customer_phone || '—'}
+                          {/* 3. Produits (récapitulatif articles en 1 ligne) */}
+                          <td className="py-2.5 px-3 align-top min-w-0">
+                            <div
+                              className="text-xs text-slate-700 truncate"
+                              title={itemsSummary}
+                            >
+                              {itemsSummary}
+                            </div>
                           </td>
 
-                          {/* Montant (aligné à droite) */}
-                          <td className="py-2 px-3 align-top text-right font-bold text-slate-900 text-xs tabular-nums whitespace-nowrap">
-                            {Number(ord.total_amount || 0).toLocaleString()} {business.currency}
-                          </td>
-
-                          {/* Canal (libellé lisible) */}
-                          <td className="py-2 px-3 align-top whitespace-nowrap">
-                            <span className="text-xs font-medium text-slate-800">
-                              {getPaymentMethodLabel(ord.payment_method)}
+                          {/* 4. Montant (en gras tabular-nums, aligné à droite) */}
+                          <td className="py-2.5 px-3 align-top text-right whitespace-nowrap">
+                            <span className="font-bold text-slate-900 text-xs tabular-nums">
+                              {Number(ord.total_amount || 0).toLocaleString()} {business.currency}
                             </span>
                           </td>
 
-                          {/* Attente (delivered_at - ready_at, sinon —) */}
-                          <td className="py-2 px-3 align-top whitespace-nowrap font-mono text-xs text-slate-600">
+                          {/* 5. Canal (badge coloré sobre) */}
+                          <td className="py-2.5 px-3 align-top whitespace-nowrap">
+                            {renderChannelBadge(ord.payment_method)}
+                          </td>
+
+                          {/* 6. Attente (delivered_at - ready_at, sinon —) */}
+                          <td className="py-2.5 px-3 align-top whitespace-nowrap font-mono text-xs text-slate-600">
                             {waitDurationMs !== null
                               ? formatWaitDuration(Math.round(waitDurationMs / 60000))
                               : '—'}
                           </td>
 
-                          {/* Référence courte */}
-                          <td className="py-2 px-3 align-top text-right whitespace-nowrap">
+                          {/* 7. Réf (référence courte) */}
+                          <td className="py-2.5 px-3 align-top text-right whitespace-nowrap">
                             <span className="font-mono text-xs text-slate-400 font-medium">
                               #{refShort}
                             </span>
