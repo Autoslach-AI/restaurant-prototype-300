@@ -1,7 +1,10 @@
 'use client';
 
-import React, { useState, useMemo, useEffect } from 'react';
-import { Search, ChevronDown, RefreshCw, AlertCircle, X, Star } from 'lucide-react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
+import { Search, ChevronDown, RefreshCw, AlertCircle, X, Star, Download, FileSpreadsheet, FileText } from 'lucide-react';
+import * as XLSX from 'xlsx';
+import jsPDF from 'jspdf';
+import autoTable from 'jspdf-autotable';
 import { Order, Business, Driver, OrderItem } from '@/lib/types';
 import { getOrderShortRef, getPaymentMethodLabel } from '@/lib/print-docs';
 import { formatWaitDuration } from '@/lib/wait-alert';
@@ -43,6 +46,11 @@ export default function DeliveredSection({
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
   const [detailItemsLoading, setDetailItemsLoading] = useState<boolean>(false);
   const [detailItemsError, setDetailItemsError] = useState<boolean>(false);
+
+  // État du menu d'export (Excel / PDF) et message d'erreur éventuel
+  const [isExportMenuOpen, setIsExportMenuOpen] = useState<boolean>(false);
+  const [exportError, setExportError] = useState<string | null>(null);
+  const exportMenuRef = useRef<HTMLDivElement>(null);
 
   // Commandes livrées (traçabilité)
   const deliveredOrders = useMemo(() => {
@@ -813,6 +821,409 @@ export default function DeliveredSection({
     );
   };
 
+  // Fermeture du menu d'export au clic extérieur ou avec la touche Échap
+  useEffect(() => {
+    if (!isExportMenuOpen) return;
+
+    const handleClickOutside = (event: MouseEvent) => {
+      if (exportMenuRef.current && !exportMenuRef.current.contains(event.target as Node)) {
+        setIsExportMenuOpen(false);
+      }
+    };
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setIsExportMenuOpen(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    window.addEventListener('keydown', handleKeyDown);
+
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [isExportMenuOpen]);
+
+  // Nom de base du fichier exporté : livraisons_AAAA-MM-JJ (date de début de période ; "toutes" si aucune borne)
+  const getExportBaseFilename = (): string => {
+    if (deliveredDateBounds.start !== -Infinity) {
+      const startD = new Date(deliveredDateBounds.start);
+      return `livraisons_${formatLocalDate(startD)}`;
+    }
+    return 'livraisons_toutes';
+  };
+
+  // Informations d'en-tête pour les exports
+  const getExportHeaderInfo = () => {
+    let periodText = 'Toutes les livraisons';
+    if (deliveredDateBounds.start !== -Infinity && deliveredDateBounds.end !== Infinity) {
+      const dStart = formatDateToDMY(formatLocalDate(new Date(deliveredDateBounds.start)));
+      const dEnd = formatDateToDMY(formatLocalDate(new Date(deliveredDateBounds.end)));
+      if (dStart === dEnd) {
+        periodText = `Livraisons du ${dStart}`;
+      } else {
+        periodText = `Livraisons du ${dStart} au ${dEnd}`;
+      }
+    } else if (filteredDeliveredOrders.length > 0) {
+      const dates = filteredDeliveredOrders
+        .map((o) => o.delivered_at || o.updated_at || o.created_at)
+        .filter(Boolean) as string[];
+      if (dates.length > 0) {
+        const timestamps = dates.map((d) => new Date(d).getTime()).filter((t) => !isNaN(t));
+        if (timestamps.length > 0) {
+          const minT = Math.min(...timestamps);
+          const maxT = Math.max(...timestamps);
+          const dMin = formatDateToDMY(formatLocalDate(new Date(minT)));
+          const dMax = formatDateToDMY(formatLocalDate(new Date(maxT)));
+          periodText = dMin === dMax ? `Livraisons du ${dMin}` : `Livraisons du ${dMin} au ${dMax}`;
+        }
+      }
+    }
+
+    const exportDateText = `Exporté le ${formatDateTimeDMY(new Date().toISOString())}`;
+
+    const activeFilters: string[] = [];
+    if (deliveredDriverFilter !== 'all') {
+      let dName = deliveredDriverFilter;
+      if (deliveredDriverFilter === '__unassigned__') {
+        dName = 'Non assigné';
+      } else if (deliveredDriverFilter.startsWith('name:')) {
+        dName = deliveredDriverFilter.replace(/^name:/, '');
+      } else {
+        const matched = drivers.find((d) => d.id === deliveredDriverFilter);
+        if (matched) dName = matched.name;
+      }
+      activeFilters.push(`Livreur : ${dName}`);
+    }
+    if (deliveredChannelFilter !== 'all') {
+      activeFilters.push(`Canal : ${deliveredChannelFilter}`);
+    }
+    const filtersText = activeFilters.length > 0 ? activeFilters.join(' · ') : '';
+
+    return {
+      businessName: business.name || 'Commerce',
+      periodText,
+      exportDateText,
+      filtersText,
+    };
+  };
+
+  // Export Excel (.xlsx) avec 3 feuilles
+  const handleExportExcel = () => {
+    try {
+      setExportError(null);
+      const { businessName, periodText, exportDateText, filtersText } = getExportHeaderInfo();
+      const filename = `${getExportBaseFilename()}.xlsx`;
+
+      const headerAOA = [
+        [businessName],
+        [periodText],
+        [exportDateText + (filtersText ? ` · ${filtersText}` : '')],
+        [],
+      ];
+
+      // 1. Feuille « Par livreur »
+      const driverAOA = [
+        ...headerAOA,
+        ['Livreur', 'Livraisons', `Montant (${business.currency})`, `Frais de livraison (${business.currency})`, 'Durée moy.'],
+        ...deliveredDriverSummary.list.map((d) => [
+          d.driverName,
+          d.count,
+          d.totalAmount,
+          d.deliveryFee,
+          d.avgDurationText,
+        ]),
+        [
+          'Total',
+          deliveredDriverSummary.totals.count,
+          deliveredDriverSummary.totals.totalAmount,
+          deliveredDriverSummary.totals.deliveryFee,
+          deliveredDriverSummary.totals.avgDurationText,
+        ],
+      ];
+      const wsDriver = XLSX.utils.aoa_to_sheet(driverAOA);
+
+      // 2. Feuille « Par canal »
+      const channelAOA = [
+        ...headerAOA,
+        ['Canal', 'Livraisons', `Montant (${business.currency})`],
+        ...deliveredChannelSummary.list.map((c) => [
+          c.channelLabel,
+          c.count,
+          c.totalAmount,
+        ]),
+        [
+          'Total',
+          deliveredChannelSummary.totals.count,
+          deliveredChannelSummary.totals.totalAmount,
+        ],
+      ];
+      const wsChannel = XLSX.utils.aoa_to_sheet(channelAOA);
+
+      // 3. Feuille « Détail »
+      const detailRows = filteredDeliveredOrders.map((ord) => {
+        let dName = 'Non assigné';
+        if (ord.driver_id) {
+          const matched = drivers.find((d) => d.id === ord.driver_id);
+          if (matched) dName = matched.name;
+          else if (ord.assigned_to) dName = ord.assigned_to;
+        } else if (ord.assigned_to) {
+          dName = ord.assigned_to;
+        }
+        const durMs = getOrderDeliveryDurationMs(ord);
+        const dureeText = durMs !== null ? formatWaitDuration(Math.round(durMs / 60000)) : '—';
+
+        return [
+          formatDateTimeDMY(ord.delivered_at || ord.updated_at),
+          ord.customer_name || 'Client anonyme',
+          ord.customer_phone || '—',
+          ord.delivery_zone_name || (ord.delivery_zone_id ? ord.delivery_zone_id : '—'),
+          Number(ord.total_amount || 0),
+          Number(ord.delivery_fee || 0),
+          getPaymentMethodLabel(ord.payment_method),
+          dName,
+          dureeText,
+          getOrderShortRef(ord),
+        ];
+      });
+
+      const detailAOA = [
+        ...headerAOA,
+        [
+          'Livrée le',
+          'Client',
+          'Téléphone',
+          'Zone',
+          `Montant (${business.currency})`,
+          `Frais de livraison (${business.currency})`,
+          'Canal',
+          'Livreur',
+          'Durée',
+          'Réf',
+        ],
+        ...detailRows,
+      ];
+      const wsDetail = XLSX.utils.aoa_to_sheet(detailAOA);
+
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, wsDriver, 'Par livreur');
+      XLSX.utils.book_append_sheet(wb, wsChannel, 'Par canal');
+      XLSX.utils.book_append_sheet(wb, wsDetail, 'Détail');
+
+      XLSX.writeFile(wb, filename);
+    } catch (err) {
+      console.error('Erreur lors de l’export Excel:', err);
+      setExportError("Une erreur est survenue lors de l'export Excel.");
+    }
+  };
+
+  // Export PDF (.pdf) en A4 paysage avec 3 tableaux
+  const handleExportPdf = () => {
+    try {
+      setExportError(null);
+      const { businessName, periodText, exportDateText, filtersText } = getExportHeaderInfo();
+      const filename = `${getExportBaseFilename()}.pdf`;
+
+      const doc = new jsPDF({ orientation: 'landscape', format: 'a4' });
+
+      // En-tête sur la première page
+      doc.setFontSize(14);
+      doc.setFont('helvetica', 'bold');
+      doc.text(businessName, 14, 15);
+
+      doc.setFontSize(11);
+      doc.setFont('helvetica', 'normal');
+      doc.text(periodText, 14, 21);
+
+      doc.setFontSize(8.5);
+      doc.setTextColor(100, 100, 100);
+      const subHeader = exportDateText + (filtersText ? ` · ${filtersText}` : '');
+      doc.text(subHeader, 14, 27);
+      doc.setTextColor(0, 0, 0);
+
+      // Tableau 1 : Récapitulatif par livreur
+      doc.setFontSize(10);
+      doc.setFont('helvetica', 'bold');
+      doc.text('Récapitulatif par livreur', 14, 34);
+
+      autoTable(doc, {
+        startY: 37,
+        head: [['Livreur', 'Livraisons', `Montant (${business.currency})`, `Frais de livraison (${business.currency})`, 'Durée moy.']],
+        body: [
+          ...deliveredDriverSummary.list.map((d) => [
+            d.driverName,
+            String(d.count),
+            `${d.totalAmount.toLocaleString()} ${business.currency}`,
+            `${d.deliveryFee.toLocaleString()} ${business.currency}`,
+            d.avgDurationText,
+          ]),
+          [
+            'Total',
+            String(deliveredDriverSummary.totals.count),
+            `${deliveredDriverSummary.totals.totalAmount.toLocaleString()} ${business.currency}`,
+            `${deliveredDriverSummary.totals.deliveryFee.toLocaleString()} ${business.currency}`,
+            deliveredDriverSummary.totals.avgDurationText,
+          ],
+        ],
+        theme: 'grid',
+        styles: {
+          fontSize: 8,
+          cellPadding: 2.5,
+          lineColor: [229, 220, 208],
+          lineWidth: 0.1,
+        },
+        headStyles: {
+          fillColor: [27, 75, 74],
+          textColor: [255, 255, 255],
+          fontStyle: 'bold',
+        },
+        footStyles: {
+          fillColor: [250, 247, 242],
+          textColor: [0, 0, 0],
+          fontStyle: 'bold',
+        },
+        margin: { left: 14, right: 14 },
+      });
+
+      // Tableau 2 : Récapitulatif par canal
+      const finalY1 = (doc as any).lastAutoTable?.finalY || 40;
+      doc.setFontSize(10);
+      doc.setFont('helvetica', 'bold');
+      doc.text('Récapitulatif par canal de paiement', 14, finalY1 + 8);
+
+      autoTable(doc, {
+        startY: finalY1 + 11,
+        head: [['Canal', 'Livraisons', `Montant (${business.currency})`]],
+        body: [
+          ...deliveredChannelSummary.list.map((c) => [
+            c.channelLabel,
+            String(c.count),
+            `${c.totalAmount.toLocaleString()} ${business.currency}`,
+          ]),
+          [
+            'Total',
+            String(deliveredChannelSummary.totals.count),
+            `${deliveredChannelSummary.totals.totalAmount.toLocaleString()} ${business.currency}`,
+          ],
+        ],
+        theme: 'grid',
+        styles: {
+          fontSize: 8,
+          cellPadding: 2.5,
+          lineColor: [229, 220, 208],
+          lineWidth: 0.1,
+        },
+        headStyles: {
+          fillColor: [27, 75, 74],
+          textColor: [255, 255, 255],
+          fontStyle: 'bold',
+        },
+        footStyles: {
+          fillColor: [250, 247, 242],
+          textColor: [0, 0, 0],
+          fontStyle: 'bold',
+        },
+        margin: { left: 14, right: 14 },
+      });
+
+      // Tableau 3 : Détail des livraisons (sur une nouvelle page)
+      doc.addPage();
+      doc.setFontSize(11);
+      doc.setFont('helvetica', 'bold');
+      doc.text('Détail des livraisons', 14, 15);
+
+      const detailBody = filteredDeliveredOrders.map((ord) => {
+        let dName = 'Non assigné';
+        if (ord.driver_id) {
+          const matched = drivers.find((d) => d.id === ord.driver_id);
+          if (matched) dName = matched.name;
+          else if (ord.assigned_to) dName = ord.assigned_to;
+        } else if (ord.assigned_to) {
+          dName = ord.assigned_to;
+        }
+        const durMs = getOrderDeliveryDurationMs(ord);
+        const dureeText = durMs !== null ? formatWaitDuration(Math.round(durMs / 60000)) : '—';
+
+        return [
+          formatDateTimeDMY(ord.delivered_at || ord.updated_at),
+          ord.customer_name || 'Client anonyme',
+          ord.customer_phone || '—',
+          ord.delivery_zone_name || (ord.delivery_zone_id ? ord.delivery_zone_id : '—'),
+          `${Number(ord.total_amount || 0).toLocaleString()} ${business.currency}`,
+          Number(ord.delivery_fee || 0) > 0 ? `${Number(ord.delivery_fee).toLocaleString()} ${business.currency}` : '0',
+          getPaymentMethodLabel(ord.payment_method),
+          dName,
+          dureeText,
+          `#${getOrderShortRef(ord)}`,
+        ];
+      });
+
+      autoTable(doc, {
+        startY: 19,
+        head: [[
+          'Livrée le',
+          'Client',
+          'Téléphone',
+          'Zone',
+          `Montant (${business.currency})`,
+          `Frais (${business.currency})`,
+          'Canal',
+          'Livreur',
+          'Durée',
+          'Réf',
+        ]],
+        body: detailBody,
+        theme: 'grid',
+        styles: {
+          fontSize: 7.5,
+          cellPadding: 2,
+          lineColor: [229, 220, 208],
+          lineWidth: 0.1,
+        },
+        headStyles: {
+          fillColor: [27, 75, 74],
+          textColor: [255, 255, 255],
+          fontStyle: 'bold',
+        },
+        columnStyles: {
+          0: { cellWidth: 26 },
+          1: { cellWidth: 32 },
+          2: { cellWidth: 24 },
+          3: { cellWidth: 30 },
+          4: { cellWidth: 28, halign: 'right' },
+          5: { cellWidth: 24, halign: 'right' },
+          6: { cellWidth: 24 },
+          7: { cellWidth: 28 },
+          8: { cellWidth: 20 },
+          9: { cellWidth: 20, halign: 'right' },
+        },
+        margin: { left: 14, right: 14 },
+      });
+
+      // Numérotation des pages
+      const totalPages = doc.getNumberOfPages();
+      for (let i = 1; i <= totalPages; i++) {
+        doc.setPage(i);
+        doc.setFontSize(8);
+        doc.setFont('helvetica', 'normal');
+        doc.setTextColor(130, 130, 130);
+        doc.text(
+          `Page ${i} / ${totalPages}`,
+          doc.internal.pageSize.getWidth() - 14,
+          doc.internal.pageSize.getHeight() - 8,
+          { align: 'right' }
+        );
+      }
+
+      doc.save(filename);
+    } catch (err) {
+      console.error('Erreur lors de l’export PDF:', err);
+      setExportError("Une erreur est survenue lors de l'export PDF.");
+    }
+  };
+
   return (
     <div className="space-y-3">
       {/* Barre de filtres */}
@@ -967,8 +1378,70 @@ export default function DeliveredSection({
               </span>
             )}
           </div>
+
+          {/* Bouton Exporter avec menu à deux choix (Excel, PDF) */}
+          <div className="relative shrink-0" ref={exportMenuRef}>
+            <button
+              type="button"
+              onClick={() => {
+                if (filteredDeliveredOrders.length === 0) return;
+                setIsExportMenuOpen((prev) => !prev);
+              }}
+              disabled={filteredDeliveredOrders.length === 0}
+              className={`inline-flex items-center gap-1.5 px-3 py-1 text-xs font-semibold rounded-lg border transition-colors ${
+                filteredDeliveredOrders.length === 0
+                  ? 'bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed'
+                  : 'bg-white text-slate-800 border-[#E5DCD0] hover:bg-[#FAF7F2] hover:border-[#1B4B4A] cursor-pointer'
+              }`}
+            >
+              <Download className="w-3.5 h-3.5" />
+              <span>Exporter</span>
+              <ChevronDown className="w-3 h-3 text-slate-500" />
+            </button>
+
+            {isExportMenuOpen && (
+              <div className="absolute right-0 mt-1 w-36 bg-white border border-[#E5DCD0] rounded-lg shadow-lg py-1 z-30 text-xs">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsExportMenuOpen(false);
+                    handleExportExcel();
+                  }}
+                  className="w-full text-left px-3 py-1.5 hover:bg-[#FAF7F2] text-slate-700 flex items-center gap-2 cursor-pointer transition-colors"
+                >
+                  <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-600" />
+                  <span>Excel (.xlsx)</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsExportMenuOpen(false);
+                    handleExportPdf();
+                  }}
+                  className="w-full text-left px-3 py-1.5 hover:bg-[#FAF7F2] text-slate-700 flex items-center gap-2 cursor-pointer transition-colors"
+                >
+                  <FileText className="w-3.5 h-3.5 text-rose-600" />
+                  <span>PDF (.pdf)</span>
+                </button>
+              </div>
+            )}
+          </div>
         </div>
       </div>
+
+      {/* Alerte discrète si erreur d'export */}
+      {exportError && (
+        <div className="px-3 py-2 bg-rose-50 border border-rose-200 rounded-lg flex items-center justify-between text-xs text-rose-800">
+          <span>{exportError}</span>
+          <button
+            type="button"
+            onClick={() => setExportError(null)}
+            className="text-rose-900 font-semibold hover:underline cursor-pointer ml-3"
+          >
+            Fermer
+          </button>
+        </div>
+      )}
 
       {/* Alerte discrète si erreur de chargement des articles */}
       {itemsLoadError && (
