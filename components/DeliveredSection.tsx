@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useMemo, useEffect } from 'react';
-import { Search, ChevronDown, RefreshCw, AlertCircle } from 'lucide-react';
+import { Search, ChevronDown, RefreshCw, AlertCircle, X, Star } from 'lucide-react';
 import { Order, Business, Driver, OrderItem } from '@/lib/types';
 import { getOrderShortRef, getPaymentMethodLabel } from '@/lib/print-docs';
 import { formatWaitDuration } from '@/lib/wait-alert';
@@ -39,6 +39,11 @@ export default function DeliveredSection({
   const [itemsLoadError, setItemsLoadError] = useState<boolean>(false);
   const [retryTrigger, setRetryTrigger] = useState<number>(0);
 
+  // État du volet de détail d'une commande
+  const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
+  const [detailItemsLoading, setDetailItemsLoading] = useState<boolean>(false);
+  const [detailItemsError, setDetailItemsError] = useState<boolean>(false);
+
   // Commandes livrées (traçabilité)
   const deliveredOrders = useMemo(() => {
     return orders.filter((o) => {
@@ -64,6 +69,19 @@ export default function DeliveredSection({
       return `${parts[2]}/${parts[1]}/${parts[0]}`;
     }
     return dateStr;
+  };
+
+  // Helper pour formater une date ISO en JJ/MM/AAAA HH:mm
+  const formatDateTimeDMY = (dateStr?: string | null) => {
+    if (!dateStr) return '—';
+    const d = new Date(dateStr);
+    if (isNaN(d.getTime())) return '—';
+    const day = String(d.getDate()).padStart(2, '0');
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const year = d.getFullYear();
+    const hours = String(d.getHours()).padStart(2, '0');
+    const minutes = String(d.getMinutes()).padStart(2, '0');
+    return `${day}/${month}/${year} ${hours}:${minutes}`;
   };
 
   // Calcul des bornes de la période sélectionnée (fuseau local de l'utilisateur)
@@ -349,6 +367,16 @@ export default function DeliveredSection({
     return list;
   }, [ordersForDriverPills, drivers]);
 
+  // Montant total pour l'option « Tous les canaux »
+  const totalChannelsPillsAmount = useMemo(() => {
+    return channelPills.reduce((sum, ch) => sum + ch.totalAmount, 0);
+  }, [channelPills]);
+
+  // Montant total pour l'option « Tous les livreurs »
+  const totalDriversPillsAmount = useMemo(() => {
+    return driverPills.reduce((sum, drv) => sum + drv.totalAmount, 0);
+  }, [driverPills]);
+
   // Filtrage complet et tri des commandes livrées
   const filteredDeliveredOrders = useMemo(() => {
     const list = baseFilteredOrders.filter((ord) => {
@@ -384,6 +412,11 @@ export default function DeliveredSection({
   // Montant total des commandes livrées filtrées
   const totalDeliveredFilteredAmount = useMemo(() => {
     return filteredDeliveredOrders.reduce((sum, o) => sum + Number(o.total_amount || 0), 0);
+  }, [filteredDeliveredOrders]);
+
+  // Total des frais de livraison des commandes livrées filtrées
+  const totalDeliveredFilteredFees = useMemo(() => {
+    return filteredDeliveredOrders.reduce((sum, o) => sum + Number(o.delivery_fee || 0), 0);
   }, [filteredDeliveredOrders]);
 
   // Calcul de la durée de livraison en ms (uniquement si delivered_at et ready_at existent et delivered_at >= ready_at)
@@ -686,6 +719,57 @@ export default function DeliveredSection({
     setRetryTrigger((prev) => prev + 1);
   };
 
+  // Commande sélectionnée pour le panneau de détail
+  const selectedOrder = useMemo(() => {
+    if (!selectedOrderId) return null;
+    return deliveredOrders.find((o) => o.id === selectedOrderId) || null;
+  }, [selectedOrderId, deliveredOrders]);
+
+  // Chargement spécifique des articles pour la commande du panneau de détail si nécessaire
+  const loadDetailOrderItems = (orderId: string) => {
+    setDetailItemsLoading(true);
+    setDetailItemsError(false);
+    fetchOrderItemsForOrders([orderId])
+      .then((itemsMap) => {
+        setItemsByOrderId((prev) => ({
+          ...prev,
+          ...itemsMap,
+        }));
+        setDetailItemsLoading(false);
+      })
+      .catch((err) => {
+        console.warn('Erreur chargement articles pour le détail:', err);
+        setDetailItemsError(true);
+        setDetailItemsLoading(false);
+      });
+  };
+
+  useEffect(() => {
+    if (!selectedOrderId) {
+      setDetailItemsError(false);
+      setDetailItemsLoading(false);
+      return;
+    }
+    const hasCached = selectedOrderId in itemsByOrderId;
+    const hasOrderItems = selectedOrder?.items && selectedOrder.items.length > 0;
+    if (!hasCached && !hasOrderItems) {
+      loadDetailOrderItems(selectedOrderId);
+    }
+  }, [selectedOrderId, selectedOrder]);
+
+  // Fermeture du volet avec la touche Échap
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setSelectedOrderId(null);
+      }
+    };
+    if (selectedOrderId) {
+      window.addEventListener('keydown', handleKeyDown);
+    }
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [selectedOrderId]);
+
   // Helper pour afficher le récapitulatif des produits d'une commande
   const formatOrderItemsSummary = (ord: Order): string => {
     const items = itemsByOrderId[ord.id] ?? (ord.items && ord.items.length > 0 ? ord.items : undefined);
@@ -731,8 +815,8 @@ export default function DeliveredSection({
 
   return (
     <div className="space-y-3">
-      {/* Barre de filtres sur UNE seule ligne (flex-wrap sous xl) */}
-      <div className="bg-white p-3 rounded-xl border border-[#E5DCD0] flex flex-wrap xl:flex-nowrap items-center gap-2.5">
+      {/* Barre de filtres */}
+      <div className="bg-white p-3 rounded-xl border border-[#E5DCD0] flex flex-wrap items-center gap-2.5">
         {/* Menu déroulant Période */}
         <div className="shrink-0">
           <select
@@ -740,11 +824,6 @@ export default function DeliveredSection({
             onChange={(e) => {
               const val = e.target.value as typeof deliveredPeriodFilter;
               setDeliveredPeriodFilter(val);
-              if (val === 'custom') {
-                const todayStr = formatLocalDate(new Date(nowMs));
-                if (!customStartDate) setCustomStartDate(todayStr);
-                if (!customEndDate) setCustomEndDate(todayStr);
-              }
             }}
             className="bg-[#FAF7F2] border border-[#E5DCD0] rounded-lg px-2.5 py-1 text-xs text-slate-900 font-medium focus:outline-none focus:border-[#1B4B4A] cursor-pointer"
           >
@@ -755,13 +834,15 @@ export default function DeliveredSection({
             <option value="this_month">Ce mois</option>
             <option value="last_month">Mois dernier</option>
             <option value="all">Toutes</option>
-            <option value="custom">
-              {isSingleDayCustom && customStartDate
-                ? formatDateToDMY(customStartDate)
-                : customStartDate && customEndDate && customStartDate !== customEndDate
-                ? `Du ${formatDateToDMY(customStartDate)} au ${formatDateToDMY(customEndDate)}`
-                : 'Personnalisée'}
-            </option>
+            {deliveredPeriodFilter === 'custom' && (
+              <option value="custom">
+                {isSingleDayCustom && customStartDate
+                  ? formatDateToDMY(customStartDate)
+                  : customStartDate && customEndDate && customStartDate !== customEndDate
+                  ? `Du ${formatDateToDMY(customStartDate)} au ${formatDateToDMY(customEndDate)}`
+                  : 'Personnalisée'}
+              </option>
+            )}
           </select>
         </div>
 
@@ -787,308 +868,106 @@ export default function DeliveredSection({
           </button>
         </div>
 
-        {/* Si Personnalisée : deux champs date début et fin */}
-        {deliveredPeriodFilter === 'custom' && (
-          <div className="flex items-center gap-1.5 shrink-0">
-            <input
-              type="date"
-              value={customStartDate}
-              onChange={(e) => setCustomStartDate(e.target.value)}
-              className="bg-[#FAF7F2] border border-[#E5DCD0] rounded-lg px-2 py-1 text-xs text-slate-900 focus:outline-none focus:border-[#1B4B4A]"
-              title="Date de début"
-            />
-            <span className="text-xs text-slate-400">à</span>
-            <input
-              type="date"
-              value={customEndDate}
-              onChange={(e) => setCustomEndDate(e.target.value)}
-              className="bg-[#FAF7F2] border border-[#E5DCD0] rounded-lg px-2 py-1 text-xs text-slate-900 focus:outline-none focus:border-[#1B4B4A]"
-              title="Date de fin"
-            />
-          </div>
-        )}
-
         {/* Barre de recherche (flexible) */}
-        <div className="relative flex-1 min-w-[180px]">
+        <div className="relative flex-1 min-w-[140px]">
           <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
           <input
             type="text"
             value={deliveredSearchQuery}
             onChange={(e) => setDeliveredSearchQuery(e.target.value)}
-            placeholder="Recherche client, téléphone, réf, livreur..."
+            placeholder="Rechercher…"
             className="w-full bg-[#FAF7F2] border border-[#E5DCD0] rounded-lg pl-8 pr-2.5 py-1 text-xs text-slate-900 focus:outline-none focus:border-[#1B4B4A]"
           />
         </div>
 
         {/* Menu Livreur */}
-        <div className="shrink-0 min-w-[140px]">
+        <div className="shrink-0 max-w-[150px]">
           <select
             value={deliveredDriverFilter}
             onChange={(e) => setDeliveredDriverFilter(e.target.value)}
-            className="w-full bg-[#FAF7F2] border border-[#E5DCD0] rounded-lg px-2.5 py-1 text-xs text-slate-900 focus:outline-none focus:border-[#1B4B4A] cursor-pointer"
+            className="w-full bg-[#FAF7F2] border border-[#E5DCD0] rounded-lg px-2.5 py-1 text-xs text-slate-900 focus:outline-none focus:border-[#1B4B4A] cursor-pointer truncate"
           >
-            <option value="all">Tous les livreurs</option>
-            {drivers.map((drv) => (
-              <option key={drv.id} value={drv.id}>
-                {drv.name} {drv.is_active ? '' : '(archivé)'}
-              </option>
-            ))}
-            <option value="__unassigned__">Non assigné</option>
-            {deliveredDriverFilter.startsWith('name:') && (
+            <option value="all">Livreur : tous</option>
+            {driverPills.map((drv) => {
+              const matched = drivers.find((d) => d.id === drv.driverKey);
+              const isArchived = matched ? !matched.is_active : false;
+              const nameDisplay = isArchived ? `${drv.driverName} (archivé)` : drv.driverName;
+              return (
+                <option key={drv.driverKey} value={drv.driverKey}>
+                  {nameDisplay} · {drv.count} · {drv.totalAmount.toLocaleString()}
+                </option>
+              );
+            })}
+            {deliveredDriverFilter !== 'all' && !driverPills.some((d) => d.driverKey === deliveredDriverFilter) && (
               <option value={deliveredDriverFilter}>
-                {deliveredDriverFilter.slice(5)}
+                {(() => {
+                  const matched = drivers.find((d) => d.id === deliveredDriverFilter);
+                  if (matched) return `${matched.name}${matched.is_active ? '' : ' (archivé)'}`;
+                  if (deliveredDriverFilter === '__unassigned__') return 'Non assigné';
+                  if (deliveredDriverFilter.startsWith('name:')) return deliveredDriverFilter.slice(5);
+                  return deliveredDriverFilter;
+                })()} · 0 · 0
               </option>
             )}
           </select>
         </div>
 
-        {/* Menu Zone */}
-        <div className="shrink-0 min-w-[130px]">
-          <select
-            value={deliveredZoneFilter}
-            onChange={(e) => setDeliveredZoneFilter(e.target.value)}
-            className="w-full bg-[#FAF7F2] border border-[#E5DCD0] rounded-lg px-2.5 py-1 text-xs text-slate-900 focus:outline-none focus:border-[#1B4B4A] cursor-pointer"
-          >
-            <option value="all">Toutes les zones</option>
-            {deliveredZonesList.map((z) => (
-              <option key={z.id} value={z.id}>
-                {z.name}
-              </option>
-            ))}
-          </select>
-        </div>
-
         {/* Menu Canal */}
-        <div className="shrink-0 min-w-[130px]">
+        <div className="shrink-0 max-w-[150px]">
           <select
             value={deliveredChannelFilter}
             onChange={(e) => setDeliveredChannelFilter(e.target.value)}
-            className="w-full bg-[#FAF7F2] border border-[#E5DCD0] rounded-lg px-2.5 py-1 text-xs text-slate-900 focus:outline-none focus:border-[#1B4B4A] cursor-pointer"
+            className="w-full bg-[#FAF7F2] border border-[#E5DCD0] rounded-lg px-2.5 py-1 text-xs text-slate-900 focus:outline-none focus:border-[#1B4B4A] cursor-pointer truncate"
           >
-            <option value="all">Tous les canaux</option>
-            <option value="Wave">Wave</option>
-            <option value="Orange Money">Orange Money</option>
-            <option value="Carte">Carte</option>
-            <option value="Espèces">Espèces</option>
+            <option value="all">Canal : tous</option>
+            {channelPills.map((ch) => (
+              <option key={ch.channelLabel} value={ch.channelLabel}>
+                {ch.channelLabel} · {ch.count} · {ch.totalAmount.toLocaleString()}
+              </option>
+            ))}
+            {deliveredChannelFilter !== 'all' && !channelPills.some((c) => c.channelLabel === deliveredChannelFilter) && (
+              <option value={deliveredChannelFilter}>
+                {deliveredChannelFilter} · 0 · 0
+              </option>
+            )}
           </select>
         </div>
 
-        {/* À droite : « n livraisons · total X devise » */}
-        <div className="shrink-0 whitespace-nowrap text-xs font-semibold text-slate-800 px-3 py-1 bg-[#FAF7F2] border border-[#E5DCD0] rounded-lg ml-auto">
-          <span className="tabular-nums font-bold text-slate-900">
-            {filteredDeliveredOrders.length}
-          </span>{' '}
-          livraison{filteredDeliveredOrders.length > 1 ? 's' : ''} · total{' '}
-          <span className="text-[#1B4B4A] font-bold tabular-nums">
-            {totalDeliveredFilteredAmount.toLocaleString()} {business.currency}
-          </span>
-        </div>
-      </div>
-
-      {/* Rangée de pastilles : canaux de paiement et livreurs */}
-      {(channelPills.length > 0 ||
-        driverPills.length > 0 ||
-        deliveredChannelFilter !== 'all' ||
-        deliveredDriverFilter !== 'all') && (
-        <div className="flex flex-wrap items-center gap-1.5 py-1">
-          {/* Pastilles Canaux de paiement */}
-          {channelPills.map((ch) => {
-            const isActive = deliveredChannelFilter === ch.channelLabel;
-            return (
-              <button
-                key={`channel-${ch.channelLabel}`}
-                type="button"
-                onClick={() => setDeliveredChannelFilter(isActive ? 'all' : ch.channelLabel)}
-                className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs transition-colors border cursor-pointer ${
-                  isActive
-                    ? 'bg-[#1B4B4A] text-white border-[#1B4B4A] font-medium shadow-xs'
-                    : 'bg-white hover:bg-[#FAF7F2] text-slate-700 border-[#E5DCD0]'
-                }`}
-                title={`Filtrer par canal ${ch.channelLabel}`}
-              >
-                <span>{ch.channelLabel}</span>
-                <span className={isActive ? 'text-white/70' : 'text-slate-400'}>·</span>
-                <span className="tabular-nums">{ch.count}</span>
-                <span className={isActive ? 'text-white/70' : 'text-slate-400'}>·</span>
-                <span className={`font-semibold tabular-nums ${isActive ? 'text-white' : 'text-slate-900'}`}>
-                  {ch.totalAmount.toLocaleString()} {business.currency}
-                </span>
-              </button>
-            );
-          })}
-
-          {/* Séparateur discret si les deux listes ont des éléments */}
-          {channelPills.length > 0 && driverPills.length > 0 && (
-            <span className="w-px h-4 bg-[#E5DCD0] mx-1 shrink-0" aria-hidden="true" />
-          )}
-
-          {/* Pastilles Livreurs */}
-          {driverPills.map((drv) => {
-            const isActive = deliveredDriverFilter === drv.driverKey;
-            return (
-              <button
-                key={`driver-${drv.driverKey}`}
-                type="button"
-                onClick={() => setDeliveredDriverFilter(isActive ? 'all' : drv.driverKey)}
-                className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs transition-colors border cursor-pointer ${
-                  isActive
-                    ? 'bg-[#1B4B4A] text-white border-[#1B4B4A] font-medium shadow-xs'
-                    : 'bg-white hover:bg-[#FAF7F2] text-slate-700 border-[#E5DCD0]'
-                }`}
-                title={`Filtrer par livreur ${drv.driverName}`}
-              >
-                <span>{drv.driverName}</span>
-                <span className={isActive ? 'text-white/70' : 'text-slate-400'}>·</span>
-                <span className="tabular-nums">{drv.count}</span>
-                <span className={isActive ? 'text-white/70' : 'text-slate-400'}>·</span>
-                <span className={`font-semibold tabular-nums ${isActive ? 'text-white' : 'text-slate-900'}`}>
-                  {drv.totalAmount.toLocaleString()} {business.currency}
-                </span>
-              </button>
-            );
-          })}
-
-          {/* Bouton Tout effacer si un filtre canal ou livreur est actif */}
+        {/* À droite : bouton Effacer les filtres (si actif) + bandeau total */}
+        <div className="shrink-0 flex items-center gap-2 ml-auto">
           {(deliveredChannelFilter !== 'all' || deliveredDriverFilter !== 'all') && (
             <button
               type="button"
               onClick={() => {
                 setDeliveredChannelFilter('all');
                 setDeliveredDriverFilter('all');
+                setDeliveredZoneFilter('all');
               }}
-              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs text-[#8A7A68] hover:text-slate-900 hover:bg-[#FAF7F2] border border-dashed border-[#C5B7A5] transition-colors cursor-pointer ml-auto"
+              className="px-2 py-1 text-xs text-[#8A7A68] hover:text-slate-900 border border-dashed border-[#C5B7A5] hover:bg-[#FAF7F2] rounded-lg transition-colors cursor-pointer"
             >
-              <span>Tout effacer</span>
+              Effacer les filtres
             </button>
           )}
-        </div>
-      )}
 
-      {/* Bloc Récapitulatif repliable (replié par défaut) */}
-      <div className="bg-white rounded-xl border border-[#E5DCD0] overflow-hidden">
-        <button
-          type="button"
-          onClick={() => setIsSummaryExpanded((prev) => !prev)}
-          className="w-full px-4 py-2.5 flex items-center justify-between text-xs font-semibold text-slate-800 hover:bg-slate-50/70 transition-colors cursor-pointer"
-        >
-          <div className="flex items-center gap-2">
-            <ChevronDown
-              className={`w-4 h-4 text-slate-500 transition-transform duration-200 ${
-                isSummaryExpanded ? 'rotate-180' : ''
-              }`}
-            />
-            <span>Récapitulatif (par livreur et par canal)</span>
-          </div>
-          <span className="text-[11px] font-normal text-slate-500">
-            {isSummaryExpanded ? 'Masquer' : 'Afficher'}
-          </span>
-        </button>
-
-        {isSummaryExpanded && (
-          <div className="p-4 border-t border-[#E5DCD0] bg-[#FAF7F2]/40">
-            {filteredDeliveredOrders.length === 0 ? (
-              <p className="text-xs text-slate-500 text-center py-2">
-                Aucune livraison pour les filtres sélectionnés.
-              </p>
-            ) : (
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                {/* Tableau a : Par livreur */}
-                <div className="bg-white rounded-lg border border-[#E5DCD0] overflow-hidden shadow-xs">
-                  <div className="px-3 py-2 bg-[#FAF7F2] border-b border-[#E5DCD0] font-semibold text-xs text-slate-800">
-                    Par livreur
-                  </div>
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-left text-xs">
-                      <thead className="bg-slate-50 text-slate-500 font-medium text-[11px] border-b border-slate-100">
-                        <tr>
-                          <th className="py-2 px-3">Livreur</th>
-                          <th className="py-2 px-3 text-center">Livraisons</th>
-                          <th className="py-2 px-3 text-right">Montant</th>
-                          <th className="py-2 px-3 text-right">Frais</th>
-                          <th className="py-2 px-3 text-right">Durée moy.</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-100 text-slate-700">
-                        {deliveredDriverSummary.list.map((row) => (
-                          <tr key={row.driverKey} className="hover:bg-slate-50/60 transition-colors">
-                            <td className="py-2 px-3 font-medium text-slate-900">{row.driverName}</td>
-                            <td className="py-2 px-3 text-center tabular-nums">{row.count}</td>
-                            <td className="py-2 px-3 text-right tabular-nums font-medium text-slate-900">
-                              {row.totalAmount.toLocaleString()} {business.currency}
-                            </td>
-                            <td className="py-2 px-3 text-right tabular-nums text-slate-600">
-                              {row.deliveryFee.toLocaleString()} {business.currency}
-                            </td>
-                            <td className="py-2 px-3 text-right tabular-nums text-slate-600 font-mono">
-                              {row.avgDurationText}
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                      <tfoot className="bg-[#FAF7F2] border-t-2 border-[#E5DCD0] font-bold text-slate-900">
-                        <tr>
-                          <td className="py-2 px-3">Total</td>
-                          <td className="py-2 px-3 text-center tabular-nums">
-                            {deliveredDriverSummary.totals.count}
-                          </td>
-                          <td className="py-2 px-3 text-right tabular-nums text-[#1B4B4A]">
-                            {deliveredDriverSummary.totals.totalAmount.toLocaleString()} {business.currency}
-                          </td>
-                          <td className="py-2 px-3 text-right tabular-nums">
-                            {deliveredDriverSummary.totals.deliveryFee.toLocaleString()} {business.currency}
-                          </td>
-                          <td className="py-2 px-3 text-right tabular-nums font-mono">
-                            {deliveredDriverSummary.totals.avgDurationText}
-                          </td>
-                        </tr>
-                      </tfoot>
-                    </table>
-                  </div>
-                </div>
-
-                {/* Tableau b : Par canal */}
-                <div className="bg-white rounded-lg border border-[#E5DCD0] overflow-hidden shadow-xs">
-                  <div className="px-3 py-2 bg-[#FAF7F2] border-b border-[#E5DCD0] font-semibold text-xs text-slate-800">
-                    Par canal
-                  </div>
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-left text-xs">
-                      <thead className="bg-slate-50 text-slate-500 font-medium text-[11px] border-b border-slate-100">
-                        <tr>
-                          <th className="py-2 px-3">Canal</th>
-                          <th className="py-2 px-3 text-center">Livraisons</th>
-                          <th className="py-2 px-3 text-right">Montant</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-100 text-slate-700">
-                        {deliveredChannelSummary.list.map((row) => (
-                          <tr key={row.channelLabel} className="hover:bg-slate-50/60 transition-colors">
-                            <td className="py-2 px-3 font-medium text-slate-900">{row.channelLabel}</td>
-                            <td className="py-2 px-3 text-center tabular-nums">{row.count}</td>
-                            <td className="py-2 px-3 text-right tabular-nums font-medium text-slate-900">
-                              {row.totalAmount.toLocaleString()} {business.currency}
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                      <tfoot className="bg-[#FAF7F2] border-t-2 border-[#E5DCD0] font-bold text-slate-900">
-                        <tr>
-                          <td className="py-2 px-3">Total</td>
-                          <td className="py-2 px-3 text-center tabular-nums">
-                            {deliveredChannelSummary.totals.count}
-                          </td>
-                          <td className="py-2 px-3 text-right tabular-nums text-[#1B4B4A]">
-                            {deliveredChannelSummary.totals.totalAmount.toLocaleString()} {business.currency}
-                          </td>
-                        </tr>
-                      </tfoot>
-                    </table>
-                  </div>
-                </div>
-              </div>
+          <div className="shrink-0 whitespace-nowrap text-xs font-semibold text-slate-800 px-3 py-1 bg-[#FAF7F2] border border-[#E5DCD0] rounded-lg truncate">
+            <span className="tabular-nums font-bold text-slate-900">
+              {filteredDeliveredOrders.length}
+            </span>{' '}
+            livr. ·{' '}
+            <span className="text-[#1B4B4A] font-bold tabular-nums">
+              {totalDeliveredFilteredAmount.toLocaleString()} {business.currency}
+            </span>
+            {totalDeliveredFilteredFees > 0 && (
+              <span className="text-slate-600 font-normal">
+                {' '}· dont{' '}
+                <span className="tabular-nums font-semibold text-slate-800">
+                  {totalDeliveredFilteredFees.toLocaleString()}
+                </span>{' '}
+                de frais
+              </span>
             )}
           </div>
-        )}
+        </div>
       </div>
 
       {/* Alerte discrète si erreur de chargement des articles */}
@@ -1182,7 +1061,11 @@ export default function DeliveredSection({
                       const zoneText = ord.delivery_zone_name || (ord.delivery_zone_id ? ord.delivery_zone_id : 'Sans zone');
 
                       return (
-                        <tr key={ord.id} className="hover:bg-slate-50/60 transition-colors bg-white">
+                        <tr
+                          key={ord.id}
+                          onClick={() => setSelectedOrderId(ord.id)}
+                          className="hover:bg-slate-50 transition-colors bg-white cursor-pointer"
+                        >
                           {/* 1. Livrée le */}
                           <td className="py-2.5 px-3 align-top whitespace-nowrap">
                             <div className="font-medium text-slate-900 font-mono text-xs">{dateText}</div>
@@ -1241,8 +1124,15 @@ export default function DeliveredSection({
                           </td>
 
                           {/* 5. Montant */}
-                          <td className="py-2.5 px-3 align-top text-right font-bold text-slate-900 text-xs tabular-nums whitespace-nowrap">
-                            {Number(ord.total_amount || 0).toLocaleString()} {business.currency}
+                          <td className="py-2.5 px-3 align-top text-right whitespace-nowrap">
+                            <div className="font-bold text-slate-900 text-xs tabular-nums">
+                              {Number(ord.total_amount || 0).toLocaleString()} {business.currency}
+                            </div>
+                            {Number(ord.delivery_fee || 0) > 0 && (
+                              <div className="text-[10px] text-slate-500 tabular-nums">
+                                dont {Number(ord.delivery_fee).toLocaleString()} livraison
+                              </div>
+                            )}
                           </td>
 
                           {/* 6. Canal */}
@@ -1289,6 +1179,344 @@ export default function DeliveredSection({
               </button>
             </div>
           )}
+        </div>
+      )}
+
+      {/* Panneau coulissant de détail d'une commande livrée */}
+      {selectedOrder && (
+        <div className="fixed inset-0 z-50 overflow-hidden">
+          {/* Fond assombri cliquable */}
+          <div
+            className="fixed inset-0 bg-black/40 backdrop-blur-xs transition-opacity cursor-pointer"
+            onClick={() => setSelectedOrderId(null)}
+            aria-label="Fermer le panneau"
+          />
+
+          {/* Panneau latéral droit */}
+          <div className="fixed inset-y-0 right-0 w-full sm:w-[480px] bg-white shadow-2xl z-50 flex flex-col border-l border-[#E5DCD0] max-h-screen">
+            {/* 1. En-tête : Référence, date/heure livraison, badge canal, bouton fermeture */}
+            <div className="p-4 border-b border-[#E5DCD0] bg-[#FAF7F2] flex items-start justify-between gap-3 shrink-0">
+              <div className="min-w-0">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <h3 className="text-base font-bold text-slate-900 font-mono">
+                    Commande #{getOrderShortRef(selectedOrder.id)}
+                  </h3>
+                  {renderChannelBadge(selectedOrder.payment_method)}
+                </div>
+                <div className="text-xs text-slate-600 mt-1">
+                  Livrée le{' '}
+                  <span className="font-medium text-slate-800">
+                    {formatDateTimeDMY(selectedOrder.delivered_at || selectedOrder.updated_at)}
+                  </span>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSelectedOrderId(null)}
+                className="p-1.5 rounded-lg text-slate-500 hover:text-slate-800 hover:bg-[#E5DCD0]/60 transition-colors cursor-pointer shrink-0"
+                aria-label="Fermer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Corps défilable */}
+            <div className="p-4 overflow-y-auto space-y-4 text-xs divide-y divide-[#E5DCD0]/60">
+              {/* 2. Client */}
+              <div className="pt-1 first:pt-0">
+                <div className="text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-2">
+                  Client
+                </div>
+                <div className="flex items-center gap-3">
+                  {selectedOrder.customer_avatar ? (
+                    <img
+                      src={selectedOrder.customer_avatar}
+                      alt={selectedOrder.customer_name || 'Client'}
+                      className="w-10 h-10 rounded-full object-cover border border-[#E5DCD0] shrink-0"
+                    />
+                  ) : (
+                    <div className="w-10 h-10 rounded-full bg-[#FAF7F2] border border-[#E5DCD0] text-[#1B4B4A] flex items-center justify-center font-bold text-sm shrink-0">
+                      {((selectedOrder.customer_name || 'C').trim().charAt(0) || 'C').toUpperCase()}
+                    </div>
+                  )}
+                  <div className="min-w-0">
+                    <div className="font-bold text-slate-900 text-sm truncate">
+                      {selectedOrder.customer_name || 'Client anonyme'}
+                    </div>
+                    <div className="text-slate-600 font-mono mt-0.5">
+                      {selectedOrder.customer_phone || '—'}
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* 3. Adresse & Zone */}
+              <div className="pt-3">
+                <div className="text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-2">
+                  Livraison
+                </div>
+                <div className="space-y-1.5 bg-[#FAF7F2] p-3 rounded-lg border border-[#E5DCD0]">
+                  <div>
+                    <span className="text-slate-500 text-[11px]">Adresse :</span>
+                    <p className="font-medium text-slate-900 break-words mt-0.5">
+                      {selectedOrder.delivery_address || '—'}
+                    </p>
+                  </div>
+                  <div>
+                    <span className="text-slate-500 text-[11px]">Zone :</span>
+                    <p className="font-medium text-slate-800 mt-0.5">
+                      {selectedOrder.delivery_zone_name || '—'}
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              {/* 4. Produits */}
+              <div className="pt-3">
+                <div className="text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-2">
+                  Articles commandés
+                </div>
+                {(() => {
+                  const items =
+                    itemsByOrderId[selectedOrder.id] ??
+                    (selectedOrder.items && selectedOrder.items.length > 0 ? selectedOrder.items : undefined);
+
+                  if (detailItemsLoading && !items) {
+                    return (
+                      <div className="p-4 text-center text-slate-500 bg-[#FAF7F2] rounded-lg border border-[#E5DCD0]">
+                        Chargement...
+                      </div>
+                    );
+                  }
+
+                  if (detailItemsError && !items) {
+                    return (
+                      <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg flex items-center justify-between text-amber-800">
+                        <span>Articles indisponibles.</span>
+                        <button
+                          type="button"
+                          onClick={() => loadDetailOrderItems(selectedOrder.id)}
+                          className="font-semibold underline cursor-pointer text-amber-900"
+                        >
+                          Réessayer
+                        </button>
+                      </div>
+                    );
+                  }
+
+                  if (!items || items.length === 0) {
+                    return (
+                      <div className="p-3 text-center text-slate-400 italic bg-[#FAF7F2] rounded-lg border border-[#E5DCD0]">
+                        Aucun article enregistré.
+                      </div>
+                    );
+                  }
+
+                  return (
+                    <div className="bg-white rounded-lg border border-[#E5DCD0] overflow-hidden">
+                      <table className="w-full text-left text-xs">
+                        <thead className="bg-[#FAF7F2] text-slate-600 border-b border-[#E5DCD0]">
+                          <tr>
+                            <th className="py-1.5 px-2.5 font-medium">Article</th>
+                            <th className="py-1.5 px-2.5 text-center font-medium w-12">Qté</th>
+                            <th className="py-1.5 px-2.5 text-right font-medium">P.U.</th>
+                            <th className="py-1.5 px-2.5 text-right font-medium">Total</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-[#E5DCD0]/60">
+                          {items.map((it, idx) => {
+                            const qty = it.quantity || 1;
+                            const unitPrice = Number(it.unit_price || 0);
+                            const lineTotal = qty * unitPrice;
+                            return (
+                              <tr key={it.id || idx}>
+                                <td className="py-2 px-2.5 font-medium text-slate-900 break-words">
+                                  {it.product_name || 'Article'}
+                                </td>
+                                <td className="py-2 px-2.5 text-center font-mono text-slate-700">
+                                  {qty}
+                                </td>
+                                <td className="py-2 px-2.5 text-right font-mono text-slate-600 tabular-nums">
+                                  {unitPrice.toLocaleString()}
+                                </td>
+                                <td className="py-2 px-2.5 text-right font-mono font-semibold text-slate-900 tabular-nums">
+                                  {lineTotal.toLocaleString()}
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  );
+                })()}
+              </div>
+
+              {/* 5. Montants : Plats, Frais de livraison (si > 0), Total payé */}
+              <div className="pt-3">
+                <div className="text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-2">
+                  Montants
+                </div>
+                {(() => {
+                  const total = Number(selectedOrder.total_amount || 0);
+                  const fee = Number(selectedOrder.delivery_fee || 0);
+                  const plats = total - fee;
+                  return (
+                    <div className="bg-[#FAF7F2] p-3 rounded-lg border border-[#E5DCD0] space-y-1.5">
+                      <div className="flex justify-between items-center text-slate-700">
+                        <span>Plats</span>
+                        <span className="font-mono tabular-nums">
+                          {plats.toLocaleString()} {business.currency}
+                        </span>
+                      </div>
+                      {fee > 0 && (
+                        <div className="flex justify-between items-center text-slate-700">
+                          <span>Frais de livraison</span>
+                          <span className="font-mono tabular-nums">
+                            {fee.toLocaleString()} {business.currency}
+                          </span>
+                        </div>
+                      )}
+                      <div className="flex justify-between items-center pt-1.5 border-t border-[#E5DCD0] font-bold text-slate-900 text-sm">
+                        <span>Total payé</span>
+                        <span className="text-[#1B4B4A] font-mono tabular-nums">
+                          {total.toLocaleString()} {business.currency}
+                        </span>
+                      </div>
+                    </div>
+                  );
+                })()}
+              </div>
+
+              {/* 6. Chronologie */}
+              <div className="pt-3">
+                <div className="text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-2">
+                  Chronologie
+                </div>
+                {(() => {
+                  const durMs = getOrderDeliveryDurationMs(selectedOrder);
+                  const durText = durMs !== null ? formatWaitDuration(Math.round(durMs / 60000)) : '—';
+                  return (
+                    <div className="bg-[#FAF7F2] p-3 rounded-lg border border-[#E5DCD0] space-y-2">
+                      <div className="flex justify-between items-center">
+                        <span className="text-slate-600">Commandée :</span>
+                        <span className="font-mono font-medium text-slate-900">
+                          {formatDateTimeDMY(selectedOrder.created_at)}
+                        </span>
+                      </div>
+                      <div className="flex justify-between items-center">
+                        <span className="text-slate-600">Prête :</span>
+                        <span className="font-mono font-medium text-slate-900">
+                          {formatDateTimeDMY(selectedOrder.ready_at)}
+                        </span>
+                      </div>
+                      <div className="flex justify-between items-center">
+                        <span className="text-slate-600">Livrée :</span>
+                        <span className="font-mono font-medium text-slate-900">
+                          {formatDateTimeDMY(selectedOrder.delivered_at)}
+                        </span>
+                      </div>
+                      <div className="flex justify-between items-center pt-1.5 border-t border-[#E5DCD0]">
+                        <span className="text-slate-700 font-semibold">Durée :</span>
+                        <span className="font-mono font-bold text-[#1B4B4A]">
+                          {durText}
+                        </span>
+                      </div>
+                    </div>
+                  );
+                })()}
+              </div>
+
+              {/* 7. Paiement */}
+              <div className="pt-3">
+                <div className="text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-2">
+                  Paiement
+                </div>
+                <div className="bg-[#FAF7F2] p-3 rounded-lg border border-[#E5DCD0] space-y-1.5">
+                  <div className="flex justify-between items-center">
+                    <span className="text-slate-600">Canal :</span>
+                    <span className="font-semibold text-slate-900">
+                      {getPaymentMethodLabel(selectedOrder.payment_method)}
+                    </span>
+                  </div>
+                  <div className="flex justify-between items-center">
+                    <span className="text-slate-600">Référence de paiement :</span>
+                    <span className="font-mono font-medium text-slate-900">
+                      {selectedOrder.payment_reference || '—'}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              {/* 8. Livreur */}
+              <div className="pt-3">
+                <div className="text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-2">
+                  Livreur
+                </div>
+                {(() => {
+                  let matchedDriver: Driver | undefined;
+                  if (selectedOrder.driver_id) {
+                    matchedDriver = drivers.find((d) => d.id === selectedOrder.driver_id);
+                  }
+                  if (!matchedDriver && selectedOrder.assigned_to) {
+                    const assignedLower = selectedOrder.assigned_to.trim().toLowerCase();
+                    matchedDriver = drivers.find((d) => d.name.trim().toLowerCase() === assignedLower);
+                  }
+
+                  const driverName = matchedDriver
+                    ? matchedDriver.name
+                    : selectedOrder.assigned_to?.trim() || 'Non assigné';
+                  const driverPhone = matchedDriver?.phone?.trim() || '—';
+
+                  return (
+                    <div className="bg-[#FAF7F2] p-3 rounded-lg border border-[#E5DCD0] space-y-1.5">
+                      <div className="flex justify-between items-center">
+                        <span className="text-slate-600">Nom :</span>
+                        <span className="font-semibold text-slate-900">{driverName}</span>
+                      </div>
+                      <div className="flex justify-between items-center">
+                        <span className="text-slate-600">Téléphone :</span>
+                        <span className="font-mono text-slate-800">{driverPhone}</span>
+                      </div>
+                    </div>
+                  );
+                })()}
+              </div>
+
+              {/* 9. Avis client (si rating existe) */}
+              {typeof selectedOrder.rating === 'number' && selectedOrder.rating > 0 && (
+                <div className="pt-3 pb-1">
+                  <div className="text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-2">
+                    Avis client
+                  </div>
+                  <div className="bg-[#FAF7F2] p-3 rounded-lg border border-[#E5DCD0] space-y-2">
+                    <div className="flex items-center gap-1.5">
+                      <div className="flex items-center text-amber-500">
+                        {[1, 2, 3, 4, 5].map((star) => (
+                          <Star
+                            key={star}
+                            className={`w-4 h-4 ${
+                              star <= (selectedOrder.rating || 0)
+                                ? 'fill-amber-400 text-amber-400'
+                                : 'text-slate-300'
+                            }`}
+                          />
+                        ))}
+                      </div>
+                      <span className="font-bold text-slate-800 text-xs ml-1">
+                        {selectedOrder.rating} / 5
+                      </span>
+                    </div>
+                    {selectedOrder.rating_comment && (
+                      <p className="text-xs text-slate-700 italic border-l-2 border-[#1B4B4A]/40 pl-2.5 mt-1">
+                        &laquo; {selectedOrder.rating_comment} &raquo;
+                      </p>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
         </div>
       )}
     </div>
