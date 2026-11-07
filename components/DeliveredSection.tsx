@@ -47,8 +47,10 @@ export default function DeliveredSection({
   const [detailItemsLoading, setDetailItemsLoading] = useState<boolean>(false);
   const [detailItemsError, setDetailItemsError] = useState<boolean>(false);
 
-  // État du menu d'export (Excel / PDF) et message d'erreur éventuel
+  // État du menu d'export (Excel / PDF), préparation par lots et message d'erreur éventuel
   const [isExportMenuOpen, setIsExportMenuOpen] = useState<boolean>(false);
+  const [isPreparingExport, setIsPreparingExport] = useState<boolean>(false);
+  const [lastExportFormat, setLastExportFormat] = useState<'excel' | 'pdf' | null>(null);
   const [exportError, setExportError] = useState<string | null>(null);
   const exportMenuRef = useRef<HTMLDivElement>(null);
 
@@ -846,13 +848,13 @@ export default function DeliveredSection({
     };
   }, [isExportMenuOpen]);
 
-  // Nom de base du fichier exporté : livraisons_AAAA-MM-JJ (date de début de période ; "toutes" si aucune borne)
+  // Nom de base du fichier exporté : releve_livreurs_AAAA-MM-JJ (date de début de période ; "toutes" si aucune borne)
   const getExportBaseFilename = (): string => {
     if (deliveredDateBounds.start !== -Infinity) {
       const startD = new Date(deliveredDateBounds.start);
-      return `livraisons_${formatLocalDate(startD)}`;
+      return `releve_livreurs_${formatLocalDate(startD)}`;
     }
-    return 'livraisons_toutes';
+    return 'releve_livreurs_toutes';
   };
 
   // Helper pour formater la date/heure d'édition du rapport : Édité le JJ/MM/AAAA à HH:mm
@@ -934,266 +936,334 @@ export default function DeliveredSection({
     };
   };
 
-  // Export Excel (.xlsx) avec 3 feuilles
-  const handleExportExcel = () => {
-    try {
-      setExportError(null);
-      const { businessName, periodText, exportDateText, filtersText } = getExportHeaderInfo();
-      const filename = `${getExportBaseFilename()}.xlsx`;
+  // Helper pour formater le libellé des plats d'une commande pour l'export : "2× nom, 1× nom" ou "—"
+  const formatExportOrderDishes = (ord: Order, itemsMap: Record<string, OrderItem[]>): string => {
+    const items = itemsMap[ord.id] ?? itemsByOrderId[ord.id] ?? (ord.items && ord.items.length > 0 ? ord.items : undefined);
+    if (!items || items.length === 0) return '—';
+    return items.map((it) => `${it.quantity || 1}× ${it.product_name || 'Article'}`).join(', ');
+  };
 
-      const headerAOA = [
-        [businessName],
-        ['Rapport des livraisons'],
-        [periodText],
-        [exportDateText + (filtersText ? ` · ${filtersText}` : '')],
-        [],
-      ];
+  // Structure pour le regroupement par livreur pour l'export
+  interface ExportDriverGroup {
+    driverKey: string;
+    driverName: string;
+    phone: string | null;
+    orders: Order[];
+    dishesTotal: number;
+    feesTotal: number;
+  }
 
-      // 1. Feuille « Synthèse livreurs »
-      const driverAOA = [
-        ...headerAOA,
-        ['Livreur', 'Nb de livraisons', `Montant encaissé (${business.currency})`, `Frais de livraison (${business.currency})`, 'Durée moyenne'],
-        ...deliveredDriverSummary.list.map((d) => [
-          d.driverName,
-          d.count,
-          d.totalAmount,
-          d.deliveryFee,
-          d.avgDurationText,
-        ]),
-        [
-          'Total',
-          deliveredDriverSummary.totals.count,
-          deliveredDriverSummary.totals.totalAmount,
-          deliveredDriverSummary.totals.deliveryFee,
-          deliveredDriverSummary.totals.avgDurationText,
-        ],
-      ];
-      const wsDriver = XLSX.utils.aoa_to_sheet(driverAOA);
+  const buildExportDriverGroups = (): {
+    allGroups: ExportDriverGroup[];
+    totalDishes: number;
+    totalFees: number;
+    channelList: { label: string; count: number; dishesTotal: number }[];
+  } => {
+    const groupsMap = new Map<string, ExportDriverGroup>();
 
-      // 2. Feuille « Synthèse paiements »
-      const channelAOA = [
-        ...headerAOA,
-        ['Mode de paiement', 'Nb de livraisons', `Montant encaissé (${business.currency})`],
-        ...deliveredChannelSummary.list.map((c) => [
-          c.channelLabel,
-          c.count,
-          c.totalAmount,
-        ]),
-        [
-          'Total',
-          deliveredChannelSummary.totals.count,
-          deliveredChannelSummary.totals.totalAmount,
-        ],
-      ];
-      const wsChannel = XLSX.utils.aoa_to_sheet(channelAOA);
+    let totalDishes = 0;
+    let totalFees = 0;
+    const channelMap = new Map<string, { label: string; count: number; dishesTotal: number }>();
 
-      // 3. Feuille « Détail »
-      const detailRows = filteredDeliveredOrders.map((ord) => {
-        let dName = 'Non assigné';
-        if (ord.driver_id) {
-          const matched = drivers.find((d) => d.id === ord.driver_id);
-          if (matched) dName = matched.name;
-          else if (ord.assigned_to) dName = ord.assigned_to;
-        } else if (ord.assigned_to) {
-          dName = ord.assigned_to;
+    for (const ord of filteredDeliveredOrders) {
+      let driverName = 'Non assigné';
+      let driverKey = '__unassigned__';
+      let driverPhone: string | null = null;
+
+      if (ord.driver_id) {
+        const matched = drivers.find((d) => d.id === ord.driver_id);
+        if (matched) {
+          driverName = matched.name;
+          driverKey = matched.id;
+          driverPhone = matched.phone || null;
+        } else if (ord.assigned_to && ord.assigned_to.trim()) {
+          driverName = ord.assigned_to.trim();
+          driverKey = ord.driver_id;
         }
-        const durMs = getOrderDeliveryDurationMs(ord);
-        const dureeText = durMs !== null ? formatWaitDuration(Math.round(durMs / 60000)) : '—';
+      } else if (ord.assigned_to && ord.assigned_to.trim()) {
+        const trimmed = ord.assigned_to.trim();
+        const matched = drivers.find((d) => d.name.toLowerCase() === trimmed.toLowerCase());
+        if (matched) {
+          driverName = matched.name;
+          driverKey = matched.id;
+          driverPhone = matched.phone || null;
+        } else {
+          driverName = trimmed;
+          driverKey = `name:${trimmed.toLowerCase()}`;
+        }
+      }
+
+      // Règles de montants : Plats = total_amount - delivery_fee (jamais négatif) ; Frais = delivery_fee
+      const dishes = Math.max(0, Number(ord.total_amount || 0) - Number(ord.delivery_fee || 0));
+      const fee = Number(ord.delivery_fee || 0);
+
+      totalDishes += dishes;
+      totalFees += fee;
+
+      let grp = groupsMap.get(driverKey);
+      if (!grp) {
+        grp = {
+          driverKey,
+          driverName,
+          phone: driverPhone,
+          orders: [],
+          dishesTotal: 0,
+          feesTotal: 0,
+        };
+        groupsMap.set(driverKey, grp);
+      }
+      grp.orders.push(ord);
+      grp.dishesTotal += dishes;
+      grp.feesTotal += fee;
+
+      // Canal de paiement
+      const channelLabel = getPaymentMethodLabel(ord.payment_method);
+      const ch = channelMap.get(channelLabel) || { label: channelLabel, count: 0, dishesTotal: 0 };
+      ch.count += 1;
+      ch.dishesTotal += dishes;
+      channelMap.set(channelLabel, ch);
+    }
+
+    // Séparer les livreurs assignés et le groupe « Non assigné » (qui doit toujours être le dernier)
+    const assigned = Array.from(groupsMap.values()).filter((g) => g.driverKey !== '__unassigned__');
+    assigned.sort((a, b) => a.driverName.localeCompare(b.driverName, 'fr', { sensitivity: 'base' }));
+
+    const unassigned = groupsMap.get('__unassigned__');
+    const allGroups = unassigned ? [...assigned, unassigned] : assigned;
+
+    // Trier les commandes de chaque groupe par ordre chronologique croissant (du plus ancien au plus récent)
+    for (const grp of allGroups) {
+      grp.orders.sort((a, b) => {
+        const timeA = new Date(a.delivered_at || a.updated_at || a.created_at).getTime() || 0;
+        const timeB = new Date(b.delivered_at || b.updated_at || b.created_at).getTime() || 0;
+        return timeA - timeB;
+      });
+    }
+
+    const channelList = Array.from(channelMap.values());
+    channelList.sort((a, b) => b.dishesTotal - a.dishesTotal);
+
+    return { allGroups, totalDishes, totalFees, channelList };
+  };
+
+  // Génération de l'export Excel (.xlsx) avec feuille Synthèse + 1 feuille par livreur
+  const generateExportExcel = (itemsMap: Record<string, OrderItem[]>) => {
+    const { businessName, periodText, exportDateText, filtersText } = getExportHeaderInfo();
+    const filename = `${getExportBaseFilename()}.xlsx`;
+    const { allGroups, totalDishes, totalFees, channelList } = buildExportDriverGroups();
+
+    const headerAOA = [
+      [businessName],
+      ['Relevé des livraisons par livreur'],
+      [periodText],
+      [exportDateText + (filtersText ? ` · ${filtersText}` : '')],
+      [],
+    ];
+
+    // 1. Feuille « Synthèse »
+    const synthAOA = [
+      ...headerAOA,
+      ['Synthèse par livreur'],
+      ['Livreur', 'Nb de livraisons', `Total plats (${business.currency})`, `Total frais de livraison (${business.currency})`],
+      ...allGroups.map((g) => [
+        g.driverName,
+        g.orders.length,
+        g.dishesTotal,
+        g.feesTotal,
+      ]),
+      ['Total', filteredDeliveredOrders.length, totalDishes, totalFees],
+      [],
+      [],
+      ['Synthèse par mode de paiement'],
+      ['Mode de paiement', 'Nb de livraisons', `Total plats (${business.currency})`],
+      ...channelList.map((c) => [
+        c.label,
+        c.count,
+        c.dishesTotal,
+      ]),
+      ['Total', filteredDeliveredOrders.length, totalDishes],
+    ];
+    const wsSynth = XLSX.utils.aoa_to_sheet(synthAOA);
+
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, wsSynth, 'Synthèse');
+
+    // 2. Feuilles par livreur
+    const usedSheetNames = new Set<string>(['synthèse', 'synthese']);
+    const sanitizeSheetName = (name: string): string => {
+      let cleaned = name.replace(/[\\/?*:[\]]/g, ' ').trim();
+      if (!cleaned) cleaned = 'Livreur';
+      cleaned = cleaned.substring(0, 31).trim();
+
+      let finalName = cleaned;
+      let counter = 2;
+      while (usedSheetNames.has(finalName.toLowerCase())) {
+        const suffix = ` (${counter})`;
+        const maxBaseLen = 31 - suffix.length;
+        finalName = `${cleaned.substring(0, maxBaseLen).trim()}${suffix}`;
+        counter++;
+      }
+      usedSheetNames.add(finalName.toLowerCase());
+      return finalName;
+    };
+
+    for (const grp of allGroups) {
+      const sheetTitle = sanitizeSheetName(grp.driverName);
+      const phoneInfo = grp.phone ? ` (${grp.phone})` : '';
+      const livrInfo = ` · ${grp.orders.length} livraison${grp.orders.length > 1 ? 's' : ''}`;
+
+      const detailRows = grp.orders.map((ord) => {
+        const dishes = Math.max(0, Number(ord.total_amount || 0) - Number(ord.delivery_fee || 0));
+        const fee = Number(ord.delivery_fee || 0);
 
         return [
-          formatDateTimeDMY(ord.delivered_at || ord.updated_at),
+          formatDateTimeDMY(ord.delivered_at || ord.updated_at || ord.created_at),
           ord.customer_name || 'Client anonyme',
           ord.customer_phone || '—',
+          ord.delivery_address || '—',
           ord.delivery_zone_name || (ord.delivery_zone_id ? ord.delivery_zone_id : '—'),
-          Number(ord.total_amount || 0),
-          Number(ord.delivery_fee || 0),
+          formatExportOrderDishes(ord, itemsMap),
+          dishes,
+          fee,
           getPaymentMethodLabel(ord.payment_method),
-          dName,
-          dureeText,
           getOrderShortRef(ord),
         ];
       });
 
-      const detailAOA = [
+      const driverAOA = [
         ...headerAOA,
+        [`Livreur : ${grp.driverName}${phoneInfo}${livrInfo}`],
+        [],
         [
-          'Livrée le',
+          'Date et heure',
           'Client',
           'Téléphone',
+          'Adresse',
           'Zone',
-          `Montant (${business.currency})`,
+          'Plats',
+          `Montant plats (${business.currency})`,
           `Frais de livraison (${business.currency})`,
           'Mode de paiement',
-          'Livreur',
-          'Durée',
           'Réf',
         ],
         ...detailRows,
+        [],
+        ['Total plats', '', '', '', '', '', grp.dishesTotal, '', '', ''],
+        ['Total frais de livraison', '', '', '', '', '', '', grp.feesTotal, '', ''],
       ];
-      const wsDetail = XLSX.utils.aoa_to_sheet(detailAOA);
 
-      const wb = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(wb, wsDriver, 'Synthèse livreurs');
-      XLSX.utils.book_append_sheet(wb, wsChannel, 'Synthèse paiements');
-      XLSX.utils.book_append_sheet(wb, wsDetail, 'Détail');
-
-      XLSX.writeFile(wb, filename);
-    } catch (err) {
-      console.error('Erreur lors de l’export Excel:', err);
-      setExportError("Une erreur est survenue lors de l'export Excel.");
+      const wsDriver = XLSX.utils.aoa_to_sheet(driverAOA);
+      XLSX.utils.book_append_sheet(wb, wsDriver, sheetTitle);
     }
+
+    XLSX.writeFile(wb, filename);
   };
 
-  // Export PDF (.pdf) en A4 paysage avec 3 tableaux
-  const handleExportPdf = () => {
-    try {
-      setExportError(null);
-      const { businessName, periodText, exportDateText, filtersText } = getExportHeaderInfo();
-      const filename = `${getExportBaseFilename()}.pdf`;
+  // Génération de l'export PDF (.pdf) en A4 paysage par livreur
+  const generateExportPdf = (itemsMap: Record<string, OrderItem[]>) => {
+    const { businessName, periodText, exportDateText, filtersText } = getExportHeaderInfo();
+    const filename = `${getExportBaseFilename()}.pdf`;
+    const { allGroups, totalDishes, totalFees, channelList } = buildExportDriverGroups();
 
-      const doc = new jsPDF({ orientation: 'landscape', format: 'a4' });
+    const doc = new jsPDF({ orientation: 'landscape', format: 'a4' });
 
-      // En-tête sur la première page
-      doc.setFontSize(14);
-      doc.setFont('helvetica', 'bold');
-      doc.text(cleanPdfText(businessName), 14, 15);
+    // Page 1 : En-tête + Tableau Synthèse par livreur
+    doc.setFontSize(14);
+    doc.setFont('helvetica', 'bold');
+    doc.text(cleanPdfText(businessName), 14, 15);
 
-      doc.setFontSize(11);
-      doc.setFont('helvetica', 'bold');
-      doc.text('Rapport des livraisons', 14, 21);
+    doc.setFontSize(11);
+    doc.setFont('helvetica', 'bold');
+    doc.text('Relevé des livraisons par livreur', 14, 21);
 
-      doc.setFontSize(9.5);
-      doc.setFont('helvetica', 'normal');
-      doc.text(cleanPdfText(periodText), 14, 27);
+    doc.setFontSize(9.5);
+    doc.setFont('helvetica', 'normal');
+    doc.text(cleanPdfText(periodText), 14, 27);
 
-      doc.setFontSize(8.5);
-      doc.setTextColor(100, 100, 100);
-      const subHeader = cleanPdfText(exportDateText + (filtersText ? ` · ${filtersText}` : ''));
-      doc.text(subHeader, 14, 33);
-      doc.setTextColor(0, 0, 0);
+    doc.setFontSize(8.5);
+    doc.setTextColor(100, 100, 100);
+    const subHeader = cleanPdfText(exportDateText + (filtersText ? ` · ${filtersText}` : ''));
+    doc.text(subHeader, 14, 33);
+    doc.setTextColor(0, 0, 0);
 
-      // Tableau 1 : Synthèse par livreur
-      doc.setFontSize(10);
-      doc.setFont('helvetica', 'bold');
-      doc.text('Synthèse par livreur', 14, 40);
+    doc.setFontSize(10);
+    doc.setFont('helvetica', 'bold');
+    doc.text('Synthèse par livreur', 14, 40);
 
-      autoTable(doc, {
-        startY: 43,
-        head: [['Livreur', 'Nb de livraisons', `Montant encaissé (${business.currency})`, `Frais de livraison (${business.currency})`, 'Durée moyenne']],
-        body: [
-          ...deliveredDriverSummary.list.map((d) => [
-            cleanPdfText(d.driverName),
-            String(d.count),
-            formatAmountPdf(d.totalAmount),
-            formatAmountPdf(d.deliveryFee),
-            cleanPdfText(d.avgDurationText),
-          ]),
-          [
-            'Total',
-            String(deliveredDriverSummary.totals.count),
-            formatAmountPdf(deliveredDriverSummary.totals.totalAmount),
-            formatAmountPdf(deliveredDriverSummary.totals.deliveryFee),
-            cleanPdfText(deliveredDriverSummary.totals.avgDurationText),
-          ],
+    autoTable(doc, {
+      startY: 43,
+      head: [['Livreur', 'Nb de livraisons', `Total plats (${business.currency})`, `Total frais de livraison (${business.currency})`]],
+      body: [
+        ...allGroups.map((g) => [
+          cleanPdfText(g.driverName),
+          String(g.orders.length),
+          formatAmountPdf(g.dishesTotal),
+          formatAmountPdf(g.feesTotal),
+        ]),
+        [
+          'Total',
+          String(filteredDeliveredOrders.length),
+          formatAmountPdf(totalDishes),
+          formatAmountPdf(totalFees),
         ],
-        theme: 'grid',
-        styles: {
-          fontSize: 8,
-          cellPadding: 2.5,
-          lineColor: [229, 220, 208],
-          lineWidth: 0.1,
-          overflow: 'ellipsize',
-        },
-        headStyles: {
-          fillColor: [27, 75, 74],
-          textColor: [255, 255, 255],
-          fontStyle: 'bold',
-        },
-        footStyles: {
-          fillColor: [250, 247, 242],
-          textColor: [0, 0, 0],
-          fontStyle: 'bold',
-        },
-        columnStyles: {
-          2: { halign: 'right' },
-          3: { halign: 'right' },
-        },
-        margin: { left: 14, right: 14 },
-      });
+      ],
+      theme: 'grid',
+      styles: {
+        fontSize: 8,
+        cellPadding: 2.5,
+        lineColor: [229, 220, 208],
+        lineWidth: 0.1,
+        overflow: 'linebreak',
+      },
+      headStyles: {
+        fillColor: [27, 75, 74],
+        textColor: [255, 255, 255],
+        fontStyle: 'bold',
+      },
+      footStyles: {
+        fillColor: [250, 247, 242],
+        textColor: [0, 0, 0],
+        fontStyle: 'bold',
+      },
+      columnStyles: {
+        2: { halign: 'right' },
+        3: { halign: 'right' },
+      },
+      margin: { left: 14, right: 14 },
+    });
 
-      // Tableau 2 : Synthèse par mode de paiement
-      const finalY1 = (doc as any).lastAutoTable?.finalY || 45;
-      doc.setFontSize(10);
-      doc.setFont('helvetica', 'bold');
-      doc.text('Synthèse par mode de paiement', 14, finalY1 + 8);
-
-      autoTable(doc, {
-        startY: finalY1 + 11,
-        head: [['Mode de paiement', 'Nb de livraisons', `Montant encaissé (${business.currency})`]],
-        body: [
-          ...deliveredChannelSummary.list.map((c) => [
-            cleanPdfText(c.channelLabel),
-            String(c.count),
-            formatAmountPdf(c.totalAmount),
-          ]),
-          [
-            'Total',
-            String(deliveredChannelSummary.totals.count),
-            formatAmountPdf(deliveredChannelSummary.totals.totalAmount),
-          ],
-        ],
-        theme: 'grid',
-        styles: {
-          fontSize: 8,
-          cellPadding: 2.5,
-          lineColor: [229, 220, 208],
-          lineWidth: 0.1,
-          overflow: 'ellipsize',
-        },
-        headStyles: {
-          fillColor: [27, 75, 74],
-          textColor: [255, 255, 255],
-          fontStyle: 'bold',
-        },
-        footStyles: {
-          fillColor: [250, 247, 242],
-          textColor: [0, 0, 0],
-          fontStyle: 'bold',
-        },
-        columnStyles: {
-          2: { halign: 'right' },
-        },
-        margin: { left: 14, right: 14 },
-      });
-
-      // Tableau 3 : Détail des livraisons (sur une nouvelle page)
+    // Sections par livreur : UNE section par livreur, CHAQUE livreur commence sur une NOUVELLE page
+    for (const grp of allGroups) {
       doc.addPage();
+
+      const phoneInfo = grp.phone ? ` (${grp.phone})` : '';
+      const livrInfo = ` · ${grp.orders.length} livraison${grp.orders.length > 1 ? 's' : ''}`;
+      const sectionTitle = `${grp.driverName}${phoneInfo}${livrInfo}`;
+
       doc.setFontSize(11);
       doc.setFont('helvetica', 'bold');
-      doc.text('Détail des livraisons', 14, 15);
+      doc.setTextColor(0, 0, 0);
+      doc.text(cleanPdfText(sectionTitle), 14, 15);
 
-      const detailBody = filteredDeliveredOrders.map((ord) => {
-        let dName = 'Non assigné';
-        if (ord.driver_id) {
-          const matched = drivers.find((d) => d.id === ord.driver_id);
-          if (matched) dName = matched.name;
-          else if (ord.assigned_to) dName = ord.assigned_to;
-        } else if (ord.assigned_to) {
-          dName = ord.assigned_to;
-        }
-        const durMs = getOrderDeliveryDurationMs(ord);
-        const dureeText = durMs !== null ? formatWaitDuration(Math.round(durMs / 60000)) : '—';
+      const groupRows = grp.orders.map((ord) => {
+        const dishes = Math.max(0, Number(ord.total_amount || 0) - Number(ord.delivery_fee || 0));
+        const fee = Number(ord.delivery_fee || 0);
+
+        const cName = ord.customer_name || 'Client anonyme';
+        const clientText = ord.customer_phone ? `${cName}\n${ord.customer_phone}` : cName;
+
+        const addr = ord.delivery_address || '—';
+        const zone = ord.delivery_zone_name || (ord.delivery_zone_id ? ord.delivery_zone_id : '');
+        const addrText = zone ? `${addr}\n${zone}` : addr;
 
         return [
-          cleanPdfText(formatDateTimeDMY(ord.delivered_at || ord.updated_at)),
-          cleanPdfText(ord.customer_name || 'Client anonyme'),
-          cleanPdfText(ord.customer_phone || '—'),
-          cleanPdfText(ord.delivery_zone_name || (ord.delivery_zone_id ? ord.delivery_zone_id : '—')),
-          formatAmountPdf(ord.total_amount),
-          formatAmountPdf(ord.delivery_fee),
+          cleanPdfText(formatDateTimeDMY(ord.delivered_at || ord.updated_at || ord.created_at)),
+          cleanPdfText(clientText),
+          cleanPdfText(addrText),
+          cleanPdfText(formatExportOrderDishes(ord, itemsMap)),
+          formatAmountPdf(dishes),
+          formatAmountPdf(fee),
           cleanPdfText(getPaymentMethodLabel(ord.payment_method)),
-          cleanPdfText(dName),
-          cleanPdfText(dureeText),
           cleanPdfText(`#${getOrderShortRef(ord)}`),
         ];
       });
@@ -1201,25 +1271,24 @@ export default function DeliveredSection({
       autoTable(doc, {
         startY: 19,
         head: [[
-          'Livrée le',
+          'Date et heure',
           'Client',
-          'Téléphone',
-          'Zone',
-          `Montant (${business.currency})`,
+          'Adresse',
+          'Plats',
+          `Montant plats (${business.currency})`,
           `Frais de livraison (${business.currency})`,
           'Mode de paiement',
-          'Livreur',
-          'Durée',
           'Réf',
         ]],
-        body: detailBody,
+        body: groupRows,
         theme: 'grid',
+        showHead: 'everyPage',
         styles: {
           fontSize: 7.5,
           cellPadding: 2,
           lineColor: [229, 220, 208],
           lineWidth: 0.1,
-          overflow: 'ellipsize',
+          overflow: 'linebreak',
         },
         headStyles: {
           fillColor: [27, 75, 74],
@@ -1229,37 +1298,132 @@ export default function DeliveredSection({
         columnStyles: {
           0: { cellWidth: 26 },
           1: { cellWidth: 32 },
-          2: { cellWidth: 24 },
-          3: { cellWidth: 28 },
+          2: { cellWidth: 35 },
+          3: { cellWidth: 62 },
           4: { cellWidth: 28, halign: 'right' },
-          5: { cellWidth: 30, halign: 'right' },
-          6: { cellWidth: 28 },
-          7: { cellWidth: 27 },
-          8: { cellWidth: 22 },
-          9: { cellWidth: 24, halign: 'right' },
+          5: { cellWidth: 26, halign: 'right' },
+          6: { cellWidth: 32 },
+          7: { cellWidth: 26, halign: 'right' },
         },
         margin: { left: 14, right: 14 },
       });
 
-      // Numérotation des pages
-      const totalPages = doc.getNumberOfPages();
-      for (let i = 1; i <= totalPages; i++) {
-        doc.setPage(i);
-        doc.setFontSize(8);
-        doc.setFont('helvetica', 'normal');
-        doc.setTextColor(130, 130, 130);
-        doc.text(
-          `Page ${i} sur ${totalPages}`,
-          doc.internal.pageSize.getWidth() - 14,
-          doc.internal.pageSize.getHeight() - 8,
-          { align: 'right' }
-        );
+      // Pied de section : "Total plats : X devise" et "Total frais de livraison : Y devise", chacun sur sa propre ligne, aligné à droite
+      let finalY = (doc as any).lastAutoTable?.finalY || 20;
+      if (finalY > doc.internal.pageSize.getHeight() - 22) {
+        doc.addPage();
+        finalY = 15;
+      }
+      doc.setFontSize(9);
+      doc.setFont('helvetica', 'bold');
+      doc.setTextColor(30, 41, 59);
+
+      const rightX = doc.internal.pageSize.getWidth() - 14;
+      const totalPlatsText = `Total plats : ${formatAmountPdf(grp.dishesTotal)} ${cleanPdfText(business.currency)}`;
+      const totalFeesText = `Total frais de livraison : ${formatAmountPdf(grp.feesTotal)} ${cleanPdfText(business.currency)}`;
+
+      doc.text(totalPlatsText, rightX, finalY + 6, { align: 'right' });
+      doc.text(totalFeesText, rightX, finalY + 11, { align: 'right' });
+    }
+
+    // Dernière page : Synthèse par mode de paiement
+    doc.addPage();
+    doc.setFontSize(11);
+    doc.setFont('helvetica', 'bold');
+    doc.setTextColor(0, 0, 0);
+    doc.text('Synthèse par mode de paiement', 14, 15);
+
+    autoTable(doc, {
+      startY: 19,
+      head: [['Mode de paiement', 'Nb de livraisons', `Total plats (${business.currency})`]],
+      body: [
+        ...channelList.map((c) => [
+          cleanPdfText(c.label),
+          String(c.count),
+          formatAmountPdf(c.dishesTotal),
+        ]),
+        [
+          'Total',
+          String(filteredDeliveredOrders.length),
+          formatAmountPdf(totalDishes),
+        ],
+      ],
+      theme: 'grid',
+      styles: {
+        fontSize: 8,
+        cellPadding: 2.5,
+        lineColor: [229, 220, 208],
+        lineWidth: 0.1,
+        overflow: 'linebreak',
+      },
+      headStyles: {
+        fillColor: [27, 75, 74],
+        textColor: [255, 255, 255],
+        fontStyle: 'bold',
+      },
+      footStyles: {
+        fillColor: [250, 247, 242],
+        textColor: [0, 0, 0],
+        fontStyle: 'bold',
+      },
+      columnStyles: {
+        2: { halign: 'right' },
+      },
+      margin: { left: 14, right: 14 },
+    });
+
+    // Numérotation des pages sur chaque page : "Page X sur Y"
+    const totalPages = doc.getNumberOfPages();
+    for (let i = 1; i <= totalPages; i++) {
+      doc.setPage(i);
+      doc.setFontSize(8);
+      doc.setFont('helvetica', 'normal');
+      doc.setTextColor(130, 130, 130);
+      doc.text(
+        `Page ${i} sur ${totalPages}`,
+        doc.internal.pageSize.getWidth() - 14,
+        doc.internal.pageSize.getHeight() - 8,
+        { align: 'right' }
+      );
+    }
+
+    doc.save(filename);
+  };
+
+  // Lancement de l'export avec chargement par lots des articles
+  const handleExport = async (format: 'excel' | 'pdf') => {
+    setLastExportFormat(format);
+    setExportError(null);
+    setIsPreparingExport(true);
+
+    try {
+      // 1. Identifiants des commandes sans articles en cache
+      const allIds = filteredDeliveredOrders.map((o) => o.id);
+      const missingIds = allIds.filter((id) => !(id in itemsByOrderId));
+
+      const newItemsMap: Record<string, OrderItem[]> = { ...itemsByOrderId };
+
+      if (missingIds.length > 0) {
+        const CHUNK_SIZE = 100;
+        for (let i = 0; i < missingIds.length; i += CHUNK_SIZE) {
+          const chunk = missingIds.slice(i, i + CHUNK_SIZE);
+          const chunkRes = await fetchOrderItemsForOrders(chunk);
+          Object.assign(newItemsMap, chunkRes);
+        }
+        setItemsByOrderId(newItemsMap);
       }
 
-      doc.save(filename);
+      // 2. Génération du fichier selon le format
+      if (format === 'excel') {
+        generateExportExcel(newItemsMap);
+      } else {
+        generateExportPdf(newItemsMap);
+      }
     } catch (err) {
-      console.error('Erreur lors de l’export PDF:', err);
-      setExportError("Une erreur est survenue lors de l'export PDF.");
+      console.error("Erreur lors de la préparation de l'export :", err);
+      setExportError('Export impossible : articles indisponibles');
+    } finally {
+      setIsPreparingExport(false);
     }
   };
 
@@ -1423,19 +1587,28 @@ export default function DeliveredSection({
             <button
               type="button"
               onClick={() => {
-                if (filteredDeliveredOrders.length === 0) return;
+                if (filteredDeliveredOrders.length === 0 || isPreparingExport) return;
                 setIsExportMenuOpen((prev) => !prev);
               }}
-              disabled={filteredDeliveredOrders.length === 0}
+              disabled={filteredDeliveredOrders.length === 0 || isPreparingExport}
               className={`inline-flex items-center gap-1.5 px-3 py-1 text-xs font-semibold rounded-lg border transition-colors ${
-                filteredDeliveredOrders.length === 0
+                filteredDeliveredOrders.length === 0 || isPreparingExport
                   ? 'bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed'
                   : 'bg-white text-slate-800 border-[#E5DCD0] hover:bg-[#FAF7F2] hover:border-[#1B4B4A] cursor-pointer'
               }`}
             >
-              <Download className="w-3.5 h-3.5" />
-              <span>Exporter</span>
-              <ChevronDown className="w-3 h-3 text-slate-500" />
+              {isPreparingExport ? (
+                <>
+                  <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                  <span>Préparation…</span>
+                </>
+              ) : (
+                <>
+                  <Download className="w-3.5 h-3.5" />
+                  <span>Exporter</span>
+                  <ChevronDown className="w-3 h-3 text-slate-500" />
+                </>
+              )}
             </button>
 
             {isExportMenuOpen && (
@@ -1444,7 +1617,7 @@ export default function DeliveredSection({
                   type="button"
                   onClick={() => {
                     setIsExportMenuOpen(false);
-                    handleExportExcel();
+                    handleExport('excel');
                   }}
                   className="w-full text-left px-3 py-1.5 hover:bg-[#FAF7F2] text-slate-700 flex items-center gap-2 cursor-pointer transition-colors"
                 >
@@ -1455,7 +1628,7 @@ export default function DeliveredSection({
                   type="button"
                   onClick={() => {
                     setIsExportMenuOpen(false);
-                    handleExportPdf();
+                    handleExport('pdf');
                   }}
                   className="w-full text-left px-3 py-1.5 hover:bg-[#FAF7F2] text-slate-700 flex items-center gap-2 cursor-pointer transition-colors"
                 >
@@ -1472,13 +1645,24 @@ export default function DeliveredSection({
       {exportError && (
         <div className="px-3 py-2 bg-rose-50 border border-rose-200 rounded-lg flex items-center justify-between text-xs text-rose-800">
           <span>{exportError}</span>
-          <button
-            type="button"
-            onClick={() => setExportError(null)}
-            className="text-rose-900 font-semibold hover:underline cursor-pointer ml-3"
-          >
-            Fermer
-          </button>
+          <div className="flex items-center gap-3 ml-3 shrink-0">
+            {lastExportFormat && (
+              <button
+                type="button"
+                onClick={() => handleExport(lastExportFormat)}
+                className="text-rose-900 font-bold hover:underline cursor-pointer"
+              >
+                Réessayer
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => setExportError(null)}
+              className="text-rose-900 font-semibold hover:underline cursor-pointer"
+            >
+              Fermer
+            </button>
+          </div>
         </div>
       )}
 
