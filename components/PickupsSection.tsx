@@ -1,7 +1,10 @@
 'use client';
 
-import React, { useState, useMemo, useEffect } from 'react';
-import { Search, AlertCircle, RefreshCw } from 'lucide-react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
+import { Search, AlertCircle, RefreshCw, Download, ChevronDown, FileSpreadsheet, FileText } from 'lucide-react';
+import * as XLSX from 'xlsx';
+import jsPDF from 'jspdf';
+import autoTable from 'jspdf-autotable';
 import { Order, Business, OrderItem } from '@/lib/types';
 import { getOrderShortRef, getPaymentMethodLabel } from '@/lib/print-docs';
 import { formatWaitDuration } from '@/lib/wait-alert';
@@ -27,6 +30,9 @@ export default function PickupsSection({
   const [channelFilter, setChannelFilter] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [visibleLimit, setVisibleLimit] = useState<number>(50);
+  const [isExportMenuOpen, setIsExportMenuOpen] = useState<boolean>(false);
+  const [exportError, setExportError] = useState<string | null>(null);
+  const exportMenuRef = useRef<HTMLDivElement>(null);
 
   // État de chargement par lot des articles de commande
   const [itemsByOrderId, setItemsByOrderId] = useState<Record<string, OrderItem[]>>({});
@@ -547,6 +553,346 @@ export default function PickupsSection({
     );
   };
 
+  // Fermeture du menu d'export au clic extérieur ou avec la touche Échap
+  useEffect(() => {
+    if (!isExportMenuOpen) return;
+
+    const handleClickOutside = (event: MouseEvent) => {
+      if (exportMenuRef.current && !exportMenuRef.current.contains(event.target as Node)) {
+        setIsExportMenuOpen(false);
+      }
+    };
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setIsExportMenuOpen(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    window.addEventListener('keydown', handleKeyDown);
+
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [isExportMenuOpen]);
+
+  // Helper pour formater une date ISO en JJ/MM/AAAA HH:mm
+  const formatDateTimeDMY = (dateStr?: string | null) => {
+    if (!dateStr) return '—';
+    const d = new Date(dateStr);
+    if (isNaN(d.getTime())) return '—';
+    const day = String(d.getDate()).padStart(2, '0');
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const year = d.getFullYear();
+    const hours = String(d.getHours()).padStart(2, '0');
+    const minutes = String(d.getMinutes()).padStart(2, '0');
+    return `${day}/${month}/${year} ${hours}:${minutes}`;
+  };
+
+  // Helper pour formater la date/heure d'édition du rapport : Édité le JJ/MM/AAAA à HH:mm
+  const formatEditedAt = (d: Date = new Date()) => {
+    const day = String(d.getDate()).padStart(2, '0');
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const year = d.getFullYear();
+    const hours = String(d.getHours()).padStart(2, '0');
+    const minutes = String(d.getMinutes()).padStart(2, '0');
+    return `Édité le ${day}/${month}/${year} à ${hours}:${minutes}`;
+  };
+
+  // Helper pour formater les montants dans le PDF avec un espace standard U+0020 comme séparateur de milliers
+  const formatAmountPdf = (n: number | string | null | undefined): string => {
+    const val = Math.round(Number(n || 0));
+    const sign = val < 0 ? '-' : '';
+    const str = Math.abs(val).toString();
+    return sign + str.replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
+  };
+
+  // Nettoyage des espaces insécables (U+00A0, U+202F) pour jsPDF
+  const cleanPdfText = (text: string | null | undefined): string => {
+    if (!text) return '';
+    return String(text).replace(/[\u00A0\u202F]/g, ' ');
+  };
+
+  // Nom de base du fichier exporté : recuperees_AAAA-MM-JJ (date de début de période ; "toutes" si aucune borne)
+  const getExportBaseFilename = (): string => {
+    if (dateBounds.start !== -Infinity) {
+      const startD = new Date(dateBounds.start);
+      return `recuperees_${formatLocalDate(startD)}`;
+    }
+    return 'recuperees_toutes';
+  };
+
+  // Informations d'en-tête pour les exports
+  const getExportHeaderInfo = () => {
+    let periodText = 'Période : toutes';
+    if (dateBounds.start !== -Infinity && dateBounds.end !== Infinity) {
+      const dStart = formatDateToDMY(formatLocalDate(new Date(dateBounds.start)));
+      const dEnd = formatDateToDMY(formatLocalDate(new Date(dateBounds.end)));
+      if (dStart === dEnd) {
+        periodText = `Période : ${dStart}`;
+      } else {
+        periodText = `Période : du ${dStart} au ${dEnd}`;
+      }
+    } else if (filteredPickups.length > 0) {
+      const dates = filteredPickups
+        .map((o) => o.delivered_at || o.updated_at || o.created_at)
+        .filter(Boolean) as string[];
+      if (dates.length > 0) {
+        const timestamps = dates.map((d) => new Date(d).getTime()).filter((t) => !isNaN(t));
+        if (timestamps.length > 0) {
+          const minT = Math.min(...timestamps);
+          const maxT = Math.max(...timestamps);
+          const dMin = formatDateToDMY(formatLocalDate(new Date(minT)));
+          const dMax = formatDateToDMY(formatLocalDate(new Date(maxT)));
+          periodText = dMin === dMax ? `Période : ${dMin}` : `Période : du ${dMin} au ${dMax}`;
+        }
+      }
+    }
+
+    const exportDateText = formatEditedAt(new Date());
+
+    const activeFilters: string[] = [];
+    if (channelFilter !== 'all') {
+      activeFilters.push(`Canal : ${channelFilter}`);
+    }
+    const filtersText = activeFilters.length > 0 ? activeFilters.join(' · ') : '';
+
+    return {
+      businessName: business.name || 'Commerce',
+      periodText,
+      exportDateText,
+      filtersText,
+    };
+  };
+
+  // Export Excel (.xlsx) avec 2 feuilles : Synthèse paiements, Détail
+  const handleExportExcel = () => {
+    try {
+      setExportError(null);
+      const { businessName, periodText, exportDateText, filtersText } = getExportHeaderInfo();
+      const filename = `${getExportBaseFilename()}.xlsx`;
+
+      const headerAOA = [
+        [businessName],
+        ['Rapport des commandes récupérées'],
+        [periodText],
+        [exportDateText + (filtersText ? ` · ${filtersText}` : '')],
+        [],
+      ];
+
+      // 1. Feuille « Synthèse paiements »
+      const channelAOA = [
+        ...headerAOA,
+        ['Mode de paiement', 'Nb de commandes', `Montant encaissé (${business.currency})`],
+        ...channelSummary.list.map((c) => [
+          c.channelLabel,
+          c.count,
+          c.totalAmount,
+        ]),
+        [
+          'Total',
+          channelSummary.totals.count,
+          channelSummary.totals.totalAmount,
+        ],
+      ];
+      const wsChannel = XLSX.utils.aoa_to_sheet(channelAOA);
+
+      // 2. Feuille « Détail »
+      const detailRows = filteredPickups.map((ord) => {
+        const waitDurationMs = getPickupWaitDurationMs(ord);
+        const attenteText = waitDurationMs !== null ? formatWaitDuration(Math.round(waitDurationMs / 60000)) : '—';
+
+        return [
+          formatDateTimeDMY(ord.delivered_at || ord.updated_at),
+          ord.customer_name || 'Client anonyme',
+          ord.customer_phone || '—',
+          Number(ord.total_amount || 0),
+          getPaymentMethodLabel(ord.payment_method),
+          attenteText,
+          getOrderShortRef(ord),
+        ];
+      });
+
+      const detailAOA = [
+        ...headerAOA,
+        [
+          'Récupérée le',
+          'Client',
+          'Téléphone',
+          `Montant (${business.currency})`,
+          'Mode de paiement',
+          'Attente',
+          'Réf',
+        ],
+        ...detailRows,
+      ];
+      const wsDetail = XLSX.utils.aoa_to_sheet(detailAOA);
+
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, wsChannel, 'Synthèse paiements');
+      XLSX.utils.book_append_sheet(wb, wsDetail, 'Détail');
+
+      XLSX.writeFile(wb, filename);
+    } catch (err) {
+      console.error('Erreur lors de l’export Excel:', err);
+      setExportError("Une erreur est survenue lors de l'export Excel.");
+    }
+  };
+
+  // Export PDF (.pdf) en A4 paysage avec 2 tableaux
+  const handleExportPdf = () => {
+    try {
+      setExportError(null);
+      const { businessName, periodText, exportDateText, filtersText } = getExportHeaderInfo();
+      const filename = `${getExportBaseFilename()}.pdf`;
+
+      const doc = new jsPDF({ orientation: 'landscape', format: 'a4' });
+
+      // En-tête sur la première page
+      doc.setFontSize(14);
+      doc.setFont('helvetica', 'bold');
+      doc.text(cleanPdfText(businessName), 14, 15);
+
+      doc.setFontSize(11);
+      doc.setFont('helvetica', 'bold');
+      doc.text('Rapport des commandes récupérées', 14, 21);
+
+      doc.setFontSize(9.5);
+      doc.setFont('helvetica', 'normal');
+      doc.text(cleanPdfText(periodText), 14, 27);
+
+      doc.setFontSize(8.5);
+      doc.setTextColor(100, 100, 100);
+      const subHeader = cleanPdfText(exportDateText + (filtersText ? ` · ${filtersText}` : ''));
+      doc.text(subHeader, 14, 33);
+      doc.setTextColor(0, 0, 0);
+
+      // Tableau 1 : Synthèse par mode de paiement
+      doc.setFontSize(10);
+      doc.setFont('helvetica', 'bold');
+      doc.text('Synthèse par mode de paiement', 14, 40);
+
+      autoTable(doc, {
+        startY: 43,
+        head: [['Mode de paiement', 'Nb de commandes', `Montant encaissé (${business.currency})`]],
+        body: [
+          ...channelSummary.list.map((c) => [
+            cleanPdfText(c.channelLabel),
+            String(c.count),
+            formatAmountPdf(c.totalAmount),
+          ]),
+          [
+            'Total',
+            String(channelSummary.totals.count),
+            formatAmountPdf(channelSummary.totals.totalAmount),
+          ],
+        ],
+        theme: 'grid',
+        styles: {
+          fontSize: 8,
+          cellPadding: 2.5,
+          lineColor: [229, 220, 208],
+          lineWidth: 0.1,
+          overflow: 'ellipsize',
+        },
+        headStyles: {
+          fillColor: [27, 75, 74],
+          textColor: [255, 255, 255],
+          fontStyle: 'bold',
+        },
+        footStyles: {
+          fillColor: [250, 247, 242],
+          textColor: [0, 0, 0],
+          fontStyle: 'bold',
+        },
+        columnStyles: {
+          2: { halign: 'right' },
+        },
+        margin: { left: 14, right: 14 },
+      });
+
+      // Tableau 2 : Détail des commandes récupérées (sur une nouvelle page)
+      doc.addPage();
+      doc.setFontSize(11);
+      doc.setFont('helvetica', 'bold');
+      doc.text('Détail des commandes récupérées', 14, 15);
+
+      const detailBody = filteredPickups.map((ord) => {
+        const waitDurationMs = getPickupWaitDurationMs(ord);
+        const attenteText = waitDurationMs !== null ? formatWaitDuration(Math.round(waitDurationMs / 60000)) : '—';
+
+        return [
+          cleanPdfText(formatDateTimeDMY(ord.delivered_at || ord.updated_at)),
+          cleanPdfText(ord.customer_name || 'Client anonyme'),
+          cleanPdfText(ord.customer_phone || '—'),
+          formatAmountPdf(ord.total_amount),
+          cleanPdfText(getPaymentMethodLabel(ord.payment_method)),
+          cleanPdfText(attenteText),
+          cleanPdfText(`#${getOrderShortRef(ord)}`),
+        ];
+      });
+
+      autoTable(doc, {
+        startY: 19,
+        head: [[
+          'Récupérée le',
+          'Client',
+          'Téléphone',
+          `Montant (${business.currency})`,
+          'Mode de paiement',
+          'Attente',
+          'Réf',
+        ]],
+        body: detailBody,
+        theme: 'grid',
+        styles: {
+          fontSize: 7.5,
+          cellPadding: 2,
+          lineColor: [229, 220, 208],
+          lineWidth: 0.1,
+          overflow: 'ellipsize',
+        },
+        headStyles: {
+          fillColor: [27, 75, 74],
+          textColor: [255, 255, 255],
+          fontStyle: 'bold',
+        },
+        columnStyles: {
+          0: { cellWidth: 32 },
+          1: { cellWidth: 45 },
+          2: { cellWidth: 32 },
+          3: { cellWidth: 35, halign: 'right' },
+          4: { cellWidth: 45 },
+          5: { cellWidth: 40 },
+          6: { cellWidth: 40, halign: 'right' },
+        },
+        margin: { left: 14, right: 14 },
+      });
+
+      // Numérotation des pages
+      const totalPages = doc.getNumberOfPages();
+      for (let i = 1; i <= totalPages; i++) {
+        doc.setPage(i);
+        doc.setFontSize(8);
+        doc.setFont('helvetica', 'normal');
+        doc.setTextColor(130, 130, 130);
+        doc.text(
+          `Page ${i} sur ${totalPages}`,
+          doc.internal.pageSize.getWidth() - 14,
+          doc.internal.pageSize.getHeight() - 8,
+          { align: 'right' }
+        );
+      }
+
+      doc.save(filename);
+    } catch (err) {
+      console.error('Erreur lors de l’export PDF:', err);
+      setExportError("Une erreur est survenue lors de l'export PDF.");
+    }
+  };
+
   return (
     <div className="space-y-3">
       {/* Barre de filtres */}
@@ -606,7 +952,7 @@ export default function PickupsSection({
         </div>
 
         {/* Recherche client, téléphone, réf */}
-        <div className="relative flex-1 min-w-[140px]">
+        <div className="relative flex-1 min-w-[140px] max-w-[260px]">
           <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
           <input
             type="text"
@@ -638,7 +984,7 @@ export default function PickupsSection({
           </select>
         </div>
 
-        {/* À droite : bouton Effacer les filtres (si actif) + bandeau total */}
+        {/* À droite : bouton Effacer les filtres (si actif) + bandeau total + bouton Exporter */}
         <div className="shrink-0 flex items-center gap-2 ml-auto">
           {channelFilter !== 'all' && (
             <button
@@ -650,7 +996,7 @@ export default function PickupsSection({
             </button>
           )}
 
-          <div className="shrink-0 whitespace-nowrap text-xs font-semibold text-slate-800 px-3 py-1 bg-[#FAF7F2] border border-[#E5DCD0] rounded-lg truncate">
+          <div className="shrink-0 whitespace-nowrap text-xs font-semibold text-slate-800 px-3 py-1 bg-[#FAF7F2] border border-[#E5DCD0] rounded-lg">
             <span className="tabular-nums font-bold text-slate-900">
               {filteredPickups.length}
             </span>{' '}
@@ -659,8 +1005,70 @@ export default function PickupsSection({
               {totalFilteredAmount.toLocaleString()} {business.currency}
             </span>
           </div>
+
+          {/* Bouton Exporter avec menu à deux choix (Excel, PDF) */}
+          <div className="relative shrink-0" ref={exportMenuRef}>
+            <button
+              type="button"
+              onClick={() => {
+                if (filteredPickups.length === 0) return;
+                setIsExportMenuOpen((prev) => !prev);
+              }}
+              disabled={filteredPickups.length === 0}
+              className={`inline-flex items-center gap-1.5 px-3 py-1 text-xs font-semibold rounded-lg border transition-colors ${
+                filteredPickups.length === 0
+                  ? 'bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed'
+                  : 'bg-white text-slate-800 border-[#E5DCD0] hover:bg-[#FAF7F2] hover:border-[#1B4B4A] cursor-pointer'
+              }`}
+            >
+              <Download className="w-3.5 h-3.5" />
+              <span>Exporter</span>
+              <ChevronDown className="w-3 h-3 text-slate-500" />
+            </button>
+
+            {isExportMenuOpen && (
+              <div className="absolute right-0 mt-1 w-36 bg-white border border-[#E5DCD0] rounded-lg shadow-lg py-1 z-30 text-xs">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsExportMenuOpen(false);
+                    handleExportExcel();
+                  }}
+                  className="w-full text-left px-3 py-1.5 hover:bg-[#FAF7F2] text-slate-700 flex items-center gap-2 cursor-pointer transition-colors"
+                >
+                  <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-600" />
+                  <span>Excel (.xlsx)</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsExportMenuOpen(false);
+                    handleExportPdf();
+                  }}
+                  className="w-full text-left px-3 py-1.5 hover:bg-[#FAF7F2] text-slate-700 flex items-center gap-2 cursor-pointer transition-colors"
+                >
+                  <FileText className="w-3.5 h-3.5 text-rose-600" />
+                  <span>PDF (.pdf)</span>
+                </button>
+              </div>
+            )}
+          </div>
         </div>
       </div>
+
+      {/* Alerte discrète si erreur d'export */}
+      {exportError && (
+        <div className="px-3 py-2 bg-rose-50 border border-rose-200 rounded-lg flex items-center justify-between text-xs text-rose-800">
+          <span>{exportError}</span>
+          <button
+            type="button"
+            onClick={() => setExportError(null)}
+            className="text-rose-900 font-semibold hover:underline cursor-pointer ml-3"
+          >
+            Fermer
+          </button>
+        </div>
+      )}
 
       {/* Alerte discrète si erreur de chargement des articles */}
       {itemsLoadError && (

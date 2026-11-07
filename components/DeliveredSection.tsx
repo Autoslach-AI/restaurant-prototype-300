@@ -855,16 +855,40 @@ export default function DeliveredSection({
     return 'livraisons_toutes';
   };
 
+  // Helper pour formater la date/heure d'édition du rapport : Édité le JJ/MM/AAAA à HH:mm
+  const formatEditedAt = (d: Date = new Date()) => {
+    const day = String(d.getDate()).padStart(2, '0');
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const year = d.getFullYear();
+    const hours = String(d.getHours()).padStart(2, '0');
+    const minutes = String(d.getMinutes()).padStart(2, '0');
+    return `Édité le ${day}/${month}/${year} à ${hours}:${minutes}`;
+  };
+
+  // Helper pour formater les montants dans le PDF avec un espace standard U+0020 comme séparateur de milliers
+  const formatAmountPdf = (n: number | string | null | undefined): string => {
+    const val = Math.round(Number(n || 0));
+    const sign = val < 0 ? '-' : '';
+    const str = Math.abs(val).toString();
+    return sign + str.replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
+  };
+
+  // Nettoyage des espaces insécables (U+00A0, U+202F) pour jsPDF
+  const cleanPdfText = (text: string | null | undefined): string => {
+    if (!text) return '';
+    return String(text).replace(/[\u00A0\u202F]/g, ' ');
+  };
+
   // Informations d'en-tête pour les exports
   const getExportHeaderInfo = () => {
-    let periodText = 'Toutes les livraisons';
+    let periodText = 'Période : toutes';
     if (deliveredDateBounds.start !== -Infinity && deliveredDateBounds.end !== Infinity) {
       const dStart = formatDateToDMY(formatLocalDate(new Date(deliveredDateBounds.start)));
       const dEnd = formatDateToDMY(formatLocalDate(new Date(deliveredDateBounds.end)));
       if (dStart === dEnd) {
-        periodText = `Livraisons du ${dStart}`;
+        periodText = `Période : ${dStart}`;
       } else {
-        periodText = `Livraisons du ${dStart} au ${dEnd}`;
+        periodText = `Période : du ${dStart} au ${dEnd}`;
       }
     } else if (filteredDeliveredOrders.length > 0) {
       const dates = filteredDeliveredOrders
@@ -877,12 +901,12 @@ export default function DeliveredSection({
           const maxT = Math.max(...timestamps);
           const dMin = formatDateToDMY(formatLocalDate(new Date(minT)));
           const dMax = formatDateToDMY(formatLocalDate(new Date(maxT)));
-          periodText = dMin === dMax ? `Livraisons du ${dMin}` : `Livraisons du ${dMin} au ${dMax}`;
+          periodText = dMin === dMax ? `Période : ${dMin}` : `Période : du ${dMin} au ${dMax}`;
         }
       }
     }
 
-    const exportDateText = `Exporté le ${formatDateTimeDMY(new Date().toISOString())}`;
+    const exportDateText = formatEditedAt(new Date());
 
     const activeFilters: string[] = [];
     if (deliveredDriverFilter !== 'all') {
@@ -919,15 +943,16 @@ export default function DeliveredSection({
 
       const headerAOA = [
         [businessName],
+        ['Rapport des livraisons'],
         [periodText],
         [exportDateText + (filtersText ? ` · ${filtersText}` : '')],
         [],
       ];
 
-      // 1. Feuille « Par livreur »
+      // 1. Feuille « Synthèse livreurs »
       const driverAOA = [
         ...headerAOA,
-        ['Livreur', 'Livraisons', `Montant (${business.currency})`, `Frais de livraison (${business.currency})`, 'Durée moy.'],
+        ['Livreur', 'Nb de livraisons', `Montant encaissé (${business.currency})`, `Frais de livraison (${business.currency})`, 'Durée moyenne'],
         ...deliveredDriverSummary.list.map((d) => [
           d.driverName,
           d.count,
@@ -945,10 +970,10 @@ export default function DeliveredSection({
       ];
       const wsDriver = XLSX.utils.aoa_to_sheet(driverAOA);
 
-      // 2. Feuille « Par canal »
+      // 2. Feuille « Synthèse paiements »
       const channelAOA = [
         ...headerAOA,
-        ['Canal', 'Livraisons', `Montant (${business.currency})`],
+        ['Mode de paiement', 'Nb de livraisons', `Montant encaissé (${business.currency})`],
         ...deliveredChannelSummary.list.map((c) => [
           c.channelLabel,
           c.count,
@@ -998,7 +1023,7 @@ export default function DeliveredSection({
           'Zone',
           `Montant (${business.currency})`,
           `Frais de livraison (${business.currency})`,
-          'Canal',
+          'Mode de paiement',
           'Livreur',
           'Durée',
           'Réf',
@@ -1008,8 +1033,8 @@ export default function DeliveredSection({
       const wsDetail = XLSX.utils.aoa_to_sheet(detailAOA);
 
       const wb = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(wb, wsDriver, 'Par livreur');
-      XLSX.utils.book_append_sheet(wb, wsChannel, 'Par canal');
+      XLSX.utils.book_append_sheet(wb, wsDriver, 'Synthèse livreurs');
+      XLSX.utils.book_append_sheet(wb, wsChannel, 'Synthèse paiements');
       XLSX.utils.book_append_sheet(wb, wsDetail, 'Détail');
 
       XLSX.writeFile(wb, filename);
@@ -1031,40 +1056,44 @@ export default function DeliveredSection({
       // En-tête sur la première page
       doc.setFontSize(14);
       doc.setFont('helvetica', 'bold');
-      doc.text(businessName, 14, 15);
+      doc.text(cleanPdfText(businessName), 14, 15);
 
       doc.setFontSize(11);
+      doc.setFont('helvetica', 'bold');
+      doc.text('Rapport des livraisons', 14, 21);
+
+      doc.setFontSize(9.5);
       doc.setFont('helvetica', 'normal');
-      doc.text(periodText, 14, 21);
+      doc.text(cleanPdfText(periodText), 14, 27);
 
       doc.setFontSize(8.5);
       doc.setTextColor(100, 100, 100);
-      const subHeader = exportDateText + (filtersText ? ` · ${filtersText}` : '');
-      doc.text(subHeader, 14, 27);
+      const subHeader = cleanPdfText(exportDateText + (filtersText ? ` · ${filtersText}` : ''));
+      doc.text(subHeader, 14, 33);
       doc.setTextColor(0, 0, 0);
 
-      // Tableau 1 : Récapitulatif par livreur
+      // Tableau 1 : Synthèse par livreur
       doc.setFontSize(10);
       doc.setFont('helvetica', 'bold');
-      doc.text('Récapitulatif par livreur', 14, 34);
+      doc.text('Synthèse par livreur', 14, 40);
 
       autoTable(doc, {
-        startY: 37,
-        head: [['Livreur', 'Livraisons', `Montant (${business.currency})`, `Frais de livraison (${business.currency})`, 'Durée moy.']],
+        startY: 43,
+        head: [['Livreur', 'Nb de livraisons', `Montant encaissé (${business.currency})`, `Frais de livraison (${business.currency})`, 'Durée moyenne']],
         body: [
           ...deliveredDriverSummary.list.map((d) => [
-            d.driverName,
+            cleanPdfText(d.driverName),
             String(d.count),
-            `${d.totalAmount.toLocaleString()} ${business.currency}`,
-            `${d.deliveryFee.toLocaleString()} ${business.currency}`,
-            d.avgDurationText,
+            formatAmountPdf(d.totalAmount),
+            formatAmountPdf(d.deliveryFee),
+            cleanPdfText(d.avgDurationText),
           ]),
           [
             'Total',
             String(deliveredDriverSummary.totals.count),
-            `${deliveredDriverSummary.totals.totalAmount.toLocaleString()} ${business.currency}`,
-            `${deliveredDriverSummary.totals.deliveryFee.toLocaleString()} ${business.currency}`,
-            deliveredDriverSummary.totals.avgDurationText,
+            formatAmountPdf(deliveredDriverSummary.totals.totalAmount),
+            formatAmountPdf(deliveredDriverSummary.totals.deliveryFee),
+            cleanPdfText(deliveredDriverSummary.totals.avgDurationText),
           ],
         ],
         theme: 'grid',
@@ -1073,6 +1102,7 @@ export default function DeliveredSection({
           cellPadding: 2.5,
           lineColor: [229, 220, 208],
           lineWidth: 0.1,
+          overflow: 'ellipsize',
         },
         headStyles: {
           fillColor: [27, 75, 74],
@@ -1083,29 +1113,33 @@ export default function DeliveredSection({
           fillColor: [250, 247, 242],
           textColor: [0, 0, 0],
           fontStyle: 'bold',
+        },
+        columnStyles: {
+          2: { halign: 'right' },
+          3: { halign: 'right' },
         },
         margin: { left: 14, right: 14 },
       });
 
-      // Tableau 2 : Récapitulatif par canal
-      const finalY1 = (doc as any).lastAutoTable?.finalY || 40;
+      // Tableau 2 : Synthèse par mode de paiement
+      const finalY1 = (doc as any).lastAutoTable?.finalY || 45;
       doc.setFontSize(10);
       doc.setFont('helvetica', 'bold');
-      doc.text('Récapitulatif par canal de paiement', 14, finalY1 + 8);
+      doc.text('Synthèse par mode de paiement', 14, finalY1 + 8);
 
       autoTable(doc, {
         startY: finalY1 + 11,
-        head: [['Canal', 'Livraisons', `Montant (${business.currency})`]],
+        head: [['Mode de paiement', 'Nb de livraisons', `Montant encaissé (${business.currency})`]],
         body: [
           ...deliveredChannelSummary.list.map((c) => [
-            c.channelLabel,
+            cleanPdfText(c.channelLabel),
             String(c.count),
-            `${c.totalAmount.toLocaleString()} ${business.currency}`,
+            formatAmountPdf(c.totalAmount),
           ]),
           [
             'Total',
             String(deliveredChannelSummary.totals.count),
-            `${deliveredChannelSummary.totals.totalAmount.toLocaleString()} ${business.currency}`,
+            formatAmountPdf(deliveredChannelSummary.totals.totalAmount),
           ],
         ],
         theme: 'grid',
@@ -1114,6 +1148,7 @@ export default function DeliveredSection({
           cellPadding: 2.5,
           lineColor: [229, 220, 208],
           lineWidth: 0.1,
+          overflow: 'ellipsize',
         },
         headStyles: {
           fillColor: [27, 75, 74],
@@ -1124,6 +1159,9 @@ export default function DeliveredSection({
           fillColor: [250, 247, 242],
           textColor: [0, 0, 0],
           fontStyle: 'bold',
+        },
+        columnStyles: {
+          2: { halign: 'right' },
         },
         margin: { left: 14, right: 14 },
       });
@@ -1147,16 +1185,16 @@ export default function DeliveredSection({
         const dureeText = durMs !== null ? formatWaitDuration(Math.round(durMs / 60000)) : '—';
 
         return [
-          formatDateTimeDMY(ord.delivered_at || ord.updated_at),
-          ord.customer_name || 'Client anonyme',
-          ord.customer_phone || '—',
-          ord.delivery_zone_name || (ord.delivery_zone_id ? ord.delivery_zone_id : '—'),
-          `${Number(ord.total_amount || 0).toLocaleString()} ${business.currency}`,
-          Number(ord.delivery_fee || 0) > 0 ? `${Number(ord.delivery_fee).toLocaleString()} ${business.currency}` : '0',
-          getPaymentMethodLabel(ord.payment_method),
-          dName,
-          dureeText,
-          `#${getOrderShortRef(ord)}`,
+          cleanPdfText(formatDateTimeDMY(ord.delivered_at || ord.updated_at)),
+          cleanPdfText(ord.customer_name || 'Client anonyme'),
+          cleanPdfText(ord.customer_phone || '—'),
+          cleanPdfText(ord.delivery_zone_name || (ord.delivery_zone_id ? ord.delivery_zone_id : '—')),
+          formatAmountPdf(ord.total_amount),
+          formatAmountPdf(ord.delivery_fee),
+          cleanPdfText(getPaymentMethodLabel(ord.payment_method)),
+          cleanPdfText(dName),
+          cleanPdfText(dureeText),
+          cleanPdfText(`#${getOrderShortRef(ord)}`),
         ];
       });
 
@@ -1168,8 +1206,8 @@ export default function DeliveredSection({
           'Téléphone',
           'Zone',
           `Montant (${business.currency})`,
-          `Frais (${business.currency})`,
-          'Canal',
+          `Frais de livraison (${business.currency})`,
+          'Mode de paiement',
           'Livreur',
           'Durée',
           'Réf',
@@ -1181,6 +1219,7 @@ export default function DeliveredSection({
           cellPadding: 2,
           lineColor: [229, 220, 208],
           lineWidth: 0.1,
+          overflow: 'ellipsize',
         },
         headStyles: {
           fillColor: [27, 75, 74],
@@ -1191,13 +1230,13 @@ export default function DeliveredSection({
           0: { cellWidth: 26 },
           1: { cellWidth: 32 },
           2: { cellWidth: 24 },
-          3: { cellWidth: 30 },
+          3: { cellWidth: 28 },
           4: { cellWidth: 28, halign: 'right' },
-          5: { cellWidth: 24, halign: 'right' },
-          6: { cellWidth: 24 },
-          7: { cellWidth: 28 },
-          8: { cellWidth: 20 },
-          9: { cellWidth: 20, halign: 'right' },
+          5: { cellWidth: 30, halign: 'right' },
+          6: { cellWidth: 28 },
+          7: { cellWidth: 27 },
+          8: { cellWidth: 22 },
+          9: { cellWidth: 24, halign: 'right' },
         },
         margin: { left: 14, right: 14 },
       });
@@ -1210,7 +1249,7 @@ export default function DeliveredSection({
         doc.setFont('helvetica', 'normal');
         doc.setTextColor(130, 130, 130);
         doc.text(
-          `Page ${i} / ${totalPages}`,
+          `Page ${i} sur ${totalPages}`,
           doc.internal.pageSize.getWidth() - 14,
           doc.internal.pageSize.getHeight() - 8,
           { align: 'right' }
@@ -1280,7 +1319,7 @@ export default function DeliveredSection({
         </div>
 
         {/* Barre de recherche (flexible) */}
-        <div className="relative flex-1 min-w-[140px]">
+        <div className="relative flex-1 min-w-[140px] max-w-[260px]">
           <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
           <input
             type="text"
@@ -1360,7 +1399,7 @@ export default function DeliveredSection({
             </button>
           )}
 
-          <div className="shrink-0 whitespace-nowrap text-xs font-semibold text-slate-800 px-3 py-1 bg-[#FAF7F2] border border-[#E5DCD0] rounded-lg truncate">
+          <div className="shrink-0 whitespace-nowrap text-xs font-semibold text-slate-800 px-3 py-1 bg-[#FAF7F2] border border-[#E5DCD0] rounded-lg">
             <span className="tabular-nums font-bold text-slate-900">
               {filteredDeliveredOrders.length}
             </span>{' '}
