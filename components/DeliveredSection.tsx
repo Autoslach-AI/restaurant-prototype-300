@@ -949,21 +949,22 @@ export default function DeliveredSection({
     driverName: string;
     phone: string | null;
     orders: Order[];
+    dishesQtyTotal: number;
     dishesTotal: number;
     feesTotal: number;
   }
 
-  const buildExportDriverGroups = (): {
+  const buildExportDriverGroups = (itemsMap: Record<string, OrderItem[]>): {
     allGroups: ExportDriverGroup[];
-    totalDishes: number;
-    totalFees: number;
-    channelList: { label: string; count: number; dishesTotal: number }[];
+    totalDishesQty: number;
+    totalDishesAmount: number;
+    totalFeesAmount: number;
   } => {
     const groupsMap = new Map<string, ExportDriverGroup>();
 
-    let totalDishes = 0;
-    let totalFees = 0;
-    const channelMap = new Map<string, { label: string; count: number; dishesTotal: number }>();
+    let totalDishesQty = 0;
+    let totalDishesAmount = 0;
+    let totalFeesAmount = 0;
 
     for (const ord of filteredDeliveredOrders) {
       let driverName = 'Non assigné';
@@ -993,12 +994,17 @@ export default function DeliveredSection({
         }
       }
 
-      // Règles de montants : Plats = total_amount - delivery_fee (jamais négatif) ; Frais = delivery_fee
+      // Règles de montants : Prix plats = total_amount - delivery_fee (jamais négatif) ; Frais = delivery_fee
       const dishes = Math.max(0, Number(ord.total_amount || 0) - Number(ord.delivery_fee || 0));
       const fee = Number(ord.delivery_fee || 0);
 
-      totalDishes += dishes;
-      totalFees += fee;
+      // Quantité de plats pour cette commande (somme des quantités des articles)
+      const items = itemsMap[ord.id] ?? itemsByOrderId[ord.id] ?? (ord.items && ord.items.length > 0 ? ord.items : undefined);
+      const dishesQty = items ? items.reduce((sum, it) => sum + (it.quantity || 1), 0) : 0;
+
+      totalDishesQty += dishesQty;
+      totalDishesAmount += dishes;
+      totalFeesAmount += fee;
 
       let grp = groupsMap.get(driverKey);
       if (!grp) {
@@ -1007,21 +1013,16 @@ export default function DeliveredSection({
           driverName,
           phone: driverPhone,
           orders: [],
+          dishesQtyTotal: 0,
           dishesTotal: 0,
           feesTotal: 0,
         };
         groupsMap.set(driverKey, grp);
       }
       grp.orders.push(ord);
+      grp.dishesQtyTotal += dishesQty;
       grp.dishesTotal += dishes;
       grp.feesTotal += fee;
-
-      // Canal de paiement
-      const channelLabel = getPaymentMethodLabel(ord.payment_method);
-      const ch = channelMap.get(channelLabel) || { label: channelLabel, count: 0, dishesTotal: 0 };
-      ch.count += 1;
-      ch.dishesTotal += dishes;
-      channelMap.set(channelLabel, ch);
     }
 
     // Séparer les livreurs assignés et le groupe « Non assigné » (qui doit toujours être le dernier)
@@ -1040,134 +1041,111 @@ export default function DeliveredSection({
       });
     }
 
-    const channelList = Array.from(channelMap.values());
-    channelList.sort((a, b) => b.dishesTotal - a.dishesTotal);
-
-    return { allGroups, totalDishes, totalFees, channelList };
+    return { allGroups, totalDishesQty, totalDishesAmount, totalFeesAmount };
   };
 
-  // Génération de l'export Excel (.xlsx) avec feuille Synthèse + 1 feuille par livreur
+  // Génération de l'export Excel (.xlsx) avec une seule feuille "Détail"
   const generateExportExcel = (itemsMap: Record<string, OrderItem[]>) => {
     const { businessName, periodText, exportDateText, filtersText } = getExportHeaderInfo();
     const filename = `${getExportBaseFilename()}.xlsx`;
-    const { allGroups, totalDishes, totalFees, channelList } = buildExportDriverGroups();
+    const { allGroups, totalDishesQty, totalDishesAmount, totalFeesAmount } = buildExportDriverGroups(itemsMap);
 
-    const headerAOA = [
+    const excelRows: any[][] = [
       [businessName],
       ['Relevé des livraisons par livreur'],
       [periodText],
       [exportDateText + (filtersText ? ` · ${filtersText}` : '')],
       [],
+      [
+        'Date et heure',
+        'Client',
+        'Téléphone',
+        'Adresse',
+        'Plats',
+        `Prix plats (${business.currency})`,
+        'Livreur',
+        `Frais de livraison (${business.currency})`,
+        'Mode de paiement',
+        'Réf',
+      ],
     ];
 
-    // 1. Feuille « Synthèse »
-    const synthAOA = [
-      ...headerAOA,
-      ['Synthèse par livreur'],
-      ['Livreur', 'Nb de livraisons', `Total plats (${business.currency})`, `Total frais de livraison (${business.currency})`],
-      ...allGroups.map((g) => [
-        g.driverName,
-        g.orders.length,
-        g.dishesTotal,
-        g.feesTotal,
-      ]),
-      ['Total', filteredDeliveredOrders.length, totalDishes, totalFees],
-      [],
-      [],
-      ['Synthèse par mode de paiement'],
-      ['Mode de paiement', 'Nb de livraisons', `Total plats (${business.currency})`],
-      ...channelList.map((c) => [
-        c.label,
-        c.count,
-        c.dishesTotal,
-      ]),
-      ['Total', filteredDeliveredOrders.length, totalDishes],
-    ];
-    const wsSynth = XLSX.utils.aoa_to_sheet(synthAOA);
+    for (let grpIdx = 0; grpIdx < allGroups.length; grpIdx++) {
+      const grp = allGroups[grpIdx];
 
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, wsSynth, 'Synthèse');
+      // Ligne de titre par livreur
+      excelRows.push([
+        `Livreur : ${grp.driverName}  ·  ${grp.orders.length} livraison${grp.orders.length > 1 ? 's' : ''}`,
+      ]);
 
-    // 2. Feuilles par livreur
-    const usedSheetNames = new Set<string>(['synthèse', 'synthese']);
-    const sanitizeSheetName = (name: string): string => {
-      let cleaned = name.replace(/[\\/?*:[\]]/g, ' ').trim();
-      if (!cleaned) cleaned = 'Livreur';
-      cleaned = cleaned.substring(0, 31).trim();
-
-      let finalName = cleaned;
-      let counter = 2;
-      while (usedSheetNames.has(finalName.toLowerCase())) {
-        const suffix = ` (${counter})`;
-        const maxBaseLen = 31 - suffix.length;
-        finalName = `${cleaned.substring(0, maxBaseLen).trim()}${suffix}`;
-        counter++;
-      }
-      usedSheetNames.add(finalName.toLowerCase());
-      return finalName;
-    };
-
-    for (const grp of allGroups) {
-      const sheetTitle = sanitizeSheetName(grp.driverName);
-      const phoneInfo = grp.phone ? ` (${grp.phone})` : '';
-      const livrInfo = ` · ${grp.orders.length} livraison${grp.orders.length > 1 ? 's' : ''}`;
-
-      const detailRows = grp.orders.map((ord) => {
+      for (const ord of grp.orders) {
         const dishes = Math.max(0, Number(ord.total_amount || 0) - Number(ord.delivery_fee || 0));
         const fee = Number(ord.delivery_fee || 0);
+        const addrText = ord.delivery_address || '—';
 
-        return [
+        excelRows.push([
           formatDateTimeDMY(ord.delivered_at || ord.updated_at || ord.created_at),
           ord.customer_name || 'Client anonyme',
           ord.customer_phone || '—',
-          ord.delivery_address || '—',
-          ord.delivery_zone_name || (ord.delivery_zone_id ? ord.delivery_zone_id : '—'),
+          addrText,
           formatExportOrderDishes(ord, itemsMap),
           dishes,
+          grp.driverName,
           fee,
           getPaymentMethodLabel(ord.payment_method),
           getOrderShortRef(ord),
-        ];
-      });
+        ]);
+      }
 
-      const driverAOA = [
-        ...headerAOA,
-        [`Livreur : ${grp.driverName}${phoneInfo}${livrInfo}`],
-        [],
-        [
-          'Date et heure',
-          'Client',
-          'Téléphone',
-          'Adresse',
-          'Zone',
-          'Plats',
-          `Montant plats (${business.currency})`,
-          `Frais de livraison (${business.currency})`,
-          'Mode de paiement',
-          'Réf',
-        ],
-        ...detailRows,
-        [],
-        ['Total plats', '', '', '', '', '', grp.dishesTotal, '', '', ''],
-        ['Total frais de livraison', '', '', '', '', '', '', grp.feesTotal, '', ''],
-      ];
+      // Ligne de totaux du livreur
+      excelRows.push([
+        `Total ${grp.driverName}`,
+        '',
+        '',
+        '',
+        grp.dishesQtyTotal,
+        grp.dishesTotal,
+        '',
+        grp.feesTotal,
+        '',
+        '',
+      ]);
 
-      const wsDriver = XLSX.utils.aoa_to_sheet(driverAOA);
-      XLSX.utils.book_append_sheet(wb, wsDriver, sheetTitle);
+      // Ligne vide entre les groupes (sauf après le dernier)
+      if (grpIdx < allGroups.length - 1) {
+        excelRows.push([]);
+      }
     }
 
+    // Ligne de total général
+    excelRows.push([
+      'Total général',
+      '',
+      '',
+      '',
+      totalDishesQty,
+      totalDishesAmount,
+      '',
+      totalFeesAmount,
+      '',
+      '',
+    ]);
+
+    const ws = XLSX.utils.aoa_to_sheet(excelRows);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Détail');
     XLSX.writeFile(wb, filename);
   };
 
-  // Génération de l'export PDF (.pdf) en A4 paysage par livreur
+  // Génération de l'export PDF (.pdf) en UN SEUL tableau A4 paysage
   const generateExportPdf = (itemsMap: Record<string, OrderItem[]>) => {
     const { businessName, periodText, exportDateText, filtersText } = getExportHeaderInfo();
     const filename = `${getExportBaseFilename()}.pdf`;
-    const { allGroups, totalDishes, totalFees, channelList } = buildExportDriverGroups();
+    const { allGroups, totalDishesQty, totalDishesAmount, totalFeesAmount } = buildExportDriverGroups(itemsMap);
 
     const doc = new jsPDF({ orientation: 'landscape', format: 'a4' });
 
-    // Page 1 : En-tête + Tableau Synthèse par livreur
+    // En-tête sur la première page
     doc.setFontSize(14);
     doc.setFont('helvetica', 'bold');
     doc.text(cleanPdfText(businessName), 14, 15);
@@ -1186,172 +1164,159 @@ export default function DeliveredSection({
     doc.text(subHeader, 14, 33);
     doc.setTextColor(0, 0, 0);
 
-    doc.setFontSize(10);
-    doc.setFont('helvetica', 'bold');
-    doc.text('Synthèse par livreur', 14, 40);
+    const tableBody: any[] = [];
 
-    autoTable(doc, {
-      startY: 43,
-      head: [['Livreur', 'Nb de livraisons', `Total plats (${business.currency})`, `Total frais de livraison (${business.currency})`]],
-      body: [
-        ...allGroups.map((g) => [
-          cleanPdfText(g.driverName),
-          String(g.orders.length),
-          formatAmountPdf(g.dishesTotal),
-          formatAmountPdf(g.feesTotal),
-        ]),
-        [
-          'Total',
-          String(filteredDeliveredOrders.length),
-          formatAmountPdf(totalDishes),
-          formatAmountPdf(totalFees),
-        ],
-      ],
-      theme: 'grid',
-      styles: {
-        fontSize: 8,
-        cellPadding: 2.5,
-        lineColor: [229, 220, 208],
-        lineWidth: 0.1,
-        overflow: 'linebreak',
-      },
-      headStyles: {
-        fillColor: [27, 75, 74],
-        textColor: [255, 255, 255],
-        fontStyle: 'bold',
-      },
-      footStyles: {
-        fillColor: [250, 247, 242],
-        textColor: [0, 0, 0],
-        fontStyle: 'bold',
-      },
-      columnStyles: {
-        2: { halign: 'right' },
-        3: { halign: 'right' },
-      },
-      margin: { left: 14, right: 14 },
-    });
+    allGroups.forEach((grp, grpIdx) => {
+      // 1. Ligne-bande pleine largeur avant les commandes du livreur (vert foncé, texte blanc gras)
+      const bannerRow = [
+        {
+          content: `Livreur : ${cleanPdfText(grp.driverName)}  ·  ${grp.orders.length} livraison${grp.orders.length > 1 ? 's' : ''}`,
+          colSpan: 10,
+          styles: {
+            fillColor: [27, 75, 74],
+            textColor: [255, 255, 255],
+            fontStyle: 'bold',
+            fontSize: 7.5,
+            cellPadding: 2,
+          },
+          _isDriverBanner: true,
+        },
+      ];
+      tableBody.push(bannerRow);
 
-    // Sections par livreur : UNE section par livreur, CHAQUE livreur commence sur une NOUVELLE page
-    for (const grp of allGroups) {
-      doc.addPage();
-
-      const phoneInfo = grp.phone ? ` (${grp.phone})` : '';
-      const livrInfo = ` · ${grp.orders.length} livraison${grp.orders.length > 1 ? 's' : ''}`;
-      const sectionTitle = `${grp.driverName}${phoneInfo}${livrInfo}`;
-
-      doc.setFontSize(11);
-      doc.setFont('helvetica', 'bold');
-      doc.setTextColor(0, 0, 0);
-      doc.text(cleanPdfText(sectionTitle), 14, 15);
-
-      const groupRows = grp.orders.map((ord) => {
+      // Commandes du livreur
+      grp.orders.forEach((ord) => {
         const dishes = Math.max(0, Number(ord.total_amount || 0) - Number(ord.delivery_fee || 0));
         const fee = Number(ord.delivery_fee || 0);
+        const addrText = ord.delivery_address || '—';
 
-        const cName = ord.customer_name || 'Client anonyme';
-        const clientText = ord.customer_phone ? `${cName}\n${ord.customer_phone}` : cName;
-
-        const addr = ord.delivery_address || '—';
-        const zone = ord.delivery_zone_name || (ord.delivery_zone_id ? ord.delivery_zone_id : '');
-        const addrText = zone ? `${addr}\n${zone}` : addr;
-
-        return [
-          cleanPdfText(formatDateTimeDMY(ord.delivered_at || ord.updated_at || ord.created_at)),
-          cleanPdfText(clientText),
-          cleanPdfText(addrText),
-          cleanPdfText(formatExportOrderDishes(ord, itemsMap)),
-          formatAmountPdf(dishes),
-          formatAmountPdf(fee),
-          cleanPdfText(getPaymentMethodLabel(ord.payment_method)),
-          cleanPdfText(`#${getOrderShortRef(ord)}`),
+        const orderRow = [
+          { content: cleanPdfText(formatDateTimeDMY(ord.delivered_at || ord.updated_at || ord.created_at)) },
+          { content: cleanPdfText(ord.customer_name || 'Client anonyme') },
+          { content: cleanPdfText(ord.customer_phone || '—') },
+          { content: cleanPdfText(addrText) },
+          { content: cleanPdfText(formatExportOrderDishes(ord, itemsMap)) },
+          { content: formatAmountPdf(dishes) },
+          { content: cleanPdfText(grp.driverName) },
+          { content: formatAmountPdf(fee) },
+          { content: cleanPdfText(getPaymentMethodLabel(ord.payment_method)) },
+          { content: cleanPdfText(`#${getOrderShortRef(ord)}`) },
         ];
+
+        tableBody.push(orderRow);
       });
 
-      autoTable(doc, {
-        startY: 19,
-        head: [[
-          'Date et heure',
-          'Client',
-          'Adresse',
-          'Plats',
-          `Montant plats (${business.currency})`,
-          `Frais de livraison (${business.currency})`,
-          'Mode de paiement',
-          'Réf',
-        ]],
-        body: groupRows,
-        theme: 'grid',
-        showHead: 'everyPage',
-        styles: {
-          fontSize: 7.5,
-          cellPadding: 2,
-          lineColor: [229, 220, 208],
-          lineWidth: 0.1,
-          overflow: 'linebreak',
+      // 2. Ligne de totaux du livreur (vert clair #DCEBE9, texte gras, 3 valeurs alignées)
+      const totalDriverRow = [
+        {
+          content: `Total ${cleanPdfText(grp.driverName)}`,
+          colSpan: 4,
+          styles: {
+            fontStyle: 'bold',
+            fillColor: [220, 235, 233],
+          },
         },
-        headStyles: {
-          fillColor: [27, 75, 74],
-          textColor: [255, 255, 255],
-          fontStyle: 'bold',
+        {
+          content: String(grp.dishesQtyTotal),
+          styles: { fontStyle: 'bold', halign: 'right', fillColor: [220, 235, 233] },
         },
-        columnStyles: {
-          0: { cellWidth: 26 },
-          1: { cellWidth: 32 },
-          2: { cellWidth: 35 },
-          3: { cellWidth: 62 },
-          4: { cellWidth: 28, halign: 'right' },
-          5: { cellWidth: 26, halign: 'right' },
-          6: { cellWidth: 32 },
-          7: { cellWidth: 26, halign: 'right' },
+        {
+          content: formatAmountPdf(grp.dishesTotal),
+          styles: { fontStyle: 'bold', halign: 'right', fillColor: [220, 235, 233] },
         },
-        margin: { left: 14, right: 14 },
-      });
+        {
+          content: '',
+          styles: { fillColor: [220, 235, 233] },
+        },
+        {
+          content: formatAmountPdf(grp.feesTotal),
+          styles: { fontStyle: 'bold', halign: 'right', fillColor: [220, 235, 233] },
+        },
+        {
+          content: '',
+          styles: { fillColor: [220, 235, 233] },
+        },
+        {
+          content: '',
+          styles: { fillColor: [220, 235, 233] },
+        },
+      ];
 
-      // Pied de section : "Total plats : X devise" et "Total frais de livraison : Y devise", chacun sur sa propre ligne, aligné à droite
-      let finalY = (doc as any).lastAutoTable?.finalY || 20;
-      if (finalY > doc.internal.pageSize.getHeight() - 22) {
-        doc.addPage();
-        finalY = 15;
+      tableBody.push(totalDriverRow);
+
+      // 3. Ligne d'espacement vide de 8 pt (~2.82 mm), sans bordure ni fond (sauf après le dernier groupe)
+      if (grpIdx < allGroups.length - 1) {
+        tableBody.push([
+          {
+            content: '',
+            colSpan: 10,
+            styles: {
+              cellPadding: 0,
+              minCellHeight: 2.82,
+              lineWidth: 0,
+              fillColor: false as any,
+            },
+            _isSpacingRow: true,
+          },
+        ]);
       }
-      doc.setFontSize(9);
-      doc.setFont('helvetica', 'bold');
-      doc.setTextColor(30, 41, 59);
+    });
 
-      const rightX = doc.internal.pageSize.getWidth() - 14;
-      const totalPlatsText = `Total plats : ${formatAmountPdf(grp.dishesTotal)} ${cleanPdfText(business.currency)}`;
-      const totalFeesText = `Total frais de livraison : ${formatAmountPdf(grp.feesTotal)} ${cleanPdfText(business.currency)}`;
+    // 4. Ligne de total général (vert foncé, texte blanc gras, 3 valeurs alignées)
+    const totalGeneralRow = [
+      {
+        content: 'Total général',
+        colSpan: 4,
+        styles: { fontStyle: 'bold', fillColor: [27, 75, 74], textColor: [255, 255, 255] },
+      },
+      {
+        content: String(totalDishesQty),
+        styles: { fontStyle: 'bold', halign: 'right', fillColor: [27, 75, 74], textColor: [255, 255, 255] },
+      },
+      {
+        content: formatAmountPdf(totalDishesAmount),
+        styles: { fontStyle: 'bold', halign: 'right', fillColor: [27, 75, 74], textColor: [255, 255, 255] },
+      },
+      {
+        content: '',
+        styles: { fillColor: [27, 75, 74], textColor: [255, 255, 255] },
+      },
+      {
+        content: formatAmountPdf(totalFeesAmount),
+        styles: { fontStyle: 'bold', halign: 'right', fillColor: [27, 75, 74], textColor: [255, 255, 255] },
+      },
+      {
+        content: '',
+        styles: { fillColor: [27, 75, 74], textColor: [255, 255, 255] },
+      },
+      {
+        content: '',
+        styles: { fillColor: [27, 75, 74], textColor: [255, 255, 255] },
+      },
+    ];
 
-      doc.text(totalPlatsText, rightX, finalY + 6, { align: 'right' });
-      doc.text(totalFeesText, rightX, finalY + 11, { align: 'right' });
-    }
-
-    // Dernière page : Synthèse par mode de paiement
-    doc.addPage();
-    doc.setFontSize(11);
-    doc.setFont('helvetica', 'bold');
-    doc.setTextColor(0, 0, 0);
-    doc.text('Synthèse par mode de paiement', 14, 15);
+    tableBody.push(totalGeneralRow);
 
     autoTable(doc, {
-      startY: 19,
-      head: [['Mode de paiement', 'Nb de livraisons', `Total plats (${business.currency})`]],
-      body: [
-        ...channelList.map((c) => [
-          cleanPdfText(c.label),
-          String(c.count),
-          formatAmountPdf(c.dishesTotal),
-        ]),
-        [
-          'Total',
-          String(filteredDeliveredOrders.length),
-          formatAmountPdf(totalDishes),
-        ],
-      ],
+      startY: 38,
+      head: [[
+        'Date et heure',
+        'Client',
+        'Téléphone',
+        'Adresse',
+        'Plats',
+        `Prix plats (${business.currency})`,
+        'Livreur',
+        `Frais de livraison (${business.currency})`,
+        'Mode de paiement',
+        'Réf',
+      ]],
+      body: tableBody,
       theme: 'grid',
+      showHead: 'everyPage',
       styles: {
-        fontSize: 8,
-        cellPadding: 2.5,
+        fontSize: 7,
+        cellPadding: 2,
         lineColor: [229, 220, 208],
         lineWidth: 0.1,
         overflow: 'linebreak',
@@ -1360,16 +1325,37 @@ export default function DeliveredSection({
         fillColor: [27, 75, 74],
         textColor: [255, 255, 255],
         fontStyle: 'bold',
-      },
-      footStyles: {
-        fillColor: [250, 247, 242],
-        textColor: [0, 0, 0],
-        fontStyle: 'bold',
+        fontSize: 7.2,
       },
       columnStyles: {
-        2: { halign: 'right' },
+        0: { cellWidth: 24 },
+        1: { cellWidth: 28 },
+        2: { cellWidth: 22 },
+        3: { cellWidth: 32 },
+        4: { cellWidth: 53 },
+        5: { cellWidth: 24, halign: 'right' },
+        6: { cellWidth: 25 },
+        7: { cellWidth: 25, halign: 'right' },
+        8: { cellWidth: 20 },
+        9: { cellWidth: 16, halign: 'right' },
       },
       margin: { left: 14, right: 14 },
+      didParseCell: (data) => {
+        const rawCell = data.cell.raw as any;
+        const rawRow = data.row.raw as any;
+        if (rawCell?._isDriverBanner || rawRow?.[0]?._isDriverBanner) {
+          data.row.canEntireRowFit = function (height: number, columns: any) {
+            return height >= 20 && this.getMaxCellHeight(columns) <= height;
+          };
+        }
+      },
+      willDrawCell: (data) => {
+        const rawCell = data.cell.raw as any;
+        const rawRow = data.row.raw as any;
+        if (rawCell?._isSpacingRow || rawRow?.[0]?._isSpacingRow) {
+          return false;
+        }
+      },
     });
 
     // Numérotation des pages sur chaque page : "Page X sur Y"
